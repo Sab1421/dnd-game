@@ -26,6 +26,81 @@ function SAVE_SESSION(sess) {
     else sessionStorage.setItem('dnd_current_session', JSON.stringify(sess));
 }
 
+// Никнейм Гейм-Мастера (сохраняется в браузере)
+function GET_GM_NAME() {
+    return localStorage.getItem('dnd_gm_custom_name') || 'Гейм-Мастер';
+}
+function SAVE_GM_NAME(name) {
+    const clean = (name || '').trim() || 'Гейм-Мастер';
+    localStorage.setItem('dnd_gm_custom_name', clean);
+}
+
+// Умное определение имени отправителя: если сидит Мастер — возвращает ник Мастера, если Игрок — имя его героя
+function GET_CURRENT_SPEAKER_NAME() {
+    const sess = GET_SESSION();
+    if (sess && sess.role === 'gm') {
+        return '👑 ' + GET_GM_NAME();
+    }
+    if (sess && sess.role === 'player') {
+        SYNC_MY_PLAYER_INDEX();
+    }
+    const cs = GC();
+    const c = cs[PI];
+    return (c && c.name && c.name !== 'Мой персонаж') ? c.name : 'Игрок';
+}
+
+// Переопределяем системный лог, чтобы действия Мастера НЕ подписывались именем персонажа игрока!
+LOG_COMBAT_TO_CHAT = function(actionText) {
+    const sess = GET_SESSION();
+    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const logs = GSYS();
+
+    let line = '';
+    if (sess && sess.role === 'gm') {
+        const gmTitle = '👑 ' + GET_GM_NAME();
+        // Если текст уже начинается со значка 👑 или системного тега, не лепим имя персонажа спереди
+        const cleanAct = actionText.replace(/^👑\s*(Гейм-Мастер|Мастер|Бросок Мастера)?\s*:?\s*/i, '');
+        if (actionText.toLowerCase().startsWith('👑 бросок мастера')) {
+            line = `[${time}] ${gmTitle}: 🎲 ${cleanAct}`;
+        } else {
+            line = `[${time}] ${gmTitle}: ${cleanAct}`;
+        }
+    } else {
+        const sender = GET_CURRENT_SPEAKER_NAME();
+        line = `[${time}] ${sender}: ${actionText}`;
+    }
+
+    logs.push(line);
+    if (logs.length > 100) logs.shift();
+    SSYS(logs);
+    if (window._chatTab !== 'sys') {
+        window._unreadSysCount = (window._unreadSysCount || 0) + 1;
+    }
+    RCH();
+};
+
+// Перехватываем поле ввода обычного чата, чтобы Гейм-Мастер писал в чат от своего имени, а не от имени игрока!
+(function FIX_CHAT_INPUT_FOR_GM() {
+    const oldInput = document.getElementById('chat-input');
+    if (!oldInput) return;
+    const newInput = oldInput.cloneNode(true);
+    oldInput.parentNode.replaceChild(newInput, oldInput);
+
+    newInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter' && this.value.trim()) {
+            const ms = GMS();
+            const sender = GET_CURRENT_SPEAKER_NAME();
+            const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            ms.push(`[${time}] ${sender}: ${this.value.trim()}`);
+            if (ms.length > 100) ms.shift();
+            SMS(ms);
+            window._chatTab = 'players';
+            RCH();
+            this.value = '';
+        }
+    });
+})();
+
 function GET_MAP_STATE() {
     const d = localStorage.getItem('dnd_map_state');
     const def = {
@@ -1964,8 +2039,12 @@ function APPLY_ROLE_VIEW() {
         if (mapEditBtnWrap) mapEditBtnWrap.style.display = 'block';
 
         topStatusBar.innerHTML = `
-            <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+            <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
                 <span style="background:#7c3aed; color:#fff; padding:4px 12px; border-radius:6px; font-weight:bold; font-size:0.9rem;">👑 Режим Гейм-Мастера</span>
+                <div style="display:flex; align-items:center; gap:6px; background:#25221e; padding:3px 10px; border-radius:6px; border:1px solid #423c33;">
+                    <small style="color:#aba498;">Ваш ник:</small>
+                    <input type="text" value="${GET_GM_NAME().replace(/"/g, '&quot;')}" onchange="SAVE_GM_NAME(this.value)" placeholder="Ник Мастера..." style="width:140px; padding:3px 6px; background:#141312; color:#c084fc; font-weight:bold; border:1px solid #524a3d; border-radius:4px; text-align:left; font-size:0.88rem;">
+                </div>
                 <span>Комната: <b style="color:#e6c88c;">#${curRoom.code} — ${curRoom.name}</b></span>
                 <span style="color:#aaa; font-size:0.88rem;">(Игроков в отряде: <b>${GC().length}</b>)</span>
             </div>
@@ -2906,6 +2985,10 @@ function RENDER_LOBBY_HTML() {
                         <p style="color:#ccc; margin-bottom:18px; font-size:0.98rem;">
                             Тактическая карта с погодой и фишками, живые диалоги с NPC, лавка торговца, запросы проверок к20 и управление партией.
                         </p>
+                        <div style="margin-bottom:14px;">
+                             <label style="color:#c084fc; font-weight:bold; font-size:0.95rem;">Ваш никнейм Гейм-Мастера:</label>
+                             <input type="text" id="lobby-gm-name" value="${GET_GM_NAME().replace(/"/g, '&quot;')}" oninput="SAVE_GM_NAME(this.value)" placeholder="Например: Мастер / Рассказчик..." style="width:100%; margin-top:6px; padding:10px; background:#141312; color:#fff; border:1px solid #524a3d; border-radius:6px; font-size:1rem; text-align:left;">
+                        </div>
                         <div style="margin-bottom:16px;">
                             <label style="color:#e6c88c; font-weight:bold; font-size:0.95rem;">Войти в существующую комнату:</label>
                             <select id="lobby-gm-room" style="width:100%; margin-top:6px; padding:10px; background:#141312; color:#fff; border:1px solid #524a3d; border-radius:6px; font-size:1rem;">${roomOpts}</select>
