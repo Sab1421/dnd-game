@@ -3817,18 +3817,19 @@ function PLAYER_LEAVE_COMBAT() {
 
 APPLY_ROLE_VIEW();
 // ================================================================
-// 🚀 WEBSOCKET-СИНХРОНИЗАЦИЯ БЕЗ ПРЫЖКОВ ФИШЕК И ЭХА
+// ⚡ ТУРБО-СИНХРОНИЗАЦИЯ WEBSOCKET (БЕЗ ЗАДЕРЖЕК В БОЮ, ХОДАХ И КАРТЕ)
 // ================================================================
-(function INIT_FAST_WEBSOCKET_MULTIPLAYER() {
+(function INIT_TURBO_MULTIPLAYER() {
     const FIREBASE_DB_URL = "https://dnds-23b7d-default-rtdb.firebaseio.com";
+    // Уникальный ID этой вкладки браузера, чтобы отличать свои клики от кликов друга без таймеров задержки!
+    const MY_CLIENT_ID = 'client_' + Math.random().toString(36).slice(2) + '_' + Date.now();
 
     const statusBadge = document.createElement('div');
     statusBadge.id = 'cloud-sync-badge';
     statusBadge.style.cssText = 'position:fixed; bottom:8px; left:8px; background:#1a1a1a; border:1px solid #444; color:#aaa; padding:4px 10px; border-radius:12px; font-size:0.75em; z-index:99999; pointer-events:none;';
-    statusBadge.textContent = '⏳ Подключение WebSocket...';
+    statusBadge.textContent = '⏳ Подключение к серверу...';
     document.body.appendChild(statusBadge);
 
-    // 1. Защита от сбоя перетаскивания, если курсор ушёл за пределы карты
     window.addEventListener('mouseup', function() {
         if (window._draggingMapObj) {
             const mapArea = document.getElementById('map-area');
@@ -3837,11 +3838,10 @@ APPLY_ROLE_VIEW();
     });
 
     let isApplyingRemote = false;
-    let lastLocalWriteTime = {}; // Защита от «эха» при быстром перемещении подряд
-    let cachedMapImg = '';       // Храним тяжёлую картинку отдельно от лёгких координат фишек!
+    let mediaCache = {}; // Отдельный кэш для тяжёлых картинок (карта и аватарки), чтобы бой летал мгновенно!
 
     const SYNC_KEYS = [
-        'dnd_characters', 'dnd_rooms', 'dnd_map_state', 'dnd_map_bg_img', 'dnd_gm_shop',
+        'dnd_characters', 'dnd_rooms', 'dnd_map_state', 'dnd_gm_shop',
         'dnd_bestiary', 'dnd_npcs', 'dnd_vn_dialog', 'dnd_prepared_events',
         'dnd_custom_lore', 'dnd_gm_event', 'dnd_gm_skill_check',
         'dnd_gm_edit_request', 'dnd_rest_poll', 'dnd_tasks',
@@ -3852,22 +3852,87 @@ APPLY_ROLE_VIEW();
     const origGetItem = localStorage.getItem.bind(localStorage);
     const origRemoveItem = localStorage.removeItem.bind(localStorage);
 
-    // Перехватываем чтение dnd_map_state, чтобы подставлять закэшированную картинку карты
+    // Автоматически вырезаем тяжёлые base64-картинки из боевых пакетов и храним их в ветке mediaCache
+    function stripHeavyImages(key, rawVal, dbMediaRef) {
+        if (!rawVal || typeof rawVal !== 'string') return rawVal;
+        try {
+            if (key === 'dnd_map_state') {
+                const st = JSON.parse(rawVal);
+                if (st.img && st.img.startsWith('data:')) {
+                    if (mediaCache['map_img'] !== st.img) {
+                        mediaCache['map_img'] = st.img;
+                        if (dbMediaRef) dbMediaRef.child('map_img').set(st.img);
+                    }
+                    st.img = '__CACHED_MAP_IMG__';
+                }
+                if (st.tokens) {
+                    st.tokens.forEach(t => {
+                        if (t.avatar && t.avatar.startsWith('data:')) t.avatar = '';
+                    });
+                }
+                return JSON.stringify(st);
+            }
+            if (key === 'dnd_characters') {
+                const cs = JSON.parse(rawVal);
+                cs.forEach((c, idx) => {
+                    if (c.avatar && c.avatar.startsWith('data:')) {
+                        const mKey = 'char_av_' + idx;
+                        if (mediaCache[mKey] !== c.avatar) {
+                            mediaCache[mKey] = c.avatar;
+                            if (dbMediaRef) dbMediaRef.child(mKey).set(c.avatar);
+                        }
+                        c.avatar = '__CACHED_AV_' + idx + '__';
+                    }
+                });
+                return JSON.stringify(cs);
+            }
+            if (key === 'dnd_vn_dialog') {
+                const vn = JSON.parse(rawVal);
+                if (vn && vn.avatar && vn.avatar.startsWith('data:')) {
+                    if (mediaCache['vn_av'] !== vn.avatar) {
+                        mediaCache['vn_av'] = vn.avatar;
+                        if (dbMediaRef) dbMediaRef.child('vn_av').set(vn.avatar);
+                    }
+                    vn.avatar = '__CACHED_VN_AV__';
+                }
+                return JSON.stringify(vn);
+            }
+        } catch (e) {}
+        return rawVal;
+    }
+
+    // Автоматически подставляем картинки обратно из кэша при чтении
+    function restoreHeavyImages(key, rawVal) {
+        if (!rawVal || typeof rawVal !== 'string') return rawVal;
+        try {
+            if (key === 'dnd_map_state' && rawVal.includes('__CACHED_MAP_IMG__')) {
+                const st = JSON.parse(rawVal);
+                st.img = mediaCache['map_img'] || '';
+                return JSON.stringify(st);
+            }
+            if (key === 'dnd_characters' && rawVal.includes('__CACHED_AV_')) {
+                const cs = JSON.parse(rawVal);
+                cs.forEach((c, idx) => {
+                    if (c.avatar === '__CACHED_AV_' + idx + '__') {
+                        c.avatar = mediaCache['char_av_' + idx] || '';
+                    }
+                });
+                return JSON.stringify(cs);
+            }
+            if (key === 'dnd_vn_dialog' && rawVal.includes('__CACHED_VN_AV__')) {
+                const vn = JSON.parse(rawVal);
+                if (vn) vn.avatar = mediaCache['vn_av'] || '';
+                return JSON.stringify(vn);
+            }
+        } catch (e) {}
+        return rawVal;
+    }
+
     localStorage.getItem = function(key) {
         const val = origGetItem(key);
-        if (key === 'dnd_map_state' && val) {
-            try {
-                const parsed = JSON.parse(val);
-                if (!parsed.img && cachedMapImg) {
-                    parsed.img = cachedMapImg;
-                    return JSON.stringify(parsed);
-                }
-            } catch (e) {}
-        }
-        return val;
+        return restoreHeavyImages(key, val);
     };
 
-    // Подгружаем официальный WebSocket-клиент Firebase
     const script = document.createElement('script');
     script.src = "https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js";
     script.onload = function() {
@@ -3880,83 +3945,84 @@ APPLY_ROLE_VIEW();
 
     function startWebSocketEngine() {
         firebase.initializeApp({ databaseURL: FIREBASE_DB_URL });
-        const dbRef = firebase.database().ref('campaign');
+        const dbRoot = firebase.database().ref('campaign_v2');
+        const dbStateRef = dbRoot.child('state');
+        const dbMediaRef = dbRoot.child('media');
 
-        statusBadge.textContent = '🟢 WebSocket: 0 мс (Без лагов)';
-        statusBadge.style.borderColor = '#4caf50';
-
-        // Отправка изменений по открытому WebSocket-каналу
-        localStorage.setItem = function(key, val) {
-            // Если сохраняется состояние карты — вырезаем из него тяжёлую картинку в отдельный ключ,
-            // чтобы при перетаскивании фишек улетали только лёгкие координаты (300 байт вместо 2 МБ!)
-            if (key === 'dnd_map_state' && val && !isApplyingRemote) {
-                try {
-                    const st = JSON.parse(val);
-                    if (st.img && st.img.length > 500) {
-                        if (st.img !== cachedMapImg) {
-                            cachedMapImg = st.img;
-                            origSetItem('dnd_map_bg_img', cachedMapImg);
-                            dbRef.child('dnd_map_bg_img').set(cachedMapImg);
-                        }
-                        st.img = ''; // В основном пакете фишек картинку не гоняем!
-                        val = JSON.stringify(st);
-                    } else if (st.img === '' && cachedMapImg && !window._clearingMapImg) {
-                        // Сохраняем кэш, если это просто передвижение фишки
-                    }
-                } catch (e) {}
+        // Следим за реальным статусом соединения с Firebase
+        firebase.database().ref('.info/connected').on('value', (snap) => {
+            if (snap.val() === true) {
+                statusBadge.textContent = '⚡ Онлайн: Мгновенная связь';
+                statusBadge.style.borderColor = '#4caf50';
+            } else {
+                statusBadge.textContent = '🟠 Переподключение...';
+                statusBadge.style.borderColor = '#c97e2e';
             }
+        });
 
-            try { origSetItem(key, val); } catch (e) { return; }
+        // Слушаем кэш картинок отдельно (они качаются всего 1 раз и не тормозят бой!)
+        dbMediaRef.on('value', (snap) => {
+            const m = snap.val();
+            if (m) {
+                mediaCache = m;
+                RMC(); RPL(); RENDER_MAP_AREA();
+            }
+        });
+
+        // Перехват записи в localStorage -> мгновенная отправка лёгкого пакета с меткой отправителя
+        localStorage.setItem = function(key, val) {
+            const lightVal = stripHeavyImages(key, val, dbMediaRef);
+            try { origSetItem(key, lightVal); } catch (e) { return; }
 
             if (!isApplyingRemote && SYNC_KEYS.includes(key)) {
-                lastLocalWriteTime[key] = Date.now();
-                dbRef.child(key).set(val);
+                dbStateRef.child(key).set({
+                    v: lightVal,
+                    by: MY_CLIENT_ID,
+                    t: Date.now()
+                });
             }
         };
 
         localStorage.removeItem = function(key) {
             origRemoveItem(key);
             if (!isApplyingRemote && SYNC_KEYS.includes(key)) {
-                lastLocalWriteTime[key] = Date.now();
-                dbRef.child(key).set("");
+                dbStateRef.child(key).set({
+                    v: "",
+                    by: MY_CLIENT_ID,
+                    t: Date.now()
+                });
             }
         };
 
-        // Первичная проверка: если облако пустое, выгружаем локальные данные
-        dbRef.once('value', (snap) => {
+        // Если база campaign_v2 ещё пустая — выгружаем туда текущие данные с ПК
+        dbStateRef.once('value', (snap) => {
             if (!snap.exists() && (origGetItem('dnd_rooms') || origGetItem('dnd_characters'))) {
                 const dump = {};
                 SYNC_KEYS.forEach(k => {
-                    const v = origGetItem(k);
-                    if (v !== null) dump[k] = v;
+                    const raw = origGetItem(k);
+                    if (raw !== null) {
+                        const light = stripHeavyImages(k, raw, dbMediaRef);
+                        origSetItem(k, light);
+                        dump[k] = { v: light, by: MY_CLIENT_ID, t: Date.now() };
+                    }
                 });
-                dbRef.update(dump);
+                dbStateRef.update(dump);
             }
         });
 
-        // Слушаем каждый ключ отдельно по WebSocket
+        // Мгновенный приём изменений от других игроков и Мастера
         SYNC_KEYS.forEach(key => {
-            dbRef.child(key).on('value', (snap) => {
-                const remoteVal = snap.val();
-                if (remoteVal === null || remoteVal === undefined) return;
+            dbStateRef.child(key).on('value', (snap) => {
+                const packet = snap.val();
+                if (!packet || packet.v === undefined) return;
 
-                // ЗАЩИТА ОТ ПРЫЖКОВ ФИШЕК:
-                // 1) Если мы сами только что (менее 650 мс назад) отправили этот ключ — игнорируем обратное эхо!
-                if (lastLocalWriteTime[key] && (Date.now() - lastLocalWriteTime[key] < 650)) {
-                    return;
-                }
-                // 2) Если прямо сейчас мышка зажата и тащит фишку — не даём серверу сбить курсор!
-                if (key === 'dnd_map_state' && window._draggingMapObj) {
-                    return;
-                }
+                // Если этот пакет отправили мы сами из этой же вкладки — пропускаем (0% эха, 100% скорость для чужих пакетов!)
+                if (packet.by === MY_CLIENT_ID) return;
 
-                if (key === 'dnd_map_bg_img') {
-                    cachedMapImg = remoteVal || '';
-                    origSetItem('dnd_map_bg_img', cachedMapImg);
-                    RENDER_MAP_AREA();
-                    return;
-                }
+                // Если мы прямо сейчас тянем фишку мышкой, не сбиваем курсор
+                if (key === 'dnd_map_state' && window._draggingMapObj) return;
 
+                const remoteVal = packet.v;
                 const currentLocal = origGetItem(key);
                 if (currentLocal === remoteVal) return;
 
@@ -3965,16 +4031,26 @@ APPLY_ROLE_VIEW();
                 else { try { origSetItem(key, remoteVal); } catch (e) {} }
                 isApplyingRemote = false;
 
-                // Точечно обновляем только нужный кусок интерфейса, не перерисовывая весь сайт!
+                // Удерживаем правильный индекс персонажа для Игрока
+                const sess = GET_SESSION();
+                if (sess && sess.role === 'player' && sess.playerIdx !== undefined) {
+                    PI = sess.playerIdx;
+                }
+
                 const activeTag = document.activeElement ? document.activeElement.tagName : '';
                 const isTyping = (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT');
 
+                // Точечное и полное обновление всех экранов (включая очередь хода и открытое окно боя!)
                 if (key === 'dnd_map_state' || key === 'dnd_vn_dialog') {
                     RENDER_MAP_AREA();
+                    if (sess && sess.role === 'gm' && document.getElementById('gm-tool-modal')?.classList.contains('active')) {
+                        // Если у Мастера открыт Бестиарий, обновляем ХП и ходы
+                    }
                 } else if (key === 'dnd_chat' || key === 'dnd_sys_log') {
                     RCH();
                 } else if (key === 'dnd_rest_poll') {
                     CHECK_AND_RENDER_REST_POPUP();
+                    if (document.getElementById('rest-modal')?.classList.contains('active')) SLR();
                 } else if (key === 'dnd_gm_skill_check') {
                     CHECK_AND_RENDER_SKILL_ROLL_POPUP();
                 } else if (key === 'dnd_gm_edit_request') {
@@ -3982,9 +4058,30 @@ APPLY_ROLE_VIEW();
                     CHECK_GM_PERMISSION_RESPONSE();
                 } else if (key === 'dnd_gm_event') {
                     CHECK_UNSEEN_GM_EVENT();
+                } else if (key === 'dnd_gm_shop') {
+                    RENDER_MAP_AREA();
+                    CHECK_UNSEEN_SHOP_OPEN();
+                    if (sess && sess.role === 'gm') RENDER_GM_LEFT_COLUMN();
+                } else if (key === 'dnd_characters') {
+                    RMC();
+                    RPL();
+                    RENDER_MAP_AREA();
+                    if (sess && sess.role === 'gm') RENDER_GM_LEFT_COLUMN();
+                    else if (!sess) RENDER_LOBBY_HTML();
+
+                    // ВАЖНО: Если у игрока сейчас открыто окно «Атаки и заклинания» (OAT) — мгновенно обновляем в нём режим боя, ХП и ячейки!
+                    if (document.getElementById('attacks-modal')?.classList.contains('active') && !isTyping) {
+                        OAT();
+                    }
+                    // Если открыт Рюкзак или Лист и игрок сейчас ничего не вписывает — обновляем их тоже
+                    if (document.getElementById('inventory-modal')?.classList.contains('active') && !isTyping) {
+                        OINV();
+                    }
+                    if (document.getElementById('char-sheet-modal')?.classList.contains('active') && !isTyping) {
+                        OCS();
+                    }
                 } else if (!isTyping) {
-                    RMC(); RPL(); LDT(); RENDER_MAP_AREA();
-                    const sess = GET_SESSION();
+                    RMC(); RPL(); LDT(); RENDER_MAP_AREA(); RENDER_CUSTOM_LORE();
                     if (sess && sess.role === 'gm') RENDER_GM_LEFT_COLUMN();
                     else if (!sess) RENDER_LOBBY_HTML();
                 }
