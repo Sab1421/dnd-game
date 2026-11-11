@@ -1,8 +1,13 @@
 // ================================================================
 // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 // ================================================================
-let PI = 0
-function GC() { const d = localStorage.getItem('dnd_characters'); return d ? JSON.parse(d) : []; }
+let PI = 0;
+function GC() {
+    const d = localStorage.getItem('dnd_characters');
+    const arr = d ? JSON.parse(d) : [];
+    if (PI < 0 || (arr.length > 0 && PI >= arr.length)) PI = 0;
+    return arr;
+}
 function SC(c) { localStorage.setItem('dnd_characters', JSON.stringify(c)); }
 function GM(s) { return Math.floor((s - 10) / 2); }
 function MS(m) { return m >= 0 ? '+' + m : '' + m; }
@@ -3564,13 +3569,6 @@ function CHECK_AND_RENDER_REST_POPUP() {
     }
 }
 
-window.addEventListener('storage', function(e) {
-    if (e.key === 'dnd_rest_poll' || e.key === 'dnd_characters') {
-        RMC();
-        CHECK_AND_RENDER_REST_POPUP();
-    }
-});
-
 // ================================================================
 // КОРОТКИЙ ОТДЫХ
 // ================================================================
@@ -3900,12 +3898,6 @@ function RCH() {
     }
 }
 
-// Синхронизация чата, лога и голосований между вкладками браузера
-window.addEventListener('storage', function(e) {
-    if (e.key === 'dnd_chat' || e.key === 'dnd_sys_log') {
-        RCH();
-    }
-});
 
 document.querySelectorAll('.modal').forEach(m => {
     m.addEventListener('click', function(e) {
