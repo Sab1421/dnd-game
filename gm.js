@@ -1771,22 +1771,86 @@ function ENTER_ROOM_AS_GM(roomCode) {
 
 function ENTER_ROOM_AS_PLAYER(roomCode, charIdx) {
     const cs = GC();
+    if (!cs.length) {
+        cs.push(CREATE_DEFAULT_CHAR());
+        SC(cs);
+    }
     let targetIdx = parseInt(charIdx);
     if (isNaN(targetIdx) || targetIdx < 0 || targetIdx >= cs.length) targetIdx = 0;
     PI = targetIdx;
-    SAVE_SESSION({ role: 'player', roomCode: roomCode || '1001', playerIdx: targetIdx });
+    const heroId = cs[targetIdx].id || ('hero_' + targetIdx);
+    cs[targetIdx].id = heroId;
+    SAVE_SESSION({ role: 'player', roomCode: roomCode || '1001', playerIdx: targetIdx, heroId: heroId });
     APPLY_ROLE_VIEW();
 }
 
 function CREATE_NEW_HERO_AND_JOIN(roomCode) {
+    if (window._cloudConnecting) {
+        showMessage('⏳ Секунду...', 'Синхронизация с сервером ещё завершается. Попробуйте через 1 секунду.');
+        return;
+    }
     const name = prompt('Введите имя вашего нового персонажа:', 'Новый герой');
     if (name === null) return;
     const cs = GC();
     const newChar = CREATE_DEFAULT_CHAR();
+    newChar.id = 'hero_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
     newChar.name = name.trim() || ('Герой ' + (cs.length + 1));
+    AB(newChar);
     cs.push(newChar);
+    const newIdx = cs.length - 1;
+    PI = newIdx;
     SC(cs);
-    ENTER_ROOM_AS_PLAYER(roomCode, cs.length - 1);
+
+    // Если на карте уже выставлены фишки отряда — сразу добавляем фишку нового игрока!
+    const st = GET_MAP_STATE();
+    if (st.tokens && st.tokens.length > 0) {
+        st.tokens.push({
+            id: Date.now(),
+            isPlayer: true,
+            charIdx: newIdx,
+            name: newChar.name,
+            icon: '🛡️',
+            avatar: '',
+            x: 25 + (newIdx * 12) % 55,
+            y: 72,
+            hp: newChar.hp ?? 10,
+            maxHp: newChar.maxHp || 10,
+            ac: CAC(newChar),
+            init: 10
+        });
+        SAVE_MAP_STATE(st);
+    }
+
+    LOG_COMBAT_TO_CHAT(`🎉 К отряду присоединяется новый герой: «${newChar.name}»!`);
+    SAVE_SESSION({ role: 'player', roomCode: roomCode || '1001', playerIdx: newIdx, heroId: newChar.id });
+    APPLY_ROLE_VIEW();
+}
+
+// Гарантирует, что у Игрока выбран правильный индекс его героя даже после добавления/удаления персонажей
+function SYNC_MY_PLAYER_INDEX() {
+    const sess = GET_SESSION();
+    if (!sess || sess.role !== 'player') return;
+    const cs = GC();
+    if (!cs.length) return;
+
+    if (sess.heroId) {
+        const foundIdx = cs.findIndex(c => c && c.id === sess.heroId);
+        if (foundIdx !== -1) {
+            PI = foundIdx;
+            if (sess.playerIdx !== foundIdx) {
+                sess.playerIdx = foundIdx;
+                SAVE_SESSION(sess);
+            }
+            return;
+        }
+    }
+    if (sess.playerIdx !== undefined && sess.playerIdx >= 0 && sess.playerIdx < cs.length) {
+        PI = sess.playerIdx;
+    } else {
+        PI = 0;
+        sess.playerIdx = 0;
+        SAVE_SESSION(sess);
+    }
 }
 
 function APPLY_ROLE_VIEW() {
@@ -1868,9 +1932,8 @@ function APPLY_ROLE_VIEW() {
     h1.innerHTML = `⚔️ ${curRoom.name} <small style="font-size:0.6em; color:#888;">(Комната #${curRoom.code})</small> ⚔️`;
 
     if (sess.role === 'player') {
-        PI = sess.playerIdx || 0;
+        SYNC_MY_PLAYER_INDEX();
         const cs = GC();
-        if (PI >= cs.length) PI = 0;
         const curChar = cs[PI] || {};
 
         leftCol.style.display = 'flex';
@@ -1904,7 +1967,7 @@ function APPLY_ROLE_VIEW() {
             <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
                 <span style="background:#7c3aed; color:#fff; padding:4px 12px; border-radius:6px; font-weight:bold; font-size:0.9rem;">👑 Режим Гейм-Мастера</span>
                 <span>Комната: <b style="color:#e6c88c;">#${curRoom.code} — ${curRoom.name}</b></span>
-                <span style="color:#aaa; font-size:0.88rem;">(Фишки и значки на карте можно перетаскивать мышкой!)</span>
+                <span style="color:#aaa; font-size:0.88rem;">(Игроков в отряде: <b>${GC().length}</b>)</span>
             </div>
             <button class="btn-small" onclick="SHOW_LOBBY_SCREEN()">🚪 Выйти в Лобби</button>
         `;
@@ -1978,6 +2041,7 @@ RPL = function() {
     const sess = GET_SESSION();
     const isGM = sess && sess.role === 'gm';
     if (!isGM) {
+        SYNC_MY_PLAYER_INDEX();
         _ORIG_RPL();
         return;
     }
@@ -1990,7 +2054,7 @@ RPL = function() {
     const hint = document.createElement('div');
     hint.style.cssText = 'color:#c9a96e; font-size:0.9rem; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;';
     hint.innerHTML = `
-        <span>👆 <b>Нажмите на игрока</b>, чтобы запросить доступ к его Листу Персонажа или Рюкзаку:</span>
+        <span>👆 <b>Все игроки отряда (${cs.length} чел.)</b> — нажмите для доступа к Листу или Рюкзаку:</span>
         <div style="display:flex; gap:6px;">
             <button class="btn-small" onclick="ADD_TEST_PARTY_MEMBER(); RPL();">+ Игрок</button>
             ${cs.length > 1 ? '<button class="btn-small btn-danger" onclick="REMOVE_LAST_PARTY_MEMBER(); RPL();">− Убрать</button>' : ''}
@@ -2036,8 +2100,9 @@ RPL = function() {
 
 const _ORIG_OCS = OCS;
 OCS = function() {
-    _ORIG_OCS();
     const sess = GET_SESSION();
+    if (sess && sess.role === 'player') SYNC_MY_PLAYER_INDEX();
+    _ORIG_OCS();
     if (!sess || sess.role !== 'gm') return;
 
     const cont = document.getElementById('char-sheet-content');
@@ -2063,17 +2128,18 @@ OCS = function() {
     if (h2) h2.after(gmToolbar);
 };
 
-// Переопределяем Рюкзак (OINV) специально для режима Гейм-Мастера (в виде удобного списка с кнопками справа!)
 const _ORIG_OINV = OINV;
 OINV = function() {
     const sess = GET_SESSION();
     if (!sess || sess.role !== 'gm') {
+        SYNC_MY_PLAYER_INDEX();
         _ORIG_OINV();
         return;
     }
 
     const cs = GC();
     const c = cs[PI];
+    if (!c) return;
     if (!c.inventory) c.inventory = [];
     if (!c.money) c.money = { gp: 0, sp: 0, cp: 0 };
     const inv = c.inventory;
@@ -2129,7 +2195,6 @@ OINV = function() {
             <button class="btn-small" onclick="CM('inventory-modal'); OCS();">📋 Перейти к Листу персонажа</button>
         </div>
 
-        <!-- Кошелёк и монеты (оставлены как сейчас) -->
         <div class="money-row" style="align-items:center; margin-bottom:14px;">
             <div class="money-item"><div class="coin-icon">🪙</div><div>Золотые (зм)</div><input type="number" min="0" value="${gp}" onchange="UMY('gp',parseInt(this.value))"></div>
             <div class="money-item"><div class="coin-icon">🥈</div><div>Серебряные (см)</div><input type="number" min="0" value="${sp}" onchange="UMY('sp',parseInt(this.value))"></div>
@@ -2137,7 +2202,6 @@ OINV = function() {
             <div style="font-size:0.85em; color:#c9a96e; padding:4px 8px;">Всего в золоте:<br><b style="font-size:1.15em;">≈ ${totalInGold} зм</b><br><small style="color:#888;">Вес: ${iw}/${cap} фнт</small></div>
         </div>
 
-        <!-- Блок быстрого добавления ресурсов и предметов от Мастера -->
         <div style="background:#201c29; padding:14px; border-radius:10px; border:1px solid #9b59b6; margin-bottom:16px;">
             <div style="color:#e9d5ff; font-size:0.92rem; font-weight:bold; margin-bottom:8px;">➕ Выдать предмет или ресурс в рюкзак:</div>
             <datalist id="dnd-items-datalist">${datalistOptions}</datalist>
@@ -2158,7 +2222,6 @@ OINV = function() {
             </div>
         </div>
 
-        <!-- Список содержимого рюкзака -->
         <h3 style="margin-top:0;">📦 Список содержимого (${inv.length} поз.)</h3>
         <div style="max-height:380px; overflow-y:auto; padding-right:4px;">
             ${listHTML}
@@ -2373,8 +2436,6 @@ function OPEN_GM_NPC_MODAL() {
 
     cont.innerHTML = `
         <h2>🎭 Пульт Диалогов с NPC</h2>
-
-        <!-- Шаг 1: Быстрый выбор заготовленного NPC сверху -->
         <div style="margin-bottom:16px;">
             <div style="color:#c9a96e; font-size:0.9rem; font-weight:bold; margin-bottom:6px;">1. Выберите готового персонажа (кликните по карточке) или впишите нового ниже:</div>
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
@@ -2383,7 +2444,6 @@ function OPEN_GM_NPC_MODAL() {
         </div>
 
         <div style="display:grid; grid-template-columns: 1.3fr 1fr; gap:18px; align-items:start;">
-            <!-- Левая часть: Кто говорит и что говорит -->
             <div style="background:#181715; border:1px solid #423c33; padding:16px; border-radius:10px;">
                 <div style="display:flex; gap:14px; align-items:center; margin-bottom:12px;">
                     <div id="gm-vn-avatar-box" onclick="GM_UPLOAD_NPC_AVATAR()" title="Нажмите, чтобы выбрать картинку с ПК" style="width:92px; height:92px; border-radius:12px; border:2px dashed #c9a96e; background:#121110; display:flex; flex-direction:column; align-items:center; justify-content:center; cursor:pointer; overflow:hidden; flex-shrink:0;">
@@ -2402,7 +2462,6 @@ function OPEN_GM_NPC_MODAL() {
                 <label style="color:#c9a96e; font-size:0.9rem; font-weight:bold;">2. Что говорит NPC игрокам:</label>
                 <textarea id="gm-vn-text" style="min-height:75px; margin-top:4px; margin-bottom:12px;" placeholder="Напишите фразу NPC...">${activeVN?.text || 'Монстры подходят всё ближе к частоколу. Вы готовы выйти за ворота?'}</textarea>
 
-                <!-- Наглядный конструктор кнопок ответа (без палочек "|") -->
                 <label style="color:#c9a96e; font-size:0.9rem; font-weight:bold;">3. Кнопки быстрых ответов для игроков (необязательно):</label>
                 <div id="gm-vn-choices-pills" style="display:flex; gap:6px; flex-wrap:wrap; margin:8px 0; min-height:32px; padding:8px; background:#121110; border-radius:8px; border:1px solid #38332c;"></div>
                 <div style="display:flex; gap:6px; margin-bottom:14px;">
@@ -2417,7 +2476,6 @@ function OPEN_GM_NPC_MODAL() {
                 ${activeVN && activeVN.active ? `<button class="btn-danger" style="width:100%; margin-top:8px;" onclick="GM_HIDE_VN_DIALOG()">✕ Убрать NPC с карты</button>` : ''}
             </div>
 
-            <!-- Правая часть: Отдельная история всех разговоров с NPC (чтобы не засорять чат!) -->
             <div style="background:#181715; border:1px solid #423c33; padding:16px; border-radius:10px;">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
                     <h3 style="margin:0; border:none;">📜 История бесед с NPC</h3>
@@ -2803,25 +2861,6 @@ function GM_ROLL_DICE(formula) {
     if (box) box.innerHTML = window._gmLastDiceResult;
 }
 
-// Синхронизация между вкладками браузера в реальном времени
-window.addEventListener('storage', function(e) {
-    const sess = GET_SESSION();
-    if (e.key === 'dnd_map_state' || e.key === 'dnd_vn_dialog' || e.key === 'dnd_gm_shop') {
-        RENDER_MAP_AREA();
-        CHECK_UNSEEN_SHOP_OPEN();
-        if (sess && sess.role === 'gm') RENDER_GM_LEFT_COLUMN();
-    }
-    if (e.key === 'dnd_custom_lore') RENDER_CUSTOM_LORE();
-    if (e.key === 'dnd_tasks') { LDT(); if (sess && sess.role === 'gm') RENDER_GM_LEFT_COLUMN(); }
-    if (e.key === 'dnd_characters') { RMC(); RPL(); RENDER_MAP_AREA(); }
-    if (e.key === 'dnd_gm_event') CHECK_UNSEEN_GM_EVENT();
-    if (e.key === 'dnd_gm_skill_check') CHECK_AND_RENDER_SKILL_ROLL_POPUP();
-    if (e.key === 'dnd_gm_edit_request') {
-        CHECK_AND_RENDER_PERMISSION_POPUP();
-        CHECK_GM_PERMISSION_RESPONSE();
-    }
-});
-
 // Отрисовка Стартового Лобби
 function RENDER_LOBBY_HTML() {
     const lobby = document.getElementById('lobby-screen');
@@ -2850,13 +2889,13 @@ function RENDER_LOBBY_HTML() {
                             <select id="lobby-player-room" style="width:100%; margin-top:6px; padding:10px; background:#141312; color:#fff; border:1px solid #524a3d; border-radius:6px; font-size:1rem;">${roomOpts}</select>
                         </div>
                         <div style="margin-bottom:20px;">
-                            <label style="color:#e6c88c; font-weight:bold; font-size:0.95rem;">2. Выберите своего персонажа:</label>
+                            <label style="color:#e6c88c; font-weight:bold; font-size:0.95rem;">2. Выберите существующего героя (${cs.length}):</label>
                             <select id="lobby-player-char" style="width:100%; margin-top:6px; padding:10px; background:#141312; color:#fff; border:1px solid #524a3d; border-radius:6px; font-size:1rem;">${charOpts}</select>
                         </div>
                     </div>
                     <div style="display:flex; flex-direction:column; gap:10px;">
-                        <button class="btn-save" style="width:100%; padding:14px; font-size:1.1rem;" onclick="ENTER_ROOM_AS_PLAYER(document.getElementById('lobby-player-room').value, document.getElementById('lobby-player-char').value)">⚔️ Войти в игру как Игрок</button>
-                        <button class="btn-small" style="width:100%; padding:10px;" onclick="CREATE_NEW_HERO_AND_JOIN(document.getElementById('lobby-player-room').value)">➕ Создать нового персонажа</button>
+                        <button class="btn-save" style="width:100%; padding:14px; font-size:1.1rem;" onclick="ENTER_ROOM_AS_PLAYER(document.getElementById('lobby-player-room').value, document.getElementById('lobby-player-char').value)">⚔️ Войти выбранным героем</button>
+                        <button class="btn-small" style="width:100%; padding:10px;" onclick="CREATE_NEW_HERO_AND_JOIN(document.getElementById('lobby-player-room').value)">➕ Создать нового персонажа и войти</button>
                     </div>
                 </div>
 
@@ -2888,13 +2927,11 @@ function RENDER_LOBBY_HTML() {
 
 // ================================================================
 // ⚔️ ПОШАГОВАЯ БОЕВАЯ СИСТЕМА В СТИЛЕ BALDUR'S GATE 3 (gm.js)
-// (Строгая очередь ходов, Очки Действия 🟢 и Бонусного Действия 🔶, ИИ врагов)
 // ================================================================
 window._bg3SelectedTargetIdx = 0;
-window._bg3HotbarCategory = 'weapons'; // 'weapons' | 'cantrips' | 'spells' | 'items'
+window._bg3HotbarCategory = 'weapons';
 window._bg3CombatLogBanner = '';
 
-// Сколько атак за 1 Основное действие есть у персонажа (Начиная с 5 ур. боевые классы бьют 2 раза, Воин с 11 ур. — 3 раза!)
 function GET_MAX_ATTACKS_PER_ACTION(c) {
     if (!c) return 1;
     const lv = c.level || 1;
@@ -2904,7 +2941,6 @@ function GET_MAX_ATTACKS_PER_ACTION(c) {
     return 1;
 }
 
-// Гарантирует, что у структуры очереди боя есть счётчики действий текущего хода
 function ENSURE_TURN_STATE(st) {
     if (!st.turnOrder) {
         st.turnOrder = { active: false, round: 1, currentIdx: 0, actionsLeft: 1, attacksLeft: 1, bonusLeft: 1 };
@@ -2915,7 +2951,6 @@ function ENSURE_TURN_STATE(st) {
     return st.turnOrder;
 }
 
-// Сброс очков действий для нового активного бойца при переходе хода
 function RESET_ACTIONS_FOR_CURRENT_FIGHTER(st) {
     const to = ENSURE_TURN_STATE(st);
     const tokens = st.tokens || [];
@@ -2936,7 +2971,6 @@ function RESET_ACTIONS_FOR_CURRENT_FIGHTER(st) {
     }
 }
 
-// Синхронизация ХП и статов между карточками игроков (dnd_characters) и их фишками на карте
 function SYNC_PLAYER_TOKENS_WITH_CHARS(st) {
     const cs = GC();
     if (!st || !st.tokens) return;
@@ -2952,10 +2986,8 @@ function SYNC_PLAYER_TOKENS_WITH_CHARS(st) {
     });
 }
 
-// Перехватываем клик по фишке на карте: в бою клик по любой фишке выбирает её целью прицела 🎯!
 const _ORIG_CLICK_MAP_TOKEN = CLICK_MAP_TOKEN;
 CLICK_MAP_TOKEN = function(tIdx) {
-    const sess = GET_SESSION();
     const cs = GC();
     const anyInCombat = cs.some(m => m.inCombat);
     if (anyInCombat) {
@@ -2966,7 +2998,6 @@ CLICK_MAP_TOKEN = function(tIdx) {
     _ORIG_CLICK_MAP_TOKEN(tIdx);
 };
 
-// Переопределяем переход хода (GM_NEXT_TURN), чтобы он пропускал павших (0 ХП) и восстанавливал очки действий 🟢/🔶!
 GM_NEXT_TURN = function() {
     const st = GET_MAP_STATE();
     SYNC_PLAYER_TOKENS_WITH_CHARS(st);
@@ -2992,7 +3023,6 @@ GM_NEXT_TURN = function() {
     RENDER_MAP_AREA();
 };
 
-// Авто-ход Врага (ИИ монстра), чтобы игроки могли провести ход противника прямо с карты, если он стоит в очереди!
 function BG3_EXECUTE_ENEMY_AI_TURN() {
     const st = GET_MAP_STATE();
     SYNC_PLAYER_TOKENS_WITH_CHARS(st);
@@ -3004,7 +3034,6 @@ function BG3_EXECUTE_ENEMY_AI_TURN() {
     }
 
     const cs = GC();
-    // Ищем живых игроков для атаки врага
     const alivePlayers = st.tokens.filter(t => t.isPlayer && cs[t.charIdx] && (cs[t.charIdx].hp ?? 10) > 0);
     if (alivePlayers.length === 0) {
         GM_NEXT_TURN();
@@ -3045,30 +3074,28 @@ function BG3_EXECUTE_ENEMY_AI_TURN() {
     }
 
     RMC();
-    // Сразу передаём ход следующему по очереди!
     GM_NEXT_TURN();
 }
 
-// Дополняем RENDER_MAP_AREA красивой лентой портретов Инициативы сверху карты (как в BG3) и прицелом на выбранной цели
+// ВАЖНО: В RENDER_MAP_AREA больше НЕТ SAVE_MAP_STATE(st) — устранена бесконечная рассылка пакетов при отрисовке!
 const _ORIG_RENDER_MAP_AREA_BG3 = RENDER_MAP_AREA;
 RENDER_MAP_AREA = function() {
+    _ORIG_RENDER_MAP_AREA_BG3();
     const st = GET_MAP_STATE();
     SYNC_PLAYER_TOKENS_WITH_CHARS(st);
-    SAVE_MAP_STATE(st);
-    _ORIG_RENDER_MAP_AREA_BG3();
 
-    // Подсвечиваем выбранную цель на карте красным прицелом и рисуем Портретную Ленту Инициативы BG3
     const mapArea = document.getElementById('map-area');
     if (mapArea && st.tokens && st.tokens.length > 0 && st.turnOrder && st.turnOrder.active) {
         const curTurnIdx = (st.turnOrder.currentIdx || 0) % st.tokens.length;
         const selectedEl = document.getElementById('map-tok-' + window._bg3SelectedTargetIdx);
         if (selectedEl) {
             const circle = selectedEl.querySelector('div');
-            if (circle) circle.style.outline = '3px dashed #ef4444';
-            if (circle) circle.style.outlineOffset = '3px';
+            if (circle) {
+                circle.style.outline = '3px dashed #ef4444';
+                circle.style.outlineOffset = '3px';
+            }
         }
 
-        // Заменяем стандартную полоску хода на Портретную Ленту Инициативы в стиле Baldur's Gate 3!
         let bg3TurnRibbon = document.getElementById('bg3-initiative-ribbon');
         if (!bg3TurnRibbon) {
             bg3TurnRibbon = document.createElement('div');
@@ -3122,16 +3149,17 @@ function RENDER_BG3_COMBAT_HUD() {
     }
     hudBox.style.display = 'block';
 
+    SYNC_MY_PLAYER_INDEX();
     const cs = GC();
     const c = cs[PI];
     if (!c) return;
     const st = GET_MAP_STATE();
+    SYNC_PLAYER_TOKENS_WITH_CHARS(st);
 
-    // 1. МИРНЫЙ РЕЖИМ
     if (!c.inCombat) {
         hudBox.innerHTML = `
             <div style="margin-top:12px; display:flex; justify-content:space-between; align-items:center; background:#181715; border:1px solid #423c33; padding:10px 16px; border-radius:10px; gap:10px; flex-wrap:wrap;">
-                <span style="color:#aba498; font-size:0.92rem;">🕊️ Вы вне боя. Хотите внезапно ударить кого-то в сцене и начать сражение?</span>
+                <span style="color:#aba498; font-size:0.92rem;">🕊️ Вы вне боя. Хотите внезапно атаковать цель и начать сражение?</span>
                 <button class="btn-danger" style="padding:9px 18px;" onclick="OPEN_AMBUSH_MODAL()">
                     🗡️ Внезапная атака / Начать бой
                 </button>
@@ -3140,28 +3168,22 @@ function RENDER_BG3_COMBAT_HUD() {
         return;
     }
 
-    // 2. БОЕВОЙ РЕЖИМ (ПРОВЕРКА ОЧЕРЕДИ ХОДА И ОЧКОВ ДЕЙСТВИЙ 🟢/🔶)
     const tokens = st.tokens || [];
     const to = ENSURE_TURN_STATE(st);
     const curTurnIdx = tokens.length > 0 ? (to.currentIdx % tokens.length) : 0;
     const activeTurnTok = tokens[curTurnIdx] || null;
 
-    // Проверяем: сейчас ход ЭТОГО игрока, другого игрока или врага?
-    const isMyTurn = activeTurnTok && activeTurnTok.isPlayer && activeTurnTok.charIdx === PI;
+    const isMyTurn = !tokens.length || (activeTurnTok && activeTurnTok.isPlayer && activeTurnTok.charIdx === PI);
     const isEnemyTurn = activeTurnTok && !activeTurnTok.isPlayer;
 
-    // Если выбранная цель указывает на самого себя, автоматически переключаем прицел на первого живого противника
     if (!tokens[window._bg3SelectedTargetIdx] || (tokens[window._bg3SelectedTargetIdx].isPlayer && tokens[window._bg3SelectedTargetIdx].charIdx === PI)) {
-        const firstEnemyIdx = tokens.findIndex((t, i) => (!t.isPlayer || t.charIdx !== PI) && t.hp > 0);
+        const firstEnemyIdx = tokens.findIndex((t) => (!t.isPlayer || t.charIdx !== PI) && t.hp > 0);
         if (firstEnemyIdx !== -1) window._bg3SelectedTargetIdx = firstEnemyIdx;
     }
 
-    const selectedTok = tokens[window._bg3SelectedTargetIdx] || null;
-
-    // Плашки выбора цели
     let targetsPillsHTML = '';
     tokens.forEach((tok, idx) => {
-        if (tok.isPlayer && tok.charIdx === PI) return; // Себя в список целей удара не выводим
+        if (tok.isPlayer && tok.charIdx === PI) return;
         if (tok.hp <= 0) return;
         const isSel = (idx === window._bg3SelectedTargetIdx);
         const isEnemy = !tok.isPlayer;
@@ -3175,654 +3197,389 @@ function RENDER_BG3_COMBAT_HUD() {
         `;
     });
 
-    // Индикаторы Очков Действия (🟢 Основное действие / 🔶 Бонусное действие) как в BG3
-    const hasAction = (to.actionsLeft > 0 && to.attacksLeft > 0);
-    const hasBonus = (to.bonusLeft > 0);
+    if (!targetsPillsHTML) {
+        targetsPillsHTML = `<span style="color:#888; font-size:0.85rem;">На карте нет целей (Мастер может выставить врагов в Бестиарии)</span>`;
+    }
 
-    const actionDotsHTML = `
-        <div style="display:flex; flex-direction:column; gap:6px; background:#141312; border:1px solid #3d3830; padding:10px 12px; border-radius:10px; min-width:170px; justify-content:center;">
-            <div style="display:flex; align-items:center; gap:8px; font-size:0.84rem;">
-                <span style="display:inline-block; width:14px; height:14px; border-radius:50%; background:${hasAction && isMyTurn ? '#22c55e' : '#333'}; box-shadow:${hasAction && isMyTurn ? '0 0 8px #22c55e' : 'none'}; border:1px solid #86efac;"></span>
-                <span style="color:${hasAction && isMyTurn ? '#ebe8e2' : '#666'};">Действие: <b>${isMyTurn ? to.attacksLeft : 0}</b></span>
-            </div>
-            <div style="display:flex; align-items:center; gap:8px; font-size:0.84rem;">
-                <span style="display:inline-block; width:14px; height:14px; border-radius:3px; transform:rotate(45deg); background:${hasBonus && isMyTurn ? '#f97316' : '#333'}; box-shadow:${hasBonus && isMyTurn ? '0 0 8px #f97316' : 'none'}; border:1px solid #fdba74;"></span>
-                <span style="color:${hasBonus && isMyTurn ? '#ebe8e2' : '#666'};">Бонусное: <b>${isMyTurn ? to.bonusLeft : 0}</b></span>
-            </div>
-        </div>
-    `;
-
-    // Сборка плиток способностей центральной части хотбара
-    const cat = window._bg3HotbarCategory || 'weapons';
     const pb = GPB(c.level || 1);
     const sm = GM(c.str || 10), dm = GM(c.dex || 10);
-    let actionTilesHTML = '';
+    const cat = window._bg3HotbarCategory || 'weapons';
 
-    if (!isMyTurn) {
-        // Если сейчас НЕ ход этого игрока — показываем красивый экран ожидания очереди (или кнопку хода ИИ врага!)
-        actionTilesHTML = `
-            <div style="flex:1; background:#161514; border:1px dashed #524a3d; border-radius:10px; padding:16px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
-                <div>
-                    <div style="color:#facc15; font-weight:bold; font-size:1rem;">⏳ Сейчас ход: «${activeTurnTok ? activeTurnTok.name : 'Ожидание'}»</div>
-                    <small style="color:#9e988e;">Вы сможете атаковать, как только очередь хода дойдёт до вашего героя.</small>
-                </div>
-                ${isEnemyTurn
-                    ? `<button class="btn-danger" onclick="BG3_EXECUTE_ENEMY_AI_TURN()">👹 Выполнить ход врага (${activeTurnTok.name})</button>`
-                    : `<button class="btn-small" onclick="GM_NEXT_TURN()">⏭️ Пропустить / Передать ход</button>`
-                }
-            </div>
-        `;
-    } else {
-        // СЕЙЧАС ХОД ЭТОГО ИГРОКА! Рисуем активные плитки ударов и заклинаний:
-        if (cat === 'weapons') {
-            const eqWeapons = (c.inventory || []).map((item, idx) => ({ item, idx })).filter(x => x.item.isWeapon && x.item.equipped);
-            eqWeapons.forEach(({ item, idx }, wOrder) => {
-                const am = item.finesse ? Math.max(sm, dm) : (item.ranged ? dm : sm);
-                // Если это второе лёгкое оружие в левой руке — оно бьёт за 🔶 Бонусное действие!
-                const isOffhand = (wOrder > 0);
-                const canUse = isOffhand ? hasBonus : hasAction;
-                const costBadge = isOffhand ? '<span style="color:#fb923c;">🔶 Бонусное</span>' : '<span style="color:#4ade80;">🟢 Действие</span>';
-
-                actionTilesHTML += `
-                    <div onclick="${canUse ? `BG3_EXECUTE_WEAPON_ATTACK(${idx}, ${isOffhand})` : ''}"
-                         style="cursor:${canUse ? 'pointer' : 'not-allowed'}; opacity:${canUse ? '1' : '0.4'}; width:136px; height:92px; background:linear-gradient(180deg, #2b241d 0%, #171411 100%); border:2px solid ${canUse ? '#c9a96e' : '#3d3830'}; border-radius:10px; padding:8px; display:flex; flex-direction:column; justify-content:space-between; text-align:center; transition:transform 0.12s;"
-                         onmouseover="if(${canUse}) this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='none'">
-                        <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.7rem;">
-                            ${costBadge}
-                            <b style="color:#52b758;">${MS(am + pb)}</b>
-                        </div>
-                        <div style="font-size:1.35rem; line-height:1;">${item.icon || '⚔️'}</div>
-                        <div style="font-weight:bold; color:#e6c88c; font-size:0.8rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${item.name}</div>
-                        <div style="color:#ccc; font-size:0.74rem;">Урон: <b>${item.damage}${MS(am)}</b></div>
-                    </div>
-                `;
-            });
-
-            const unarmedDmg = (c.chosenFeats && c.chosenFeats.includes('Драчун')) ? `1к4${MS(sm)}` : `${Math.max(1, 1 + sm)}`;
-            actionTilesHTML += `
-                <div onclick="${hasAction ? 'BG3_EXECUTE_UNARMED_ATTACK()' : ''}"
-                     style="cursor:${hasAction ? 'pointer' : 'not-allowed'}; opacity:${hasAction ? '1' : '0.4'}; width:136px; height:92px; background:linear-gradient(180deg, #25221f 0%, #151412 100%); border:1px solid ${hasAction ? '#8c7853' : '#3d3830'}; border-radius:10px; padding:8px; display:flex; flex-direction:column; justify-content:space-between; text-align:center;">
-                    <div style="display:flex; justify-content:space-between; font-size:0.7rem;">
-                        <span style="color:#4ade80;">🟢 Действие</span>
-                        <b style="color:#52b758;">${MS(sm + pb)}</b>
-                    </div>
-                    <div style="font-size:1.35rem; line-height:1;">👊</div>
-                    <div style="font-weight:bold; color:#ddd; font-size:0.8rem;">Рукопашная</div>
-                    <div style="color:#aaa; font-size:0.74rem;">Урон: <b>${unarmedDmg}</b></div>
-                </div>
+    let hotbarButtonsHTML = '';
+    if (cat === 'weapons') {
+        const eqWeapons = (c.inventory || []).map((item, idx) => ({ item, idx })).filter(x => x.item.isWeapon && x.item.equipped);
+        eqWeapons.forEach(({ item, idx }) => {
+            const am = item.finesse ? Math.max(sm, dm) : (item.ranged ? dm : sm);
+            const canAtk = isMyTurn && to.attacksLeft > 0;
+            hotbarButtonsHTML += `
+                <button class="btn-cast" ${!canAtk ? 'disabled style="opacity:0.45;"' : ''} onclick="BG3_PLAYER_USE_WEAPON(${idx})"
+                    style="padding:8px 12px; display:flex; flex-direction:column; align-items:flex-start; gap:2px; min-width:135px; background:#2b231d; border:1px solid #c9a96e;">
+                    <span style="font-weight:bold; color:#e6c88c;">${item.icon || '⚔️'} ${item.name}</span>
+                    <small style="color:#86efac;">Попадание ${MS(am + pb)} | ${item.damage || '1к4'}${MS(am)}</small>
+                </button>
             `;
-        } else if (cat === 'cantrips') {
-            const known = c.knownSpells || [];
-            const cantrips = gameData.spells.filter(sp => sp.level === 0 && known.includes(sp.name));
-            cantrips.forEach(sp => {
-                const isBonus = sp.time && sp.time.includes('бонус');
-                const canUse = isBonus ? hasBonus : hasAction;
-                actionTilesHTML += `
-                    <div onclick="${canUse ? `BG3_EXECUTE_SPELL('${sp.name}')` : ''}" title="${sp.desc}"
-                         style="cursor:${canUse ? 'pointer' : 'not-allowed'}; opacity:${canUse ? '1' : '0.4'}; width:140px; height:92px; background:linear-gradient(180deg, #172536 0%, #101720 100%); border:2px solid ${canUse ? '#38bdf8' : '#334155'}; border-radius:10px; padding:8px; display:flex; flex-direction:column; justify-content:space-between; text-align:center;">
-                        <div style="font-size:0.7rem; color:${isBonus ? '#fb923c' : '#4ade80'};">${isBonus ? '🔶 Бонусное' : '🟢 Действие'}</div>
-                        <div style="font-size:1.3rem; line-height:1;">✨</div>
-                        <div style="font-weight:bold; color:#bae6fd; font-size:0.8rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${sp.name}</div>
-                        <div style="color:#38bdf8; font-size:0.72rem;">${sp.range}</div>
-                    </div>
+        });
+        const unarmedDmg = (c.chosenFeats && c.chosenFeats.includes('Драчун')) ? `1к4${MS(sm)}` : `${Math.max(1, 1 + sm)}`;
+        const canUnarmed = isMyTurn && to.attacksLeft > 0;
+        hotbarButtonsHTML += `
+            <button class="btn-cast" ${!canUnarmed ? 'disabled style="opacity:0.45;"' : ''} onclick="BG3_PLAYER_UNARMED()"
+                style="padding:8px 12px; display:flex; flex-direction:column; align-items:flex-start; gap:2px; min-width:130px; background:#25221e; border:1px solid #665c4e;">
+                <span style="font-weight:bold; color:#fff;">👊 Рукопашная</span>
+                <small style="color:#ccc;">Попадание ${MS(sm + pb)} | Урон ${unarmedDmg}</small>
+            </button>
+        `;
+    } else if (cat === 'spells') {
+        const known = c.knownSpells || [];
+        const mySpells = gameData.spells.filter(sp => known.includes(sp.name));
+        if (mySpells.length === 0) {
+            hotbarButtonsHTML = `<span style="color:#777; font-size:0.85rem;">Нет изученных заклинаний</span>`;
+        } else {
+            mySpells.forEach(sp => {
+                const isBonus = (sp.time || '').toLowerCase().includes('бонус');
+                const canCast = isMyTurn && (isBonus ? to.bonusLeft > 0 : to.actionsLeft > 0);
+                hotbarButtonsHTML += `
+                    <button class="btn-cast" ${!canCast ? 'disabled style="opacity:0.45;"' : ''} onclick="BG3_PLAYER_CAST_SPELL('${sp.name}')"
+                        style="padding:7px 11px; display:flex; flex-direction:column; align-items:flex-start; gap:2px; min-width:135px; background:#1e1b2e; border:1px solid #a855f7;">
+                        <span style="font-weight:bold; color:#e9d5ff;">✨ ${sp.name}</span>
+                        <small style="color:#c4b5fd;">${sp.level === 0 ? 'Заговор' : sp.level + ' круг'} • ${isBonus ? '🔶 Бонус' : '🟢 Действие'}</small>
+                    </button>
                 `;
             });
-            if (!actionTilesHTML) actionTilesHTML = `<div style="color:#777; padding:20px;">Нет изученных заговоров</div>`;
-        } else if (cat === 'spells') {
-            NORMALIZE_WARLOCK_SLOTS(c);
-            const maxSlots = GET_SPELL_SLOTS(c);
-            const usedSlots = c.usedSpellSlots || {};
-            const known = c.knownSpells || [];
-            const leveledSpells = gameData.spells.filter(sp => sp.level >= 1 && known.includes(sp.name));
-
-            leveledSpells.forEach(sp => {
-                let slotLv = sp.level;
-                if (c.className === 'Колдун' && sp.level <= 5) {
-                    for (let i = 5; i >= 1; i--) { if (maxSlots[i] > 0) { slotLv = i; break; } }
-                }
-                const avail = (maxSlots[slotLv] || 0) - (usedSlots[slotLv] || 0);
-                const isBonus = sp.time && sp.time.includes('бонус');
-                const canUse = avail > 0 && (isBonus ? hasBonus : hasAction);
-
-                actionTilesHTML += `
-                    <div onclick="${canUse ? `BG3_EXECUTE_SPELL('${sp.name}')` : ''}" title="${sp.desc}"
-                         style="cursor:${canUse ? 'pointer' : 'not-allowed'}; opacity:${canUse ? '1' : '0.4'}; width:142px; height:92px; background:linear-gradient(180deg, #2a1b38 0%, #16101e 100%); border:2px solid ${canUse ? '#c084fc' : '#3b284d'}; border-radius:10px; padding:8px; display:flex; flex-direction:column; justify-content:space-between; text-align:center;">
-                        <div style="display:flex; justify-content:space-between; font-size:0.68rem;">
-                            <span style="color:${isBonus ? '#fb923c' : '#4ade80'};">${isBonus ? '🔶 Бон.' : '🟢 Действ.'}</span>
-                            <span style="color:#e9d5ff;">${sp.level} круг</span>
-                        </div>
-                        <div style="font-size:1.25rem; line-height:1;">🔮</div>
-                        <div style="font-weight:bold; color:#f3e8ff; font-size:0.8rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${sp.name}</div>
-                        <div style="color:${avail > 0 ? '#c084fc' : '#ef4444'}; font-size:0.72rem;">Ячеек: ${Math.max(0, avail)}/${maxSlots[slotLv] || 0}</div>
-                    </div>
-                `;
-            });
-            if (!actionTilesHTML) actionTilesHTML = `<div style="color:#777; padding:20px;">Нет изученных заклинаний 1+ круга</div>`;
-        } else if (cat === 'items') {
-            const potions = (c.inventory || []).map((item, idx) => ({ item, idx })).filter(x => GET_ITEM_TYPE(x.item) === 'potion');
+        }
+    } else if (cat === 'items') {
+        const potions = (c.inventory || []).map((item, idx) => ({ item, idx })).filter(x => GET_ITEM_TYPE(x.item) === 'potion');
+        if (potions.length === 0) {
+            hotbarButtonsHTML = `<span style="color:#777; font-size:0.85rem;">В рюкзаке нет зелий</span>`;
+        } else {
             potions.forEach(({ item, idx }) => {
-                actionTilesHTML += `
-                    <div onclick="${hasBonus ? `BG3_USE_COMBAT_POTION(${idx})` : ''}"
-                         style="cursor:${hasBonus ? 'pointer' : 'not-allowed'}; opacity:${hasBonus ? '1' : '0.4'}; width:136px; height:92px; background:linear-gradient(180deg, #192e20 0%, #101c14 100%); border:2px solid ${hasBonus ? '#4cd964' : '#2a4733'}; border-radius:10px; padding:8px; display:flex; flex-direction:column; justify-content:space-between; text-align:center;">
-                        <div style="font-size:0.7rem; color:#fb923c;">🔶 Бонусное</div>
-                        <div style="font-size:1.35rem; line-height:1;">🧪 ×${item.qty || 1}</div>
-                        <div style="font-weight:bold; color:#bbf7d0; font-size:0.8rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${item.name}</div>
-                        <div style="color:#4cd964; font-size:0.72rem;">Выпить</div>
-                    </div>
+                const canDrink = isMyTurn && to.bonusLeft > 0;
+                hotbarButtonsHTML += `
+                    <button class="btn-cast" ${!canDrink ? 'disabled style="opacity:0.45;"' : ''} onclick="BG3_PLAYER_DRINK_POTION(${idx})"
+                        style="padding:7px 11px; display:flex; flex-direction:column; align-items:flex-start; gap:2px; min-width:135px; background:#1a2e22; border:1px solid #4cd964;">
+                        <span style="font-weight:bold; color:#86efac;">🧪 ${item.name} (×${item.qty || 1})</span>
+                        <small style="color:#a7f3d0;">🔶 Бонусное действие</small>
+                    </button>
                 `;
             });
-            if (!actionTilesHTML) actionTilesHTML = `<div style="color:#777; padding:20px;">В рюкзаке нет зелий</div>`;
         }
     }
 
-    const catBtn = (code, label) => `
-        <button class="btn-small" onclick="window._bg3HotbarCategory='${code}'; RENDER_BG3_COMBAT_HUD();"
-            style="background:${cat===code ? '#c9a96e' : '#161514'}; color:${cat===code ? '#181510' : '#ccc'}; border:1px solid ${cat===code ? '#e0c58e' : '#3d3830'}; padding:5px 12px; font-size:0.84rem;">
-            ${label}
-        </button>`;
+    const turnStatusHTML = isMyTurn
+        ? `<span style="color:#4cd964; font-weight:bold;">🟢 ВАШ ХОД!</span> <small style="color:#ccc;">(Действий: <b>${to.actionsLeft}</b> | Атак: <b>${to.attacksLeft}</b> | Бонусных: <b>${to.bonusLeft}</b>)</small>`
+        : (isEnemyTurn
+            ? `<span style="color:#ef4444; font-weight:bold;">👹 Ходит враг: ${activeTurnTok ? activeTurnTok.name : 'Монстр'}</span> <button class="btn-small btn-danger" style="margin-left:8px; padding:3px 9px;" onclick="BG3_EXECUTE_ENEMY_AI_TURN()">⚡ Выполнить ход за врага</button>`
+            : `<span style="color:#eab308; font-weight:bold;">⏳ Сейчас ходит союзник: ${activeTurnTok ? activeTurnTok.name : 'Герой'}</span>`);
 
     hudBox.innerHTML = `
-        <div style="margin-top:12px; background:linear-gradient(180deg, #221d18 0%, #141210 100%); border:2px solid #c9a96e; border-radius:14px; padding:14px 16px; box-shadow:0 10px 30px rgba(0,0,0,0.88);">
+        <div style="margin-top:12px; background:linear-gradient(180deg, #1f1c18 0%, #141210 100%); border:2px solid ${isMyTurn ? '#c9a96e' : '#3d3830'}; border-radius:12px; padding:12px 14px; box-shadow:0 8px 24px rgba(0,0,0,0.85);">
             ${window._bg3CombatLogBanner || ''}
-
-            <!-- Верхняя строка: Выбор Цели + Кнопки вкладок -->
-            <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px; padding-bottom:8px; border-bottom:1px solid #38332c;">
-                <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-                    <span style="color:#c9a96e; font-size:0.86rem; font-weight:bold;">🎯 Цель:</span>
-                    ${targetsPillsHTML || `<span style="color:#777; font-size:0.84rem;">Нет целей</span>`}
-                    <button class="btn-small" style="padding:3px 8px; font-size:0.76rem;" onclick="OPEN_AMBUSH_MODAL()">+ Цель</button>
-                </div>
-                <div style="display:flex; gap:5px; flex-wrap:wrap;">
-                    ${catBtn('weapons', '⚔️ Оружие')}
-                    ${catBtn('cantrips', '✨ Заговоры')}
-                    ${catBtn('spells', '🔮 Заклинания')}
-                    ${catBtn('items', '🧪 Зелья')}
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; border-bottom:1px solid #332e27; padding-bottom:8px; margin-bottom:8px;">
+                <div>${turnStatusHTML}</div>
+                <div style="display:flex; gap:6px;">
+                    <button class="btn-small ${isMyTurn ? 'btn-save' : ''}" onclick="GM_NEXT_TURN()">⏭️ Завершить ход</button>
                 </div>
             </div>
 
-            <!-- Основное тело Хотбара BG3: Слева Очки Действий, по центру Плитки Способностей, справа Кнопка Конца Хода -->
-            <div style="display:flex; gap:12px; align-items:stretch; justify-content:space-between; flex-wrap:wrap;">
-                ${actionDotsHTML}
+            <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:10px;">
+                <span style="color:#c9a96e; font-size:0.82rem; font-weight:bold;">🎯 Цель на карте:</span>
+                ${targetsPillsHTML}
+            </div>
 
-                <div style="flex:1; display:flex; gap:8px; flex-wrap:wrap; align-items:center; min-height:94px;">
-                    ${actionTilesHTML}
-                </div>
+            <div style="display:flex; gap:6px; margin-bottom:8px;">
+                <button class="btn-small" style="background:${cat==='weapons'?'#c9a96e':'#26231f'}; color:${cat==='weapons'?'#141210':'#ccc'};" onclick="window._bg3HotbarCategory='weapons'; RENDER_BG3_COMBAT_HUD();">⚔️ Оружие</button>
+                <button class="btn-small" style="background:${cat==='spells'?'#c9a96e':'#26231f'}; color:${cat==='spells'?'#141210':'#ccc'};" onclick="window._bg3HotbarCategory='spells'; RENDER_BG3_COMBAT_HUD();">✨ Заклинания</button>
+                <button class="btn-small" style="background:${cat==='items'?'#c9a96e':'#26231f'}; color:${cat==='items'?'#141210':'#ccc'};" onclick="window._bg3HotbarCategory='items'; RENDER_BG3_COMBAT_HUD();">🧪 Зелья</button>
+            </div>
 
-                <!-- Правая колонка управления ходом (как круглая кнопка конца хода в BG3) -->
-                <div style="display:flex; flex-direction:column; gap:6px; justify-content:center; min-width:145px;">
-                    <button class="${!hasAction && isMyTurn ? 'btn-save' : ''}" onclick="GM_NEXT_TURN()"
-                            style="height:56px; font-size:0.95rem; border-radius:10px; ${!hasAction && isMyTurn ? 'box-shadow:0 0 14px rgba(76,217,100,0.6);' : ''}">
-                        ⏳ Завершить ход
-                    </button>
-                    <button class="btn-small btn-danger" style="padding:4px 8px; font-size:0.76rem;" onclick="PLAYER_LEAVE_COMBAT()">
-                        🏳️ Завершить бой
-                    </button>
-                </div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:stretch;">
+                ${hotbarButtonsHTML}
             </div>
         </div>
     `;
 }
 
-// ================================================================
-// 🗡️ ОКНО ВНЕЗАПНОЙ АТАКИ («НАПАСТЬ В БАРЕ И ЗАВЯЗАТЬ БОЙ»)
-// ================================================================
-function OPEN_AMBUSH_MODAL() {
-    const cs = GC();
-    const c = cs[PI];
-    if (!c) return;
+function BG3_APPLY_DAMAGE_TO_SELECTED_TOKEN(dmg, atkTotal, isCrit, actionTitle) {
     const st = GET_MAP_STATE();
-    const vn = GET_ACTIVE_VN_DIALOG();
-    const npcs = GET_NPCS();
-
-    const cont = document.getElementById('gm-tool-modal-content');
-    cont.style.maxWidth = '680px';
-
-    let targetOptions = '';
-    if (vn && vn.active && vn.name) {
-        targetOptions += `<option value="vn_npc:${vn.name}">🎭 Собеседник перед вами: ${vn.name} (${vn.role || 'NPC'})</option>`;
-    }
-    if (st.tokens && st.tokens.length > 0) {
-        st.tokens.forEach((t, idx) => {
-            if (!t.isPlayer || t.charIdx !== PI) {
-                targetOptions += `<option value="map_tok:${idx}">♟️ На карте: ${t.name} (ХП ${t.hp}/${t.maxHp})</option>`;
-            }
-        });
-    }
-    npcs.forEach((n) => {
-        if (!vn || vn.name !== n.name) {
-            targetOptions += `<option value="saved_npc:${n.name}">👤 Персонаж мира: ${n.name} (${n.role || 'NPC'})</option>`;
-        }
-    });
-    cs.forEach((m, idx) => {
-        if (idx !== PI) {
-            targetOptions += `<option value="party:${idx}">🤝 Союзник в отряде: ${m.name} (ХП ${m.hp ?? 10}/${m.maxHp || 10})</option>`;
-        }
-    });
-    targetOptions += `<option value="custom">✏️ Вписать свою цель (напр. Вышибала в баре, Стражник)...</option>`;
-
-    let weaponOptions = '';
-    (c.inventory || []).forEach((item, idx) => {
-        if (item.isWeapon && item.equipped) {
-            weaponOptions += `<option value="wep:${idx}">⚔️ Оружие: ${item.name} (${item.damage})</option>`;
-        }
-    });
-    weaponOptions += `<option value="unarmed">👊 Безоружный удар (Кулаком / Кружкой)</option>`;
-    (c.knownSpells || []).forEach(spName => {
-        const sp = gameData.spells.find(s => s.name === spName);
-        if (sp) weaponOptions += `<option value="spell:${sp.name}">✨ Заклинание: ${sp.name} (${sp.level === 0 ? 'Заговор' : sp.level + ' круг'})</option>`;
-    });
-
-    cont.innerHTML = `
-        <h2>🗡️ Внезапная атака / Завязать бой</h2>
-        <p style="color:#aba498; font-size:0.92rem; margin-bottom:14px;">
-            Выберите, кого вы хотите атаковать! Цель появится на тактической карте, ваш герой нанесёт внезапный первый удар и начнётся пошаговый бой!
-        </p>
-
-        <div style="background:#181715; border:1px solid #423c33; padding:18px; border-radius:10px; display:flex; flex-direction:column; gap:12px;">
-            <div>
-                <label style="color:#c9a96e; font-weight:bold;">1. Кого вы хотите ударить?</label>
-                <select id="ambush-target-select" onchange="document.getElementById('ambush-custom-box').style.display = (this.value==='custom' ? 'flex' : 'none');" style="margin-top:6px; text-align:left;">
-                    ${targetOptions}
-                </select>
-            </div>
-
-            <div id="ambush-custom-box" style="display:none; gap:10px; background:#121110; padding:10px; border-radius:8px; border:1px dashed #635a4a;">
-                <div style="flex:2;">
-                    <label style="color:#aaa; font-size:0.85rem;">Имя цели:</label>
-                    <input type="text" id="ambush-custom-name" placeholder="Напр.: Трактирщик" style="margin-top:4px; text-align:left;">
-                </div>
-                <div style="flex:1;">
-                    <label style="color:#aaa; font-size:0.85rem;">ХП цели:</label>
-                    <input type="number" id="ambush-custom-hp" value="20" min="1" style="margin-top:4px;">
-                </div>
-                <div style="flex:1;">
-                    <label style="color:#aaa; font-size:0.85rem;">КБ цели:</label>
-                    <input type="number" id="ambush-custom-ac" value="13" min="8" style="margin-top:4px;">
-                </div>
-            </div>
-
-            <div>
-                <label style="color:#c9a96e; font-weight:bold;">2. Чем нанести внезапный удар?</label>
-                <select id="ambush-attack-select" style="margin-top:6px; text-align:left;">
-                    ${weaponOptions}
-                </select>
-            </div>
-
-            <button class="btn-danger" style="padding:14px; font-size:1.08rem; margin-top:6px;" onclick="EXECUTE_AMBUSH_START_COMBAT()">
-                💥 Нанести удар и начать БОЙ!
-            </button>
-        </div>
-        <div style="margin-top:14px; text-align:right;"><button onclick="CM('gm-tool-modal')">Отмена</button></div>
-    `;
-    OM('gm-tool-modal');
-}
-
-function EXECUTE_AMBUSH_START_COMBAT() {
-    const targetVal = document.getElementById('ambush-target-select')?.value || 'custom';
-    const attackVal = document.getElementById('ambush-attack-select')?.value || 'unarmed';
+    SYNC_PLAYER_TOKENS_WITH_CHARS(st);
+    const tokens = st.tokens || [];
+    const targetTok = tokens[window._bg3SelectedTargetIdx];
     const cs = GC();
-    const c = cs[PI];
-    const st = GET_MAP_STATE();
-    if (!st.tokens) st.tokens = [];
+    const attacker = cs[PI];
 
-    // 1. Выставляем фишки всех игроков пачки на карту, если их ещё нет
-    cs.forEach((m, idx) => {
-        if (!st.tokens.some(t => t.isPlayer && t.charIdx === idx)) {
-            st.tokens.push({
-                id: Date.now() + idx,
-                isPlayer: true,
-                charIdx: idx,
-                name: m.name || ('Герой ' + (idx + 1)),
-                icon: '🛡️',
-                avatar: m.avatar || '',
-                x: 25 + (idx * 14) % 55,
-                y: 74,
-                hp: m.hp ?? 10,
-                maxHp: m.maxHp || 10,
-                ac: CAC(m),
-                init: Math.floor(Math.random() * 20) + 1 + GM(m.dex || 10)
-            });
-        }
-    });
-
-    // 2. Находим или создаём фишку цели на карте
-    let targetNameForLookup = '';
-    if (targetVal.startsWith('map_tok:')) {
-        const tIdx = parseInt(targetVal.split(':')[1]);
-        targetNameForLookup = st.tokens[tIdx]?.name || '';
-    } else if (targetVal.startsWith('party:')) {
-        const pIdx = parseInt(targetVal.split(':')[1]);
-        const pTok = st.tokens.find(t => t.isPlayer && t.charIdx === pIdx);
-        targetNameForLookup = pTok ? pTok.name : '';
-    } else {
-        let newTargetName = 'Противник';
-        let newTargetHp = 22;
-        let newTargetAc = 13;
-        let newTargetAvatar = '';
-
-        if (targetVal.startsWith('vn_npc:') || targetVal.startsWith('saved_npc:')) {
-            const npcName = targetVal.split(':')[1];
-            const vn = GET_ACTIVE_VN_DIALOG();
-            const foundNpc = GET_NPCS().find(n => n.name === npcName);
-            newTargetName = npcName;
-            newTargetAvatar = (vn && vn.name === npcName && vn.avatar) ? vn.avatar : (foundNpc?.avatar || '');
-            if (vn && vn.active) SAVE_ACTIVE_VN_DIALOG(null);
-        } else if (targetVal === 'custom') {
-            newTargetName = document.getElementById('ambush-custom-name')?.value.trim() || 'Завсегдатай таверны';
-            newTargetHp = Math.max(1, parseInt(document.getElementById('ambush-custom-hp')?.value) || 20);
-            newTargetAc = Math.max(8, parseInt(document.getElementById('ambush-custom-ac')?.value) || 13);
-        }
-
-        targetNameForLookup = newTargetName;
-        if (!st.tokens.some(t => !t.isPlayer && t.name === newTargetName)) {
-            st.tokens.push({
-                id: Date.now() + 99,
-                isPlayer: false,
-                name: newTargetName,
-                icon: '😠',
-                avatar: newTargetAvatar,
-                x: 50,
-                y: 32,
-                hp: newTargetHp,
-                maxHp: newTargetHp,
-                ac: newTargetAc,
-                atkBonus: 4,
-                dmgFormula: '1к6+2',
-                init: Math.floor(Math.random() * 20) + 1
-            });
-        }
-    }
-
-    // 3. Тот, кто начал внезапную атаку, получает первый ход в Раунде 1 (эффект Внезапности!), остальные сортируются следом
-    const myTok = st.tokens.find(t => t.isPlayer && t.charIdx === PI);
-    if (myTok) myTok.init = 99;
-    st.tokens.sort((a, b) => (b.init || 10) - (a.init || 10));
-
-    const newTargetIdx = st.tokens.findIndex(t => t.name === targetNameForLookup && (!t.isPlayer || t.charIdx !== PI));
-    window._bg3SelectedTargetIdx = newTargetIdx !== -1 ? newTargetIdx : 0;
-
-    cs.forEach(m => { m.inCombat = true; });
-    SC(cs);
-    CANCEL_REST_POLL_IF_COMBAT(c.name || 'Игрок');
-
-    st.turnOrder = {
-        active: true,
-        round: 1,
-        currentIdx: 0,
-        actionsLeft: 1,
-        attacksLeft: GET_MAX_ATTACKS_PER_ACTION(c),
-        bonusLeft: 1
-    };
-    SAVE_MAP_STATE(st);
-
-    CM('gm-tool-modal');
-    LOG_COMBAT_TO_CHAT(`💥 ВНЕЗАПНАЯ АТАКА! «${c.name}» атакует «${st.tokens[window._bg3SelectedTargetIdx]?.name || 'цель'}» — начинается пошаговый БОЙ!`);
-
-    if (attackVal.startsWith('wep:')) {
-        BG3_EXECUTE_WEAPON_ATTACK(parseInt(attackVal.split(':')[1]), false);
-    } else if (attackVal.startsWith('spell:')) {
-        BG3_EXECUTE_SPELL(attackVal.split(':')[1]);
-    } else {
-        BG3_EXECUTE_UNARMED_ATTACK();
-    }
-}
-
-// === НАНЕСЕНИЕ УРОНА С УЧЁТОМ ОЧЕРЕДИ ХОДА И ТРАТЫ ДЕЙСТВИЙ (БЕЗ БАГА РЕГЕНА ХП!) ===
-function BG3_APPLY_DAMAGE_TO_MAP_TARGET(dmg, atkRoll, totalAtk, weaponLabel, isBonusAction = false) {
-    const st = GET_MAP_STATE();
-    const cs = GC();
-    const to = ENSURE_TURN_STATE(st);
-    const curTurnTok = st.tokens && st.tokens[to.currentIdx % st.tokens.length];
-
-    // 1. Строгая проверка: сейчас ли ход этого игрока?
-    if (!curTurnTok || !curTurnTok.isPlayer || curTurnTok.charIdx !== PI) {
-        showMessage('⏳ Сейчас не ваш ход!', `По очереди инициативы сейчас ходит «<b>${curTurnTok ? curTurnTok.name : 'другой персонаж'}</b>». Дождитесь своего хода!`);
+    if (!targetTok) {
+        LOG_COMBAT_TO_CHAT(`⚔️ «${attacker.name}» использует «${actionTitle}» | Попадание: ${atkTotal} | Урон: ${dmg}`);
         return;
     }
 
-    // 2. Проверка наличия Очков Действия (🟢 или 🔶)
-    if (isBonusAction) {
-        if (to.bonusLeft <= 0) {
-            showMessage('🔶 Бонусное действие потрачено', 'У вас больше нет Бонусных действий в этом ходу. Завершите ход!');
-            return;
+    const targetAC = targetTok.ac || 12;
+    const isHit = isCrit || (atkTotal >= targetAC);
+
+    if (isHit) {
+        targetTok.hp = Math.max(0, (targetTok.hp || 0) - dmg);
+        if (targetTok.isPlayer && cs[targetTok.charIdx]) {
+            cs[targetTok.charIdx].hp = targetTok.hp;
+            SC(cs);
         }
-    } else {
-        if (to.actionsLeft <= 0 || to.attacksLeft <= 0) {
-            showMessage('🟢 Основное действие потрачено', 'Вы уже использовали все свои атаки в этом ходу. Нажмите «⏳ Завершить ход»!');
-            return;
-        }
-    }
-
-    const tok = st.tokens && st.tokens[window._bg3SelectedTargetIdx];
-    if (!tok) {
-        showMessage('🎯 Выберите цель', 'Сначала кликните по фишке противника на карте или выберите цель над хотбаром!');
-        return;
-    }
-
-    // Списываем очко действия
-    if (isBonusAction) {
-        to.bonusLeft = Math.max(0, to.bonusLeft - 1);
-    } else {
-        to.attacksLeft = Math.max(0, to.attacksLeft - 1);
-        if (to.attacksLeft <= 0) to.actionsLeft = 0;
-    }
-
-    const targetAC = (tok.isPlayer && cs[tok.charIdx]) ? CAC(cs[tok.charIdx]) : (tok.ac || 12);
-    const isCrit = (atkRoll === 20);
-    const isMiss = (atkRoll === 1) || (!isCrit && totalAtk < targetAC);
-
-    if (isMiss) {
         SAVE_MAP_STATE(st);
+        const deadNote = targetTok.hp <= 0 ? ' 💀 <b>ЦЕЛЬ ПОВЕРЖЕНА!</b>' : ` (Осталось ${targetTok.hp}/${targetTok.maxHp} ХП)`;
         window._bg3CombatLogBanner = `
-            <div style="background:#26221e; border-left:4px solid #e06060; padding:8px 12px; border-radius:6px; margin-bottom:10px; font-size:0.9rem; display:flex; justify-content:space-between; align-items:center;">
-                <span>💨 <b>${weaponLabel}</b> по «<b>${tok.name}</b>»: бросок <b>${totalAtk}</b> (к20=${atkRoll}) против КБ ${targetAC} — <b style="color:#e06060;">ПРОМАХ!</b></span>
-                <button class="btn-small" style="padding:2px 6px;" onclick="window._bg3CombatLogBanner=''; RENDER_BG3_COMBAT_HUD();">✕</button>
+            <div style="background:#192e1e; border-left:4px solid #4cd964; padding:8px 12px; border-radius:6px; margin-bottom:8px; font-size:0.9rem; color:#d8f3dc;">
+                🎯 <b>${actionTitle}</b> по «<b>${targetTok.name}</b>»: Попадание <b>${atkTotal}</b> (против КБ ${targetAC}) ${isCrit ? '💥 <b>КРИТ!</b>' : ''} -> Нанесено <b>${dmg} урона</b>!${deadNote}
             </div>`;
-        LOG_COMBAT_TO_CHAT(`⚔️ атакует («${weaponLabel}») -> «${tok.name}»: попадание ${totalAtk} против КБ ${targetAC} — ПРОМАХ!`);
-        RENDER_MAP_AREA();
-        return;
-    }
-
-    const finalDmg = isCrit ? dmg * 2 : dmg;
-    let remainingHp = 0;
-
-    // Если цель — другой игрок в отряде, списываем ХП и в карточке персонажа, и на его фишке (без перезаписи старыми данными!)
-    if (tok.isPlayer && cs[tok.charIdx]) {
-        const targetChar = cs[tok.charIdx];
-        targetChar.hp = Math.max(0, (targetChar.hp ?? 10) - finalDmg);
-        remainingHp = targetChar.hp;
-        tok.hp = remainingHp;
-        SC(cs);
+        LOG_COMBAT_TO_CHAT(`⚔️ «${attacker.name}» (${actionTitle}) атакует «${targetTok.name}»: Попадание ${atkTotal} (КБ ${targetAC}) -> Нанесено ${dmg} урона!${targetTok.hp <= 0 ? ' [ПОВЕРЖЕН]' : ''}`);
     } else {
-        tok.hp = Math.max(0, (tok.hp ?? 10) - finalDmg);
-        remainingHp = tok.hp;
+        window._bg3CombatLogBanner = `
+            <div style="background:#2d2118; border-left:4px solid #f59e0b; padding:8px 12px; border-radius:6px; margin-bottom:8px; font-size:0.9rem; color:#fde68a;">
+                🛡️ <b>${actionTitle}</b> по «<b>${targetTok.name}</b>»: <b>ПРОМАХ!</b> (Бросок ${atkTotal} против КБ ${targetAC})
+            </div>`;
+        LOG_COMBAT_TO_CHAT(`🛡️ «${attacker.name}» (${actionTitle}) промахивается по «${targetTok.name}» (Бросок ${atkTotal} против КБ ${targetAC}).`);
     }
-
-    SAVE_MAP_STATE(st);
-    const critBadge = isCrit ? ' <b style="color:#facc15;">[КРИТИЧЕСКИЙ УДАР ×2!]</b>' : '';
-    const deadBadge = remainingHp <= 0 ? ' 💀 <b style="color:#ef4444;">ЦЕЛЬ ПОВЕРЖЕНА!</b>' : ` (Осталось ХП: ${remainingHp}/${tok.maxHp})`;
-
-    window._bg3CombatLogBanner = `
-        <div style="background:#16241a; border-left:4px solid #4cd964; padding:8px 12px; border-radius:6px; margin-bottom:10px; font-size:0.9rem; display:flex; justify-content:space-between; align-items:center;">
-            <span>💥 <b>${weaponLabel}</b> по «<b>${tok.name}</b>»: попадание <b>${totalAtk}</b> (против КБ ${targetAC})${critBadge} -> Урон: <b style="color:#4cd964;">${finalDmg}</b>!${deadBadge}</span>
-            <button class="btn-small" style="padding:2px 6px;" onclick="window._bg3CombatLogBanner=''; RENDER_BG3_COMBAT_HUD();">✕</button>
-        </div>`;
-
-    LOG_COMBAT_TO_CHAT(`⚔️ атакует («${weaponLabel}») -> «${tok.name}» | Попадание: ${totalAtk} (КБ ${targetAC}) | Урон: ${finalDmg}${remainingHp <= 0 ? ' (ПОВЕРЖЕН!)' : ''}`);
-    RMC();
-    RENDER_MAP_AREA();
 }
 
-function BG3_EXECUTE_WEAPON_ATTACK(invIdx, isOffhand = false) {
+function BG3_PLAYER_USE_WEAPON(invIdx) {
     const cs = GC();
     const c = cs[PI];
-    const item = c.inventory && c.inventory[invIdx];
+    const item = c && c.inventory && c.inventory[invIdx];
     if (!item) return;
+
+    const st = GET_MAP_STATE();
+    const to = ENSURE_TURN_STATE(st);
+    if (to.attacksLeft <= 0) return;
 
     const pb = GPB(c.level || 1);
     const sm = GM(c.str || 10), dm = GM(c.dex || 10);
     const am = item.finesse ? Math.max(sm, dm) : (item.ranged ? dm : sm);
-    const atkRoll = Math.floor(Math.random() * 20) + 1;
-    const totalAtk = atkRoll + am + pb;
+    const d20 = Math.floor(Math.random() * 20) + 1;
+    const atkTotal = d20 + am + pb;
+    const isCrit = (d20 === 20);
+    let dmg = Math.max(1, ROLL(item.damage || '1к4') + am);
+    if (isCrit) dmg += ROLL(item.damage || '1к4');
 
-    let dmgFormula = item.damage || '1к4';
-    const hasShieldOrSecondWeapon = (c.inventory || []).filter(x => x.equipped && (x.isWeapon || x.isShield)).length > 1;
-    if (item.properties && item.properties.includes('универсальное') && !hasShieldOrSecondWeapon) {
-        const m = item.properties.match(/универсальное\s*\(([^)]+)\)/i);
-        if (m && m[1]) dmgFormula = m[1];
-    }
-    const dmg = Math.max(1, ROLL(dmgFormula) + (isOffhand ? 0 : am));
-    BG3_APPLY_DAMAGE_TO_MAP_TARGET(dmg, atkRoll, totalAtk, item.name, isOffhand);
+    to.attacksLeft = Math.max(0, to.attacksLeft - 1);
+    if (to.attacksLeft === 0) to.actionsLeft = 0;
+    SAVE_MAP_STATE(st);
+
+    BG3_APPLY_DAMAGE_TO_SELECTED_TOKEN(dmg, d20 === 1 ? 1 : atkTotal, isCrit, item.name);
+    RMC();
+    RENDER_MAP_AREA();
 }
 
-function BG3_EXECUTE_UNARMED_ATTACK() {
+function BG3_PLAYER_UNARMED() {
     const cs = GC();
     const c = cs[PI];
+    if (!c) return;
+
+    const st = GET_MAP_STATE();
+    const to = ENSURE_TURN_STATE(st);
+    if (to.attacksLeft <= 0) return;
+
     const pb = GPB(c.level || 1);
     const sm = GM(c.str || 10);
-    const atkRoll = Math.floor(Math.random() * 20) + 1;
-    const totalAtk = atkRoll + sm + pb;
+    const d20 = Math.floor(Math.random() * 20) + 1;
+    const atkTotal = d20 + sm + pb;
+    const isCrit = (d20 === 20);
     const dmg = (c.chosenFeats && c.chosenFeats.includes('Драчун')) ? Math.max(1, Math.floor(Math.random() * 4) + 1 + sm) : Math.max(1, 1 + sm);
-    BG3_APPLY_DAMAGE_TO_MAP_TARGET(dmg, atkRoll, totalAtk, 'Безоружный удар', false);
-}
 
-// Сотворение заклинания с хотбара BG3 (с тратой ячейки, проверкой очереди хода и честным списанием ХП цели!)
-function BG3_EXECUTE_SPELL(spellName) {
-    const st = GET_MAP_STATE();
-    const to = ENSURE_TURN_STATE(st);
-    const curTurnTok = st.tokens && st.tokens[to.currentIdx % st.tokens.length];
-
-    if (!curTurnTok || !curTurnTok.isPlayer || curTurnTok.charIdx !== PI) {
-        showMessage('⏳ Сейчас не ваш ход!', `Дождитесь очереди хода вашего персонажа.`);
-        return;
-    }
-
-    const sp = gameData.spells.find(s => s.name === spellName);
-    if (!sp) return;
-    const isBonus = sp.time && sp.time.includes('бонус');
-
-    if (isBonus && to.bonusLeft <= 0) {
-        showMessage('🔶 Нет Бонусного действия', 'Вы уже потратили Бонусное действие в этом ходу.');
-        return;
-    }
-    if (!isBonus && to.actionsLeft <= 0) {
-        showMessage('🟢 Нет Основного действия', 'Вы уже потратили Основное действие в этом ходу.');
-        return;
-    }
-
-    const cs = GC();
-    const caster = cs[PI];
-    NORMALIZE_WARLOCK_SLOTS(caster);
-
-    // Списываем ячейку заклинания, если это не заговор
-    if (sp.level > 0) {
-        const maxSlots = GET_SPELL_SLOTS(caster);
-        if (!caster.usedSpellSlots) caster.usedSpellSlots = {1:0,2:0,3:0,4:0,5:0,6:0,7:0,8:0,9:0};
-        let slotLv = sp.level;
-        if (caster.className === 'Колдун' && sp.level <= 5) {
-            for (let i = 5; i >= 1; i--) { if (maxSlots[i] > 0) { slotLv = i; break; } }
-        }
-        const avail = (maxSlots[slotLv] || 0) - (caster.usedSpellSlots[slotLv] || 0);
-        if (avail <= 0) {
-            showMessage('❌ Нет ячеек магии', `Все ячейки ${slotLv}-го круга потрачены!`);
-            return;
-        }
-        caster.usedSpellSlots[slotLv] = (caster.usedSpellSlots[slotLv] || 0) + 1;
-    }
-
-    // Тратим действие или бонусное действие
-    if (isBonus) {
-        to.bonusLeft = 0;
-    } else {
-        to.actionsLeft = 0;
-        to.attacksLeft = 0;
-    }
-
-    const tok = st.tokens && st.tokens[window._bg3SelectedTargetIdx];
-    const castStatMap = {'Волшебник':'intl', 'Жрец':'wis', 'Друид':'wis', 'Следопыт':'wis', 'Бард':'cha', 'Паладин':'cha', 'Колдун':'cha', 'Чародей':'cha'};
-    const mod = GM(caster[castStatMap[caster.className] || 'wis'] || 10);
-
-    // Если заклинание лечащее
-    if (spellName.includes('Леч') || spellName.includes('Восстановление')) {
-        const healTargetChar = (tok && tok.isPlayer && cs[tok.charIdx]) ? cs[tok.charIdx] : caster;
-        const healed = Math.max(1, ROLL('1к8') + mod);
-        healTargetChar.hp = Math.min(healTargetChar.maxHp || 10, (healTargetChar.hp ?? 10) + healed);
-        SC(cs);
-        SYNC_PLAYER_TOKENS_WITH_CHARS(st);
-        SAVE_MAP_STATE(st);
-        window._bg3CombatLogBanner = `<div style="background:#16241a; border-left:4px solid #4cd964; padding:8px 12px; border-radius:6px; margin-bottom:10px;">💚 Заклинание «<b>${spellName}</b>» исцеляет «<b>${healTargetChar.name}</b>» на <b>+${healed} ХП</b>!</div>`;
-        LOG_COMBAT_TO_CHAT(`✨ колдует «${spellName}» и исцеляет «${healTargetChar.name}» на +${healed} ХП!`);
-        RMC();
-        RENDER_MAP_AREA();
-        return;
-    }
-
-    // Если заклинание боевое
-    const dmgFormula = PARSE_SPELL_DICE_FROM_DESC(sp.desc || '') || '1к8';
-    const rolledDmg = Math.max(1, ROLL(dmgFormula));
-
-    if (tok) {
-        if (tok.isPlayer && cs[tok.charIdx]) {
-            cs[tok.charIdx].hp = Math.max(0, (cs[tok.charIdx].hp ?? 10) - rolledDmg);
-            tok.hp = cs[tok.charIdx].hp;
-        } else {
-            tok.hp = Math.max(0, (tok.hp ?? 10) - rolledDmg);
-        }
-    }
-
-    SC(cs);
+    to.attacksLeft = Math.max(0, to.attacksLeft - 1);
+    if (to.attacksLeft === 0) to.actionsLeft = 0;
     SAVE_MAP_STATE(st);
-    window._bg3CombatLogBanner = `
-        <div style="background:#241830; border-left:4px solid #c084fc; padding:8px 12px; border-radius:6px; margin-bottom:10px; font-size:0.9rem; display:flex; justify-content:space-between; align-items:center;">
-            <span>🔮 Заклинание «<b>${spellName}</b>» поражает «<b>${tok ? tok.name : 'цель'}</b>» на <b style="color:#c084fc;">${rolledDmg} урона</b>! ${tok ? `(ХП: ${tok.hp}/${tok.maxHp})` : ''}</span>
-            <button class="btn-small" style="padding:2px 6px;" onclick="window._bg3CombatLogBanner=''; RENDER_BG3_COMBAT_HUD();">✕</button>
-        </div>`;
-    LOG_COMBAT_TO_CHAT(`🔮 колдует «${spellName}» -> «${tok ? tok.name : 'цель'}» | Урон: ${rolledDmg}`);
+
+    BG3_APPLY_DAMAGE_TO_SELECTED_TOKEN(isCrit ? dmg * 2 : dmg, d20 === 1 ? 1 : atkTotal, isCrit, 'Безоружный удар');
     RMC();
     RENDER_MAP_AREA();
 }
 
-function BG3_USE_COMBAT_POTION(invIdx) {
+function BG3_PLAYER_CAST_SPELL(spellName) {
+    const cs = GC();
+    const c = cs[PI];
+    const sp = gameData.spells.find(s => s.name === spellName);
+    if (!c || !sp) return;
+
     const st = GET_MAP_STATE();
     const to = ENSURE_TURN_STATE(st);
-    const curTurnTok = st.tokens && st.tokens[to.currentIdx % st.tokens.length];
+    const isBonus = (sp.time || '').toLowerCase().includes('бонус');
+    if (isBonus && to.bonusLeft <= 0) return;
+    if (!isBonus && to.actionsLeft <= 0) return;
 
-    if (!curTurnTok || !curTurnTok.isPlayer || curTurnTok.charIdx !== PI) {
-        showMessage('⏳ Сейчас не ваш ход!', 'Выпить зелье можно только в свой ход.');
-        return;
-    }
-    if (to.bonusLeft <= 0) {
-        showMessage('🔶 Нет Бонусного действия', 'Вы уже потратили Бонусное действие в этом ходу.');
-        return;
-    }
-    to.bonusLeft = 0;
-    SAVE_MAP_STATE(st);
+    CAST_SPELL(spellName);
+
+    const freshSt = GET_MAP_STATE();
+    const freshTo = ENSURE_TURN_STATE(freshSt);
+    if (isBonus) freshTo.bonusLeft = Math.max(0, freshTo.bonusLeft - 1);
+    else { freshTo.actionsLeft = 0; freshTo.attacksLeft = 0; }
+    SAVE_MAP_STATE(freshSt);
+    RENDER_MAP_AREA();
+}
+
+function BG3_PLAYER_DRINK_POTION(invIdx) {
+    const st = GET_MAP_STATE();
+    const to = ENSURE_TURN_STATE(st);
+    if (to.bonusLeft <= 0) return;
+
     ctxItem = invIdx;
     CA('use');
-    CM('inventory-modal');
+
+    const freshSt = GET_MAP_STATE();
+    const freshTo = ENSURE_TURN_STATE(freshSt);
+    freshTo.bonusLeft = Math.max(0, freshTo.bonusLeft - 1);
+    SAVE_MAP_STATE(freshSt);
     RENDER_MAP_AREA();
 }
 
-function PLAYER_LEAVE_COMBAT() {
+function OPEN_AMBUSH_MODAL() {
     const cs = GC();
-    cs.forEach(m => { m.inCombat = false; });
+    const bestiary = GET_BESTIARY();
+    const vn = GET_ACTIVE_VN_DIALOG();
+    const cont = document.getElementById('gm-tool-modal-content');
+    cont.style.maxWidth = '640px';
+
+    let ambushTargetsHTML = '';
+    if (vn && vn.active && vn.name) {
+        ambushTargetsHTML += `
+            <button class="btn-danger" style="width:100%; padding:12px; text-align:left; margin-bottom:8px;" onclick="START_PLAYER_AMBUSH('${vn.name.replace(/'/g, "\\'")}', '🎭', 35, 14)">
+                🗡️ Напасть на собеседника: <b>${vn.name}</b> (${vn.role || 'NPC'})
+            </button>`;
+    }
+
+    bestiary.forEach(m => {
+        ambushTargetsHTML += `
+            <button class="btn-small" style="width:100%; padding:10px; text-align:left; margin-bottom:6px; display:flex; justify-content:space-between;" onclick="START_PLAYER_AMBUSH('${m.name.replace(/'/g, "\\'")}', '${m.icon || '👹'}', ${m.hp || 20}, ${m.ac || 13})">
+                <span>${m.icon || '👹'} <b>${m.name}</b> (ХП ${m.hp}, КБ ${m.ac})</span>
+                <span style="color:#ef4444;">⚔️ Атаковать</span>
+            </button>`;
+    });
+
+    cs.forEach((member, idx) => {
+        if (idx === PI) return;
+        ambushTargetsHTML += `
+            <button class="btn-small" style="width:100%; padding:10px; text-align:left; margin-bottom:6px; display:flex; justify-content:space-between;" onclick="START_PLAYER_AMBUSH_PARTY_DUEL(${idx})">
+                <span>🛡️ <b>${member.name || 'Союзник'}</b> (Дуэль / PvP с игроком отряда)</span>
+                <span style="color:#f59e0b;">⚔️ Вызвать на бой</span>
+            </button>`;
+    });
+
+    cont.innerHTML = `
+        <h2>🗡️ Внезапная атака (Инициация боя)</h2>
+        <p style="color:#aba498; font-size:0.92rem; margin-bottom:14px;">
+            Выберите, на кого вы хотите напасть. Отряд автоматически перейдёт в пошаговый боевой режим, а вы получите право первого удара!
+        </p>
+        <div style="max-height:340px; overflow-y:auto; margin-bottom:14px;">
+            ${ambushTargetsHTML}
+        </div>
+        <div style="text-align:right;"><button onclick="CM('gm-tool-modal')">Отмена</button></div>
+    `;
+    OM('gm-tool-modal');
+}
+
+function START_PLAYER_AMBUSH(enemyName, icon, hp, ac) {
+    CM('gm-tool-modal');
+    const cs = GC();
+    cs.forEach(m => { m.inCombat = true; });
     SC(cs);
+
+    SAVE_ACTIVE_VN_DIALOG(null);
+    GM_SPAWN_PARTY_TOKENS();
+
     const st = GET_MAP_STATE();
-    if (st.turnOrder) st.turnOrder.active = false;
+    st.tokens.push({
+        id: Date.now() + 999,
+        isPlayer: false,
+        name: enemyName,
+        icon: icon || '👹',
+        x: 50,
+        y: 32,
+        hp: hp || 25,
+        maxHp: hp || 25,
+        ac: ac || 13,
+        atkBonus: 5,
+        dmgFormula: '1к8+3',
+        init: 10
+    });
+
+    const myTokIdx = st.tokens.findIndex(t => t.isPlayer && t.charIdx === PI);
+    st.turnOrder = {
+        active: true,
+        round: 1,
+        currentIdx: myTokIdx !== -1 ? myTokIdx : 0,
+        actionsLeft: 1,
+        attacksLeft: GET_MAX_ATTACKS_PER_ACTION(cs[PI]),
+        bonusLeft: 1
+    };
+    window._bg3SelectedTargetIdx = st.tokens.length - 1;
     SAVE_MAP_STATE(st);
-    window._bg3CombatLogBanner = '';
+
+    CANCEL_REST_POLL_IF_COMBAT(cs[PI]?.name || 'Игрок');
+    LOG_COMBAT_TO_CHAT(`🗡️ ВНЕЗАПНАЯ АТАКА! «${cs[PI]?.name || 'Герой'}» нападает на «${enemyName}»! Начинается Раунд 1!`);
     RMC();
     RENDER_MAP_AREA();
 }
 
+function START_PLAYER_AMBUSH_PARTY_DUEL(targetCharIdx) {
+    CM('gm-tool-modal');
+    const cs = GC();
+    cs.forEach(m => { m.inCombat = true; });
+    SC(cs);
+
+    GM_SPAWN_PARTY_TOKENS();
+    const st = GET_MAP_STATE();
+    const myTokIdx = st.tokens.findIndex(t => t.isPlayer && t.charIdx === PI);
+    const targetTokIdx = st.tokens.findIndex(t => t.isPlayer && t.charIdx === targetCharIdx);
+
+    st.turnOrder = {
+        active: true,
+        round: 1,
+        currentIdx: myTokIdx !== -1 ? myTokIdx : 0,
+        actionsLeft: 1,
+        attacksLeft: GET_MAX_ATTACKS_PER_ACTION(cs[PI]),
+        bonusLeft: 1
+    };
+    if (targetTokIdx !== -1) window._bg3SelectedTargetIdx = targetTokIdx;
+    SAVE_MAP_STATE(st);
+
+    LOG_COMBAT_TO_CHAT(`⚔️ «${cs[PI]?.name || 'Герой'}» вступает в поединок против «${cs[targetCharIdx]?.name || 'Союзника'}»!`);
+    RMC();
+    RENDER_MAP_AREA();
+}
+
+// Гарантирует, что у каждого персонажа в массиве есть все обязательные поля для корректного открытия Листа (OCS)
+function ENSURE_ALL_CHARS_VALID() {
+    const cs = GC();
+    let fixed = false;
+    cs.forEach((c, idx) => {
+        if (!c) return;
+        if (!c.id) { c.id = 'hero_' + idx + '_' + (c.name || 'char'); fixed = true; }
+        if (!c.usedSpellSlots) { c.usedSpellSlots = {1:0,2:0,3:0,4:0,5:0,6:0,7:0,8:0,9:0}; fixed = true; }
+        if (!c.usedSpells) { c.usedSpells = {}; fixed = true; }
+        if (!c.chosenSkills) { c.chosenSkills = []; fixed = true; }
+        if (!c.knownSpells) { c.knownSpells = []; fixed = true; }
+        if (!c.inventory) { c.inventory = []; fixed = true; }
+        if (!c.money) { c.money = { gp: 0, sp: 0, cp: 0 }; fixed = true; }
+        if (!c.chosenLanguages) { c.chosenLanguages = {}; fixed = true; }
+    });
+    if (fixed) {
+        try { localStorage.setItem('dnd_characters', JSON.stringify(cs)); } catch (e) {}
+    }
+}
+
+// Перестраховка для окна «Атаки и заклинания» (OAT), чтобы оно всегда открывалось для текущего игрока
+const _ORIG_OAT = OAT;
+OAT = function() {
+    const sess = GET_SESSION();
+    if (sess && sess.role === 'player') SYNC_MY_PLAYER_INDEX();
+    ENSURE_ALL_CHARS_VALID();
+    _ORIG_OAT();
+};
+
+ENSURE_ALL_CHARS_VALID();
 APPLY_ROLE_VIEW();
+
 // ================================================================
-// ⚡ ТУРБО-СИНХРОНИЗАЦИЯ WEBSOCKET (БЕЗ ЗАДЕРЖЕК В БОЮ, ХОДАХ И КАРТЕ)
+// ⚡ БЕЗОПАСНАЯ WEBSOCKET-СИНХРОНИЗАЦИЯ (БЕЗ ПОТЕРИ НОВЫХ ИГРОКОВ И БЕЗ ПИНГА)
 // ================================================================
 (function INIT_TURBO_MULTIPLAYER() {
     const FIREBASE_DB_URL = "https://dnds-23b7d-default-rtdb.firebaseio.com";
-    // Уникальный ID этой вкладки браузера, чтобы отличать свои клики от кликов друга без таймеров задержки!
     const MY_CLIENT_ID = 'client_' + Math.random().toString(36).slice(2) + '_' + Date.now();
+    window._cloudConnecting = true;
 
     const statusBadge = document.createElement('div');
     statusBadge.id = 'cloud-sync-badge';
@@ -3838,7 +3595,8 @@ APPLY_ROLE_VIEW();
     });
 
     let isApplyingRemote = false;
-    let mediaCache = {}; // Отдельный кэш для тяжёлых картинок (карта и аватарки), чтобы бой летал мгновенно!
+    let initialCloudLoaded = false;
+    let mediaCache = {};
 
     const SYNC_KEYS = [
         'dnd_characters', 'dnd_rooms', 'dnd_map_state', 'dnd_gm_shop',
@@ -3852,7 +3610,6 @@ APPLY_ROLE_VIEW();
     const origGetItem = localStorage.getItem.bind(localStorage);
     const origRemoveItem = localStorage.removeItem.bind(localStorage);
 
-    // Автоматически вырезаем тяжёлые base64-картинки из боевых пакетов и храним их в ветке mediaCache
     function stripHeavyImages(key, rawVal, dbMediaRef) {
         if (!rawVal || typeof rawVal !== 'string') return rawVal;
         try {
@@ -3875,13 +3632,13 @@ APPLY_ROLE_VIEW();
             if (key === 'dnd_characters') {
                 const cs = JSON.parse(rawVal);
                 cs.forEach((c, idx) => {
-                    if (c.avatar && c.avatar.startsWith('data:')) {
-                        const mKey = 'char_av_' + idx;
+                    if (c && c.avatar && c.avatar.startsWith('data:')) {
+                        const mKey = 'char_av_' + (c.id || idx);
                         if (mediaCache[mKey] !== c.avatar) {
                             mediaCache[mKey] = c.avatar;
                             if (dbMediaRef) dbMediaRef.child(mKey).set(c.avatar);
                         }
-                        c.avatar = '__CACHED_AV_' + idx + '__';
+                        c.avatar = '__CACHED_AV_' + (c.id || idx) + '__';
                     }
                 });
                 return JSON.stringify(cs);
@@ -3901,7 +3658,6 @@ APPLY_ROLE_VIEW();
         return rawVal;
     }
 
-    // Автоматически подставляем картинки обратно из кэша при чтении
     function restoreHeavyImages(key, rawVal) {
         if (!rawVal || typeof rawVal !== 'string') return rawVal;
         try {
@@ -3913,8 +3669,9 @@ APPLY_ROLE_VIEW();
             if (key === 'dnd_characters' && rawVal.includes('__CACHED_AV_')) {
                 const cs = JSON.parse(rawVal);
                 cs.forEach((c, idx) => {
-                    if (c.avatar === '__CACHED_AV_' + idx + '__') {
-                        c.avatar = mediaCache['char_av_' + idx] || '';
+                    if (c && typeof c.avatar === 'string' && c.avatar.startsWith('__CACHED_AV_')) {
+                        const mKey = c.avatar.replace(/^__CACHED_AV_/, '').replace(/__$/, '');
+                        c.avatar = mediaCache['char_av_' + mKey] || mediaCache['char_av_' + idx] || '';
                     }
                 });
                 return JSON.stringify(cs);
@@ -3949,7 +3706,6 @@ APPLY_ROLE_VIEW();
         const dbStateRef = dbRoot.child('state');
         const dbMediaRef = dbRoot.child('media');
 
-        // Следим за реальным статусом соединения с Firebase
         firebase.database().ref('.info/connected').on('value', (snap) => {
             if (snap.val() === true) {
                 statusBadge.textContent = '⚡ Онлайн: Мгновенная связь';
@@ -3960,7 +3716,6 @@ APPLY_ROLE_VIEW();
             }
         });
 
-        // Слушаем кэш картинок отдельно (они качаются всего 1 раз и не тормозят бой!)
         dbMediaRef.on('value', (snap) => {
             const m = snap.val();
             if (m) {
@@ -3969,10 +3724,12 @@ APPLY_ROLE_VIEW();
             }
         });
 
-        // Перехват записи в localStorage -> мгновенная отправка лёгкого пакета с меткой отправителя
         localStorage.setItem = function(key, val) {
             const lightVal = stripHeavyImages(key, val, dbMediaRef);
             try { origSetItem(key, lightVal); } catch (e) { return; }
+
+            // Не отправляем дефолтный массив из 1 пустого героя до того, как скачали актуальный отряд из облака!
+            if (!initialCloudLoaded && key === 'dnd_characters') return;
 
             if (!isApplyingRemote && SYNC_KEYS.includes(key)) {
                 dbStateRef.child(key).set({
@@ -3985,6 +3742,7 @@ APPLY_ROLE_VIEW();
 
         localStorage.removeItem = function(key) {
             origRemoveItem(key);
+            if (!initialCloudLoaded) return;
             if (!isApplyingRemote && SYNC_KEYS.includes(key)) {
                 dbStateRef.child(key).set({
                     v: "",
@@ -3994,98 +3752,131 @@ APPLY_ROLE_VIEW();
             }
         };
 
-        // Если база campaign_v2 ещё пустая — выгружаем туда текущие данные с ПК
+        // Первичная загрузка всего состояния с сервера перед разрешением записи
         dbStateRef.once('value', (snap) => {
-            if (!snap.exists() && (origGetItem('dnd_rooms') || origGetItem('dnd_characters'))) {
-                const dump = {};
+            const allRemote = snap.val();
+            if (!allRemote) {
+                initialCloudLoaded = true;
+                window._cloudConnecting = false;
+                if (origGetItem('dnd_rooms') || origGetItem('dnd_characters')) {
+                    const dump = {};
+                    SYNC_KEYS.forEach(k => {
+                        const raw = origGetItem(k);
+                        if (raw !== null) {
+                            const light = stripHeavyImages(k, raw, dbMediaRef);
+                            origSetItem(k, light);
+                            dump[k] = { v: light, by: MY_CLIENT_ID, t: Date.now() };
+                        }
+                    });
+                    dbStateRef.update(dump);
+                }
+            } else {
+                isApplyingRemote = true;
                 SYNC_KEYS.forEach(k => {
-                    const raw = origGetItem(k);
-                    if (raw !== null) {
-                        const light = stripHeavyImages(k, raw, dbMediaRef);
-                        origSetItem(k, light);
-                        dump[k] = { v: light, by: MY_CLIENT_ID, t: Date.now() };
+                    if (allRemote[k] && allRemote[k].v !== undefined) {
+                        if (allRemote[k].v === "") origRemoveItem(k);
+                        else { try { origSetItem(k, allRemote[k].v); } catch (e) {} }
                     }
                 });
-                dbStateRef.update(dump);
-            }
-        });
-
-        // Мгновенный приём изменений от других игроков и Мастера
-        SYNC_KEYS.forEach(key => {
-            dbStateRef.child(key).on('value', (snap) => {
-                const packet = snap.val();
-                if (!packet || packet.v === undefined) return;
-
-                // Если этот пакет отправили мы сами из этой же вкладки — пропускаем (0% эха, 100% скорость для чужих пакетов!)
-                if (packet.by === MY_CLIENT_ID) return;
-
-                // Если мы прямо сейчас тянем фишку мышкой, не сбиваем курсор
-                if (key === 'dnd_map_state' && window._draggingMapObj) return;
-
-                const remoteVal = packet.v;
-                const currentLocal = origGetItem(key);
-                if (currentLocal === remoteVal) return;
-
-                isApplyingRemote = true;
-                if (remoteVal === "") origRemoveItem(key);
-                else { try { origSetItem(key, remoteVal); } catch (e) {} }
                 isApplyingRemote = false;
+                initialCloudLoaded = true;
+                window._cloudConnecting = false;
+                ENSURE_ALL_CHARS_VALID();
+                APPLY_ROLE_VIEW();
+            }
 
-                // Удерживаем правильный индекс персонажа для Игрока
-                const sess = GET_SESSION();
-                if (sess && sess.role === 'player' && sess.playerIdx !== undefined) {
-                    PI = sess.playerIdx;
-                }
-
-                const activeTag = document.activeElement ? document.activeElement.tagName : '';
-                const isTyping = (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT');
-
-                // Точечное и полное обновление всех экранов (включая очередь хода и открытое окно боя!)
-                if (key === 'dnd_map_state' || key === 'dnd_vn_dialog') {
-                    RENDER_MAP_AREA();
-                    if (sess && sess.role === 'gm' && document.getElementById('gm-tool-modal')?.classList.contains('active')) {
-                        // Если у Мастера открыт Бестиарий, обновляем ХП и ходы
-                    }
-                } else if (key === 'dnd_chat' || key === 'dnd_sys_log') {
-                    RCH();
-                } else if (key === 'dnd_rest_poll') {
-                    CHECK_AND_RENDER_REST_POPUP();
-                    if (document.getElementById('rest-modal')?.classList.contains('active')) SLR();
-                } else if (key === 'dnd_gm_skill_check') {
-                    CHECK_AND_RENDER_SKILL_ROLL_POPUP();
-                } else if (key === 'dnd_gm_edit_request') {
-                    CHECK_AND_RENDER_PERMISSION_POPUP();
-                    CHECK_GM_PERMISSION_RESPONSE();
-                } else if (key === 'dnd_gm_event') {
-                    CHECK_UNSEEN_GM_EVENT();
-                } else if (key === 'dnd_gm_shop') {
-                    RENDER_MAP_AREA();
-                    CHECK_UNSEEN_SHOP_OPEN();
-                    if (sess && sess.role === 'gm') RENDER_GM_LEFT_COLUMN();
-                } else if (key === 'dnd_characters') {
-                    RMC();
-                    RPL();
-                    RENDER_MAP_AREA();
-                    if (sess && sess.role === 'gm') RENDER_GM_LEFT_COLUMN();
-                    else if (!sess) RENDER_LOBBY_HTML();
-
-                    // ВАЖНО: Если у игрока сейчас открыто окно «Атаки и заклинания» (OAT) — мгновенно обновляем в нём режим боя, ХП и ячейки!
-                    if (document.getElementById('attacks-modal')?.classList.contains('active') && !isTyping) {
-                        OAT();
-                    }
-                    // Если открыт Рюкзак или Лист и игрок сейчас ничего не вписывает — обновляем их тоже
-                    if (document.getElementById('inventory-modal')?.classList.contains('active') && !isTyping) {
-                        OINV();
-                    }
-                    if (document.getElementById('char-sheet-modal')?.classList.contains('active') && !isTyping) {
-                        OCS();
-                    }
-                } else if (!isTyping) {
-                    RMC(); RPL(); LDT(); RENDER_MAP_AREA(); RENDER_CUSTOM_LORE();
-                    if (sess && sess.role === 'gm') RENDER_GM_LEFT_COLUMN();
-                    else if (!sess) RENDER_LOBBY_HTML();
-                }
-            });
+            // После первичной синхронизации включаем мгновенные слушатели на каждый ключ
+            attachRealtimeListeners();
         });
+
+        function attachRealtimeListeners() {
+            SYNC_KEYS.forEach(key => {
+                dbStateRef.child(key).on('value', (snap) => {
+                    const packet = snap.val();
+                    if (!packet || packet.v === undefined) return;
+                    if (packet.by === MY_CLIENT_ID) return;
+                    if (key === 'dnd_map_state' && window._draggingMapObj) return;
+
+                    let remoteVal = packet.v;
+                    const currentLocal = origGetItem(key);
+                    if (currentLocal === remoteVal) return;
+
+                    // Защита от потери персонажа: если мы играем за героя, которого ещё нет в пришедшем пакете, сохраняем его!
+                    if (key === 'dnd_characters' && remoteVal && currentLocal) {
+                        try {
+                            const sess = GET_SESSION();
+                            const remoteArr = JSON.parse(remoteVal);
+                            const localArr = JSON.parse(currentLocal);
+                            if (sess && sess.role === 'player' && sess.heroId) {
+                                const myLocalHero = localArr.find(c => c && c.id === sess.heroId);
+                                const existsInRemote = remoteArr.some(c => c && c.id === sess.heroId);
+                                if (myLocalHero && !existsInRemote) {
+                                    remoteArr.push(myLocalHero);
+                                    remoteVal = JSON.stringify(remoteArr);
+                                    setTimeout(() => { SC(remoteArr); }, 50);
+                                }
+                            }
+                        } catch (e) {}
+                    }
+
+                    isApplyingRemote = true;
+                    if (remoteVal === "") origRemoveItem(key);
+                    else { try { origSetItem(key, remoteVal); } catch (e) {} }
+                    isApplyingRemote = false;
+
+                    ENSURE_ALL_CHARS_VALID();
+                    SYNC_MY_PLAYER_INDEX();
+
+                    const sess = GET_SESSION();
+                    const activeTag = document.activeElement ? document.activeElement.tagName : '';
+                    const isTyping = (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT');
+
+                    if (key === 'dnd_map_state' || key === 'dnd_vn_dialog') {
+                        RENDER_MAP_AREA();
+                    } else if (key === 'dnd_chat' || key === 'dnd_sys_log') {
+                        RCH();
+                    } else if (key === 'dnd_rest_poll') {
+                        CHECK_AND_RENDER_REST_POPUP();
+                        if (document.getElementById('rest-modal')?.classList.contains('active')) SLR();
+                    } else if (key === 'dnd_gm_skill_check') {
+                        CHECK_AND_RENDER_SKILL_ROLL_POPUP();
+                    } else if (key === 'dnd_gm_edit_request') {
+                        CHECK_AND_RENDER_PERMISSION_POPUP();
+                        CHECK_GM_PERMISSION_RESPONSE();
+                    } else if (key === 'dnd_gm_event') {
+                        CHECK_UNSEEN_GM_EVENT();
+                    } else if (key === 'dnd_gm_shop') {
+                        RENDER_MAP_AREA();
+                        CHECK_UNSEEN_SHOP_OPEN();
+                        if (sess && sess.role === 'gm') RENDER_GM_LEFT_COLUMN();
+                    } else if (key === 'dnd_characters') {
+                        RMC();
+                        RPL();
+                        RENDER_MAP_AREA();
+                        if (sess && sess.role === 'gm') {
+                            RENDER_GM_LEFT_COLUMN();
+                            const topBar = document.getElementById('role-status-bar');
+                            if (topBar) APPLY_ROLE_VIEW();
+                        } else if (!sess) {
+                            RENDER_LOBBY_HTML();
+                        }
+
+                        if (document.getElementById('attacks-modal')?.classList.contains('active') && !isTyping) {
+                            OAT();
+                        }
+                        if (document.getElementById('inventory-modal')?.classList.contains('active') && !isTyping) {
+                            OINV();
+                        }
+                        if (document.getElementById('char-sheet-modal')?.classList.contains('active') && !isTyping) {
+                            OCS();
+                        }
+                    } else if (!isTyping) {
+                        RMC(); RPL(); LDT(); RENDER_MAP_AREA(); RENDER_CUSTOM_LORE();
+                        if (sess && sess.role === 'gm') RENDER_GM_LEFT_COLUMN();
+                        else if (!sess) RENDER_LOBBY_HTML();
+                    }
+                });
+            });
+        }
     }
 })();
