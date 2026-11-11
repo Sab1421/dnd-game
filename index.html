@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DnD Кампания</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+        <h1>⚔️ Кампания: Притишье ⚔️</h1>
+    <div class="main-layout">
+        <div id="left-column">
+            <div class="panel char-card">
+                <h2>Мой персонаж</h2>
+                <div class="char-avatar-wrapper" id="avatar-wrapper" onclick="triggerAvatarUpload()">
+                    <img id="main-char-avatar" class="char-avatar-img" src="" alt="Аватар">
+                    <div class="char-avatar-text" id="avatar-text">Нажми, чтобы загрузить аватар</div>
+                </div>
+                <div class="char-name" id="main-char-name">—</div>
+                <div class="char-subtitle" id="main-char-subtitle"></div>
+                <div class="char-stats">
+                    <div class="stat-item"><div class="stat-value" id="main-char-hp">—</div><div class="stat-label">ХП</div></div>
+                    <div class="stat-item"><div class="stat-value" id="main-char-ac">—</div><div class="stat-label">КБ</div></div>
+                    <div class="stat-item"><div class="stat-value" id="main-char-mana">—</div><div class="stat-label">Ячейки</div></div>
+                </div>
+                <div class="hp-bar"><div class="hp-fill" id="main-char-hp-bar" style="width:100%;"></div></div>
+                <button onclick="openCharSheet()">📋 Лист персонажа</button>
+                <button class="btn-reset btn-small" onclick="resetCharacter()">🔄 Сбросить</button>
+            </div>
+            <button onclick="openAttacks()">⚔️ Атаки и заклинания</button>
+            <button onclick="openInventory()">🎒 Рюкзак</button>
+            <div class="panel">
+                <h2>📋 Задачи</h2>
+                <div id="tasks-content" onclick="editTasks()">Задачи не добавлены.</div>
+                <textarea id="tasks-edit" onblur="saveTasks()" placeholder="Введите задачи..."></textarea>
+            </div>
+            <button onclick="openModal('lorebook-modal')">📖 Лорбук</button>
+            <button class="btn-rest" onclick="startLongRest()">🌙 Длинный отдых</button>
+            <button class="btn-rest" onclick="startShortRest()">☕ Короткий отдых</button>
+        </div>
+        <div id="center-column">
+            <div class="panel"><h2>🗺️ Карта</h2><div id="map-area">Карта появится здесь</div></div>
+            <div class="panel"><h2>👥 Отряд</h2><div id="party-list"></div></div>
+        </div>
+        <div id="right-column">
+            <div class="panel" style="display:flex; flex-direction:column; flex:1;">
+                <h2>💬 Чат</h2>
+                <div id="chat-messages"></div>
+                <input type="text" id="chat-input" placeholder="Введите сообщение...">
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="char-sheet-modal"><div class="modal-content" id="char-sheet-content"></div></div>
+    <div class="modal" id="inventory-modal"><div class="modal-content" id="inventory-content"></div></div>
+    <div class="modal" id="attacks-modal"><div class="modal-content" id="attacks-content"></div></div>
+    <div class="modal" id="rest-modal"><div class="modal-content" id="rest-content"></div></div>
+    <div class="modal" id="lorebook-modal">
+        <div class="modal-content">
+            <h2>📖 Лорбук</h2>
+            <div>
+                <p><strong>Притишье</strong> — маленькая деревня на границе цивилизации. Жители платят дань Охотникам, чтобы те истребляли монстров в округе. <em>Смотритель деревни — старый воин, который уже не может сражаться, но может учить.</em></p>
+                <hr><p><strong>Империя</strong> — прогнившее государство, которым управляет жадный Министр. Император — марионетка. Генерал Псов держит страну в страхе.</p>
+                <hr><p><strong>Мир</strong> — живое сознание, заточённое в Древе. Ошибка — его противоположность, источник монстров.</p>
+            </div>
+           <br><button onclick="closeModal('lorebook-modal')">Закрыть</button>
+        </div>
+    </div>
+
+    <!-- Окно для сообщений -->
+    <div class="modal" id="message-modal">
+        <div class="modal-content" style="max-width:400px;">
+            <h2 id="message-title">Сообщение</h2>
+            <div id="message-body"></div>
+            <br>
+            <button onclick="closeModal('message-modal')">Закрыть</button>
+        </div>
+    </div>
+
+    <!-- Окно разделения предметов (улучшенное) -->
+    <div class="modal" id="split-modal">
+        <div class="modal-content" style="max-width:380px;">
+            <h2>✂️ Разделить предмет</h2>
+            <p><strong id="split-item-name"></strong></p>
+            <p style="color:#aaa; font-size:0.9em;">Всего: <span id="split-total"></span> шт.</p>
+            <div style="display:flex; align-items:center; gap:10px; margin:10px 0;">
+                <span style="flex-shrink:0;">Перенести:</span>
+                <input type="range" id="split-range" min="1" max="1" value="1" style="flex:1;">
+                <input type="number" id="split-qty" min="1" value="1" style="width:70px; text-align:center;">
+            </div>
+            <p style="color:#aaa; font-size:0.85em;">Останется в исходном стаке: <span id="split-remain"></span> шт.</p>
+            <br>
+            <button class="btn-save" onclick="CONFIRM_SPLIT()">Разделить</button>
+            <button onclick="closeModal('split-modal')">Отмена</button>
+        </div>
+    </div>
+
+    <!-- Окно ввода лечения (для кастомных зелий) -->
+    <div class="modal" id="heal-prompt-modal">
+        <div class="modal-content" style="max-width:350px;">
+            <h2>💚 Восстановление</h2>
+            <p id="heal-prompt-text"></p>
+            <div style="display:flex; gap:10px; align-items:center;">
+                <input type="number" id="heal-amount" min="1" value="10" style="width:100px;">
+                <span>ХП</span>
+            </div>
+            <br>
+            <button class="btn-save" onclick="CONFIRM_HEAL()">Применить</button>
+            <button onclick="closeModal('heal-prompt-modal')">Отмена</button>
+        </div>
+    </div>
+
+    <!-- Окно выбора заклинаний -->
+    <div class="modal" id="spell-choice-modal">
+        <div class="modal-content" style="max-width:650px;">
+            <h2 id="spell-choice-title">Выберите заклинания</h2>
+            <p id="spell-choice-info"></p>
+            <div id="spell-choice-list" style="max-height:50vh; overflow-y:auto; border:1px solid #444; padding:5px;"></div>
+            <br>
+            <button class="btn-save" id="spell-choice-confirm">Подтвердить выбор</button>
+            <button onclick="closeModal('spell-choice-modal'); closeModal('char-sheet-modal'); ROS();">Отмена</button>
+        </div>
+    </div>
+
+    <!-- Окно выбора черты -->
+    <div class="modal" id="feat-choice-modal">
+        <div class="modal-content" style="max-width:550px;">
+            <h2>Выберите черту</h2>
+            <p id="feat-choice-info"></p>
+            <div id="feat-choice-list" style="max-height:50vh; overflow-y:auto; border:1px solid #444; padding:8px;"></div>
+            <br>
+            <button class="btn-save" id="feat-choice-confirm">Подтвердить</button>
+            <button onclick="closeModal('feat-choice-modal')">Отмена</button>
+        </div>
+    </div>
+
+    <!-- Окно выбора опций (для черт) -->
+    <div class="modal" id="option-choice-modal">
+        <div class="modal-content" style="max-width:500px;">
+            <h2 id="option-choice-title"></h2>
+            <p id="option-choice-info"></p>
+            <div id="option-choice-list" style="max-height:50vh; overflow-y:auto; border:1px solid #444; padding:8px;"></div>
+            <br>
+            <button class="btn-save" id="option-choice-confirm">Подтвердить</button>
+            <button onclick="closeModal('option-choice-modal')">Отмена</button>
+        </div>
+    </div>
+
+<div class="context-menu" id="context-menu"></div>
+
+    <script src="database.js"></script>
+    <script src="script.js"></script>
+    <script src="gm.js"></script>
+</body>
+</html>
