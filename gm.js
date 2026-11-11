@@ -35,6 +35,255 @@ function SAVE_GM_NAME(name) {
     localStorage.setItem('dnd_gm_custom_name', clean);
 }
 
+// --- АККАУНТ ИГРОКА И БАЗА ШАБЛОНОВ ПЕРСОНАЖЕЙ ---
+function GET_ACCOUNT_ID() {
+    let accId = localStorage.getItem('dnd_account_id');
+    if (!accId) {
+        accId = 'acc_' + Math.random().toString(36).slice(2, 10) + '_' + Date.now();
+        localStorage.setItem('dnd_account_id', accId);
+    }
+    return accId;
+}
+
+function GET_ACCOUNT_NAME() {
+    return localStorage.getItem('dnd_account_name') || 'Искатель приключений';
+}
+function SAVE_ACCOUNT_NAME(name) {
+    const clean = (name || '').trim() || 'Искатель приключений';
+    localStorage.setItem('dnd_account_name', clean);
+}
+
+function GET_SHARED_TEMPLATES() {
+    const d = localStorage.getItem('dnd_shared_templates');
+    return d ? JSON.parse(d) : [];
+}
+function SAVE_SHARED_TEMPLATES(list) {
+    localStorage.setItem('dnd_shared_templates', JSON.stringify(list));
+}
+
+// Создание «чистого слепка» (шаблона) без прогресса, золота и прокачки из комнат
+function CREATE_CLEAN_TEMPLATE_FROM_CHAR(sourceChar, hideAuthor) {
+    const clean = CREATE_DEFAULT_CHAR();
+
+    // Переносим только билд, внешность, характер и базовые выборы
+    clean.name = sourceChar.name || 'Герой';
+    clean.race = sourceChar.race || '';
+    clean.subrace = sourceChar.subrace || '';
+    clean.className = sourceChar.className || '';
+    clean.subclass = ''; // На 1 уровне подкласс ещё не открыт
+    clean.background = sourceChar.background || '';
+    clean.alignment = sourceChar.alignment || '';
+    clean.avatar = sourceChar.avatar || '';
+
+    // Базовые характеристики (как были распределены при создании, без баффов от зелий)
+    clean.baseStr = Math.min(15, sourceChar.baseStr || 10);
+    clean.baseDex = Math.min(15, sourceChar.baseDex || 10);
+    clean.baseCon = Math.min(15, sourceChar.baseCon || 10);
+    clean.baseInt = Math.min(15, sourceChar.baseInt || 10);
+    clean.baseWis = Math.min(15, sourceChar.baseWis || 10);
+    clean.baseCha = Math.min(15, sourceChar.baseCha || 10);
+
+    // Навыки, языки и описание личности
+    clean.chosenSkills = Array.isArray(sourceChar.chosenSkills) ? [...sourceChar.chosenSkills] : [];
+    clean.chosenLanguages = sourceChar.chosenLanguages ? JSON.parse(JSON.stringify(sourceChar.chosenLanguages)) : {};
+    clean.traits = sourceChar.traits || '';
+    clean.ideals = sourceChar.ideals || '';
+    clean.bonds = sourceChar.bonds || '';
+    clean.flaws = sourceChar.flaws || '';
+    clean.story = sourceChar.story || '';
+
+    // Оставляем замки на заполненных полях билда
+    clean.raceLocked = !!sourceChar.raceLocked;
+    clean.classLocked = !!sourceChar.classLocked;
+    clean.bgLocked = !!sourceChar.bgLocked;
+    clean.statsLocked = !!sourceChar.statsLocked;
+    clean.skillsLocked = !!sourceChar.skillsLocked;
+    clean.languagesLocked = !!sourceChar.languagesLocked;
+    clean.alignmentLocked = !!sourceChar.alignmentLocked;
+    clean.traitsLocked = !!sourceChar.traitsLocked;
+    clean.idealsLocked = !!sourceChar.idealsLocked;
+    clean.bondsLocked = !!sourceChar.bondsLocked;
+    clean.flawsLocked = !!sourceChar.flawsLocked;
+    clean.storyLocked = !!sourceChar.storyLocked;
+
+    // Сбрасываем весь прогресс в комнатах (1 уровень, 0 опыта, чистые ячейки)
+    clean.level = 1;
+    clean.xp = 0;
+    clean.tempHP = 0;
+    clean.inCombat = false;
+    clean.spentHitDice = 0;
+    clean.shortRestsUsed = 0;
+    clean.money = { gp: 10, sp: 0, cp: 0 }; // Стандартные стартовые карманные монеты вместо накопленного богатства
+
+    // Из заклинаний оставляем только стартовые (заговоры и 1 круг)
+    if (Array.isArray(sourceChar.knownSpells) && gameData && gameData.spells) {
+        clean.knownSpells = sourceChar.knownSpells.filter(spName => {
+            const spObj = gameData.spells.find(s => s.name === spName);
+            return spObj && spObj.level <= 1;
+        });
+    }
+
+    // Из инвентаря копируем только базовое оружие/броню (по 1 шт.), без квестовых наград Мастера
+    if (Array.isArray(sourceChar.inventory)) {
+        clean.inventory = sourceChar.inventory
+            .filter(it => !(it.desc || '').includes('Награда от Гейм-Мастера') && !(it.desc || '').includes('Найдено на карте'))
+            .map(it => Object.assign({}, it, { qty: it.isWeapon || it.ac ? '1' : String(Math.min(10, parseInt(it.qty) || 1)) }));
+    }
+
+    // Пересчитываем итоговые характеристики и ХП строго под 1-й уровень
+    AB(clean);
+    clean.hp = clean.maxHp || 10;
+
+    return {
+        templateId: 'tpl_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+        authorAccountId: GET_ACCOUNT_ID(),
+        authorName: hideAuthor ? 'Анонимный автор' : GET_ACCOUNT_NAME(),
+        hideAuthor: !!hideAuthor,
+        createdAt: new Date().toLocaleDateString(),
+        charSnapshot: clean
+    };
+}
+
+// Модальное окно публикации шаблона своего персонажа
+function OPEN_SHARE_CHAR_MODAL(charIdx) {
+    const cs = GC();
+    const targetIdx = (charIdx !== undefined) ? charIdx : PI;
+    const c = cs[targetIdx];
+    if (!c) return;
+
+    if (c.ownerId && c.ownerId !== GET_ACCOUNT_ID()) {
+        showMessage('⛔ Чужой персонаж', 'Вы можете делиться шаблоном только своего собственного персонажа.');
+        return;
+    }
+
+    const cont = document.getElementById('gm-tool-modal-content');
+    cont.style.maxWidth = '580px';
+    cont.innerHTML = `
+        <h2>📤 Поделиться шаблоном персонажа «${c.name || 'Герой'}»</h2>
+        <div style="background:#181715; border:1px solid #423c33; padding:16px; border-radius:10px; text-align:left; font-size:0.92rem; color:#ccc; line-height:1.5; margin-bottom:14px;">
+            <b style="color:#e6c88c;">Как работает публикация шаблона:</b><br>
+            • Другие игроки смогут создать себе <b>копию вашего билда</b> (раса, класс, характеристики, навыки, предыстория, характер и стартовое снаряжение).<br>
+            • <b>Ваш личный персонаж остаётся только у вас</b> — никто не сможет зайти за него.<br>
+            • Весь ваш прогресс в комнатах (высокий уровень, опыт, квестовый лут, золото) <b>не передаётся</b> — у другого игрока создастся свежий персонаж 1-го уровня с нуля.
+        </div>
+
+        <div style="background:#22201d; border:1px solid #3d3830; padding:14px; border-radius:8px; text-align:left; margin-bottom:16px;">
+            <div style="margin-bottom:10px;">
+                <label style="color:#c9a96e; font-size:0.9rem; font-weight:bold;">Ваше имя автора (если не скрыто):</label>
+                <input type="text" id="share-tpl-author-name" value="${GET_ACCOUNT_NAME().replace(/"/g, '&quot;')}" onchange="SAVE_ACCOUNT_NAME(this.value)" style="margin-top:4px; text-align:left;">
+            </div>
+            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; color:#e6c88c;">
+                <input type="checkbox" id="share-tpl-hide-author" style="width:18px; height:18px; accent-color:#c9a96e;">
+                <span>🕵️ <b>Скрыть моё авторство</b> (будет подписано как «Анонимный автор»)</span>
+            </label>
+        </div>
+
+        <div style="display:flex; justify-content:flex-end; gap:10px;">
+            <button class="btn-save" onclick="CONFIRM_SHARE_CHAR_TEMPLATE(${targetIdx})">📤 Опубликовать в шаблоны</button>
+            <button onclick="CM('gm-tool-modal')">Отмена</button>
+        </div>
+    `;
+    OM('gm-tool-modal');
+}
+
+function CONFIRM_SHARE_CHAR_TEMPLATE(charIdx) {
+    const cs = GC();
+    const c = cs[charIdx];
+    if (!c) return;
+
+    const authorInp = document.getElementById('share-tpl-author-name');
+    if (authorInp && authorInp.value.trim()) {
+        SAVE_ACCOUNT_NAME(authorInp.value.trim());
+    }
+    const hideAuthor = !!document.getElementById('share-tpl-hide-author')?.checked;
+
+    const tplObj = CREATE_CLEAN_TEMPLATE_FROM_CHAR(c, hideAuthor);
+    const list = GET_SHARED_TEMPLATES();
+    list.push(tplObj);
+    SAVE_SHARED_TEMPLATES(list);
+
+    CM('gm-tool-modal');
+    const sess = GET_SESSION();
+    if (!sess) RENDER_LOBBY_HTML();
+    showMessage('✅ Шаблон опубликован!', `Билд персонажа «<b>${c.name}</b>» добавлен в общую витрину шаблонов в Лобби!<br><br><small style="color:#aaa;">Авторство: <b>${tplObj.authorName}</b>. Любой игрок теперь может создать себе такого же героя с 1-го уровня без вашего прогресса.</small>`);
+}
+
+function DELETE_SHARED_TEMPLATE(tplId) {
+    const list = GET_SHARED_TEMPLATES();
+    const tpl = list.find(t => t.templateId === tplId);
+    if (!tpl) return;
+    const sess = GET_SESSION();
+    const isGM = sess && sess.role === 'gm';
+    if (tpl.authorAccountId !== GET_ACCOUNT_ID() && !isGM) {
+        showMessage('Ошибка', 'Удалить шаблон может только его автор или Гейм-Мастер.');
+        return;
+    }
+    if (!confirm(`Удалить шаблон «${tpl.charSnapshot?.name || 'Герой'}» из витрины?`)) return;
+    const filtered = list.filter(t => t.templateId !== tplId);
+    SAVE_SHARED_TEMPLATES(filtered);
+    RENDER_LOBBY_HTML();
+}
+
+// Создание СВОЕГО нового персонажа по выбранному шаблону из витрины
+function CREATE_HERO_FROM_SHARED_TEMPLATE(tplId, roomCode) {
+    if (window._cloudConnecting) {
+        showMessage('⏳ Секунду...', 'Синхронизация с сервером ещё завершается. Попробуйте через 1 секунду.');
+        return;
+    }
+    const list = GET_SHARED_TEMPLATES();
+    const tpl = list.find(t => t.templateId === tplId);
+    if (!tpl || !tpl.charSnapshot) return;
+
+    const customName = prompt(`Создание героя по шаблону «${tpl.charSnapshot.name}».\nВведите имя для вашего персонажа (или оставьте как в шаблоне):`, tpl.charSnapshot.name);
+    if (customName === null) return;
+
+    // Клонируем чистый слепок и привязываем его к аккаунту НОВОГО владельца!
+    const newChar = JSON.parse(JSON.stringify(tpl.charSnapshot));
+    newChar.id = 'hero_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+    newChar.ownerId = GET_ACCOUNT_ID();
+    newChar.ownerName = GET_ACCOUNT_NAME();
+    newChar.basedOnTemplateBy = tpl.authorName;
+    newChar.name = customName.trim() || tpl.charSnapshot.name;
+
+    // Гарантируем нулевой прогресс для новой копии
+    newChar.level = 1;
+    newChar.xp = 0;
+    newChar.inCombat = false;
+    newChar.usedSpellSlots = {1:0,2:0,3:0,4:0,5:0,6:0,7:0,8:0,9:0};
+    newChar.usedSpells = {};
+    AB(newChar);
+    newChar.hp = newChar.maxHp || 10;
+
+    const cs = GC();
+    cs.push(newChar);
+    const newIdx = cs.length - 1;
+    PI = newIdx;
+    SC(cs);
+
+    const st = GET_MAP_STATE();
+    if (st.tokens && st.tokens.length > 0) {
+        st.tokens.push({
+            id: Date.now(),
+            isPlayer: true,
+            charIdx: newIdx,
+            name: newChar.name,
+            icon: '🛡️',
+            avatar: '',
+            x: 25 + (newIdx * 12) % 55,
+            y: 72,
+            hp: newChar.hp ?? 10,
+            maxHp: newChar.maxHp || 10,
+            ac: CAC(newChar),
+            init: 10
+        });
+        SAVE_MAP_STATE(st);
+    }
+
+    LOG_COMBAT_TO_CHAT(`🎉 Игрок создал героя «${newChar.name}» (по шаблону от: ${tpl.authorName}) и присоединился к отряду!`);
+    SAVE_SESSION({ role: 'player', roomCode: roomCode || '1001', playerIdx: newIdx, heroId: newChar.id });
+    APPLY_ROLE_VIEW();
+}
+
 // Умное определение имени отправителя: если сидит Мастер — возвращает ник Мастера, если Игрок — имя его героя
 function GET_CURRENT_SPEAKER_NAME() {
     const sess = GET_SESSION();
@@ -1846,15 +2095,28 @@ function ENTER_ROOM_AS_GM(roomCode) {
 
 function ENTER_ROOM_AS_PLAYER(roomCode, charIdx) {
     const cs = GC();
-    if (!cs.length) {
-        cs.push(CREATE_DEFAULT_CHAR());
-        SC(cs);
-    }
+    const myAccId = GET_ACCOUNT_ID();
+
     let targetIdx = parseInt(charIdx);
-    if (isNaN(targetIdx) || targetIdx < 0 || targetIdx >= cs.length) targetIdx = 0;
+    if (isNaN(targetIdx) || targetIdx < 0 || targetIdx >= cs.length) {
+        showMessage('⚠️ Нет выбранного персонажа', 'Создайте своего нового персонажа или выберите шаблон ниже!');
+        return;
+    }
+
+    const targetChar = cs[targetIdx];
+    // Если у старого персонажа ещё не было владельца — привязываем его к первому вошедшему хозяину
+    if (!targetChar.ownerId) {
+        targetChar.ownerId = myAccId;
+        targetChar.ownerName = GET_ACCOUNT_NAME();
+        SC(cs);
+    } else if (targetChar.ownerId !== myAccId) {
+        showMessage('🔒 Чужой персонаж!', `Герой «<b>${targetChar.name}</b>» привязан к аккаунту другого игрока (${targetChar.ownerName || 'Владелец'}).<br><br>Вы не можете играть за чужого персонажа — создайте своего или скопируйте билд из «Витрины шаблонов»!`);
+        return;
+    }
+
     PI = targetIdx;
-    const heroId = cs[targetIdx].id || ('hero_' + targetIdx);
-    cs[targetIdx].id = heroId;
+    const heroId = targetChar.id || ('hero_' + targetIdx);
+    targetChar.id = heroId;
     SAVE_SESSION({ role: 'player', roomCode: roomCode || '1001', playerIdx: targetIdx, heroId: heroId });
     APPLY_ROLE_VIEW();
 }
@@ -1869,6 +2131,8 @@ function CREATE_NEW_HERO_AND_JOIN(roomCode) {
     const cs = GC();
     const newChar = CREATE_DEFAULT_CHAR();
     newChar.id = 'hero_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+    newChar.ownerId = GET_ACCOUNT_ID();
+    newChar.ownerName = GET_ACCOUNT_NAME();
     newChar.name = name.trim() || ('Герой ' + (cs.length + 1));
     AB(newChar);
     cs.push(newChar);
@@ -1876,7 +2140,6 @@ function CREATE_NEW_HERO_AND_JOIN(roomCode) {
     PI = newIdx;
     SC(cs);
 
-    // Если на карте уже выставлены фишки отряда — сразу добавляем фишку нового игрока!
     const st = GET_MAP_STATE();
     if (st.tokens && st.tokens.length > 0) {
         st.tokens.push({
@@ -2017,9 +2280,12 @@ function APPLY_ROLE_VIEW() {
         if (mapEditBtnWrap) mapEditBtnWrap.style.display = 'none';
 
         topStatusBar.innerHTML = `
-            <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+            <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
                 <span style="background:#2e5a2e; color:#fff; padding:4px 10px; border-radius:6px; font-weight:bold; font-size:0.9rem;">⚔️ Режим Игрока</span>
                 <span>Герой: <b style="color:#c9a96e;">${curChar.name || 'Безымянный'}</b></span>
+                <button class="btn-small" style="background:#2b251c; border-color:#c9a96e; color:#e6c88c; padding:4px 10px;" onclick="OPEN_SHARE_CHAR_MODAL(${PI})">
+                    📤 Поделиться шаблоном героя
+                </button>
                 <label style="display:flex; align-items:center; gap:6px; cursor:pointer; background:#25221e; padding:4px 10px; border-radius:6px; border:1px solid #423c33; font-size:0.88rem; color:#e6c88c;">
                     <input type="checkbox" ${curChar.autoApproveGM ? 'checked' : ''} onchange="TOGGLE_AUTO_APPROVE_GM(this.checked)" style="width:16px; height:16px; accent-color:#c9a96e;">
                     <span>🤝 Авто-подтверждение правок Мастера</span>
@@ -2947,62 +3213,138 @@ function RENDER_LOBBY_HTML() {
     if (!lobby) return;
     const rooms = GET_ROOMS();
     const cs = GC();
+    const myAccId = GET_ACCOUNT_ID();
+    const templates = GET_SHARED_TEMPLATES();
 
     const roomOpts = rooms.map(r => `<option value="${r.code}">Комната #${r.code} — ${r.name}</option>`).join('');
-    const charOpts = cs.map((c, idx) => `<option value="${idx}">👤 ${c.name || 'Безымянный'} (${c.race || 'Раса'} • ${c.className || 'Класс'} ${c.level || 1} ур.)</option>`).join('');
+
+    // Фильтруем персонажей: показываем игроку ТОЛЬКО его собственных героев (или старых без ownerId, если у него ещё нет ни одного)
+    const hasAnyOwnedByMe = cs.some(c => c && c.ownerId === myAccId);
+    const myChars = cs
+        .map((c, idx) => ({ c, idx }))
+        .filter(({ c }) => c && (c.ownerId === myAccId || (!c.ownerId && !hasAnyOwnedByMe)));
+
+    const myCharOpts = myChars.map(({ c, idx }) =>
+        `<option value="${idx}">👤 ${c.name || 'Безымянный'} (${c.race || 'Раса'} • ${c.className || 'Класс'} ${c.level || 1} ур.)</option>`
+    ).join('');
+
+    // Карточки опубликованных шаблонов
+    const templatesHTML = templates.map(tpl => {
+        const snap = tpl.charSnapshot || {};
+        const isMyTpl = (tpl.authorAccountId === myAccId);
+        const authorBadge = tpl.hideAuthor
+            ? `<span style="color:#888;">🕵️ Анонимный автор</span>`
+            : `<span style="color:#c9a96e;">✍️ Автор: <b>${tpl.authorName || 'Игрок'}</b></span>`;
+
+        return `
+            <div style="background:#181715; border:1px solid #423c33; border-radius:8px; padding:10px 12px; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:8px;">
+                <div style="text-align:left;">
+                    <b style="color:#e6c88c; font-size:0.98rem;">📋 ${snap.name || 'Шаблон героя'}</b>
+                    <span style="color:#86efac; font-size:0.84rem; margin-left:6px;">(${snap.race || 'Раса не выбрана'} • ${snap.className || 'Класс не выбран'}, шаблон 1 ур.)</span><br>
+                    <small style="color:#aaa;">
+                        Сила ${snap.str||10}, Лов ${snap.dex||10}, Тел ${snap.con||10}, Инт ${snap.intl||10}, Мдр ${snap.wis||10}, Хар ${snap.cha||10} | ${authorBadge}
+                    </small>
+                </div>
+                <div style="display:flex; gap:6px; align-items:center;">
+                    <button class="btn-small btn-save" onclick="CREATE_HERO_FROM_SHARED_TEMPLATE('${tpl.templateId}', document.getElementById('lobby-player-room').value)">
+                        📥 Взять шаблон (Создать копию)
+                    </button>
+                    ${isMyTpl ? `<button class="btn-small btn-danger" style="padding:4px 8px;" title="Удалить мой шаблон" onclick="DELETE_SHARED_TEMPLATE('${tpl.templateId}')">🗑️</button>` : ''}
+                </div>
+            </div>
+        `;
+    }).join('');
 
     lobby.innerHTML = `
-        <div style="max-width:980px; margin:40px auto; text-align:center;">
-            <h1 style="font-size:2.2rem; margin-bottom:10px;">🐉 D&D Virtual Tabletop</h1>
-            <p style="color:#aba498; font-size:1.1rem; margin-bottom:32px;">Выберите свою роль за игровым столом, чтобы войти в комнату кампании</p>
+        <div style="max-width:1040px; margin:34px auto; text-align:center;">
+            <h1 style="font-size:2.2rem; margin-bottom:8px;">🐉 D&D Virtual Tabletop</h1>
+            <p style="color:#aba498; font-size:1.05rem; margin-bottom:26px;">Личные персонажи привязаны к вашему аккаунту. Вы также можете делиться чистыми шаблонами билдов!</p>
 
-            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap:24px; text-align:left;">
-                <div class="panel" style="border:2px solid #439c47; padding:26px; display:flex; flex-direction:column; justify-content:space-between;">
+            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap:24px; text-align:left;">
+                <!-- КАРТОЧКА ИГРОКА -->
+                <div class="panel" style="border:2px solid #439c47; padding:24px; display:flex; flex-direction:column; justify-content:space-between;">
                     <div>
-                        <div style="font-size:2.4rem; margin-bottom:8px;">⚔️</div>
-                        <h2 style="font-size:1.5rem; color:#52b758; border-bottom-color:#334d33;">Я — Игрок</h2>
-                        <p style="color:#ccc; margin-bottom:18px; font-size:0.98rem;">
-                            Подключитесь к комнате Мастера, двигайте свою фишку по карте, общайтесь с NPC в режиме новеллы и покупайте снаряжение в лавках.
-                        </p>
-                        <div style="margin-bottom:14px;">
-                            <label style="color:#e6c88c; font-weight:bold; font-size:0.95rem;">1. Выберите комнату кампании:</label>
-                            <select id="lobby-player-room" style="width:100%; margin-top:6px; padding:10px; background:#141312; color:#fff; border:1px solid #524a3d; border-radius:6px; font-size:1rem;">${roomOpts}</select>
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                            <h2 style="font-size:1.45rem; color:#52b758; border:none; margin:0;">⚔️ Я — Игрок</h2>
+                            <span style="font-size:0.78rem; color:#888;">🔒 Защита аккаунта включена</span>
                         </div>
-                        <div style="margin-bottom:20px;">
-                            <label style="color:#e6c88c; font-weight:bold; font-size:0.95rem;">2. Выберите существующего героя (${cs.length}):</label>
-                            <select id="lobby-player-char" style="width:100%; margin-top:6px; padding:10px; background:#141312; color:#fff; border:1px solid #524a3d; border-radius:6px; font-size:1rem;">${charOpts}</select>
+
+                        <div style="margin-bottom:12px;">
+                            <label style="color:#86efac; font-weight:bold; font-size:0.9rem;">Ваш никнейм игрока (для авторства шаблонов):</label>
+                            <input type="text" value="${GET_ACCOUNT_NAME().replace(/"/g, '&quot;')}" oninput="SAVE_ACCOUNT_NAME(this.value)" placeholder="Ваш никнейм..." style="width:100%; margin-top:4px; padding:8px 10px; background:#141312; color:#fff; border:1px solid #524a3d; border-radius:6px; text-align:left;">
+                        </div>
+
+                        <div style="margin-bottom:12px;">
+                            <label style="color:#e6c88c; font-weight:bold; font-size:0.92rem;">1. Выберите комнату кампании:</label>
+                            <select id="lobby-player-room" style="width:100%; margin-top:4px; padding:9px; background:#141312; color:#fff; border:1px solid #524a3d; border-radius:6px;">${roomOpts}</select>
+                        </div>
+
+                        <div style="margin-bottom:16px;">
+                            <label style="color:#e6c88c; font-weight:bold; font-size:0.92rem;">2. Ваши личные персонажи (${myChars.length}):</label>
+                            ${myChars.length > 0 ? `
+                                <div style="display:flex; gap:6px; margin-top:4px;">
+                                    <select id="lobby-player-char" style="flex:1; padding:9px; background:#141312; color:#fff; border:1px solid #524a3d; border-radius:6px;">${myCharOpts}</select>
+                                    <button class="btn-small" title="Поделиться билдом выбранного героя как шаблоном" onclick="OPEN_SHARE_CHAR_MODAL(parseInt(document.getElementById('lobby-player-char').value))">📤 Поделиться</button>
+                                </div>
+                            ` : `
+                                <div style="background:#141312; border:1px dashed #524a3d; padding:10px; border-radius:6px; color:#888; font-size:0.88rem; margin-top:4px;">
+                                    У вас пока нет созданных персонажей на этом устройстве. Создайте своего героя с нуля или выберите готовый шаблон ниже!
+                                </div>
+                            `}
                         </div>
                     </div>
-                    <div style="display:flex; flex-direction:column; gap:10px;">
-                        <button class="btn-save" style="width:100%; padding:14px; font-size:1.1rem;" onclick="ENTER_ROOM_AS_PLAYER(document.getElementById('lobby-player-room').value, document.getElementById('lobby-player-char').value)">⚔️ Войти выбранным героем</button>
-                        <button class="btn-small" style="width:100%; padding:10px;" onclick="CREATE_NEW_HERO_AND_JOIN(document.getElementById('lobby-player-room').value)">➕ Создать нового персонажа и войти</button>
+
+                    <div style="display:flex; flex-direction:column; gap:8px;">
+                        ${myChars.length > 0 ? `
+                            <button class="btn-save" style="width:100%; padding:12px; font-size:1.05rem;" onclick="ENTER_ROOM_AS_PLAYER(document.getElementById('lobby-player-room').value, document.getElementById('lobby-player-char').value)">
+                                ⚔️ Войти своим героем
+                            </button>
+                        ` : ''}
+                        <button class="${myChars.length === 0 ? 'btn-save' : 'btn-small'}" style="width:100%; padding:11px;" onclick="CREATE_NEW_HERO_AND_JOIN(document.getElementById('lobby-player-room').value)">
+                            ➕ Создать нового личного персонажа с нуля
+                        </button>
                     </div>
                 </div>
 
-                <div class="panel" style="border:2px solid #9b59b6; padding:26px; display:flex; flex-direction:column; justify-content:space-between;">
+                <!-- КАРТОЧКА МАСТЕРА -->
+                <div class="panel" style="border:2px solid #9b59b6; padding:24px; display:flex; flex-direction:column; justify-content:space-between;">
                     <div>
-                        <div style="font-size:2.4rem; margin-bottom:8px;">👑</div>
-                        <h2 style="font-size:1.5rem; color:#c084fc; border-bottom-color:#443054;">Я — Гейм-Мастер</h2>
-                        <p style="color:#ccc; margin-bottom:18px; font-size:0.98rem;">
-                            Тактическая карта с погодой и фишками, живые диалоги с NPC, лавка торговца, запросы проверок к20 и управление партией.
+                        <h2 style="font-size:1.45rem; color:#c084fc; border-bottom-color:#443054; margin-top:0;">👑 Я — Гейм-Мастер</h2>
+                        <p style="color:#ccc; margin-bottom:14px; font-size:0.94rem;">
+                            Управление тактической картой, погодой, NPC, магазином и доступ ко всем персонажам отряда (${cs.length} чел.).
                         </p>
+                        <div style="margin-bottom:12px;">
+                             <label style="color:#c084fc; font-weight:bold; font-size:0.92rem;">Ваш никнейм Гейм-Мастера:</label>
+                             <input type="text" id="lobby-gm-name" value="${GET_GM_NAME().replace(/"/g, '&quot;')}" oninput="SAVE_GM_NAME(this.value)" placeholder="Например: Мастер / Рассказчик..." style="width:100%; margin-top:4px; padding:9px; background:#141312; color:#fff; border:1px solid #524a3d; border-radius:6px; text-align:left;">
+                        </div>
                         <div style="margin-bottom:14px;">
-                             <label style="color:#c084fc; font-weight:bold; font-size:0.95rem;">Ваш никнейм Гейм-Мастера:</label>
-                             <input type="text" id="lobby-gm-name" value="${GET_GM_NAME().replace(/"/g, '&quot;')}" oninput="SAVE_GM_NAME(this.value)" placeholder="Например: Мастер / Рассказчик..." style="width:100%; margin-top:6px; padding:10px; background:#141312; color:#fff; border:1px solid #524a3d; border-radius:6px; font-size:1rem; text-align:left;">
+                            <label style="color:#e6c88c; font-weight:bold; font-size:0.92rem;">Войти в существующую комнату:</label>
+                            <select id="lobby-gm-room" style="width:100%; margin-top:4px; padding:9px; background:#141312; color:#fff; border:1px solid #524a3d; border-radius:6px;">${roomOpts}</select>
                         </div>
-                        <div style="margin-bottom:16px;">
-                            <label style="color:#e6c88c; font-weight:bold; font-size:0.95rem;">Войти в существующую комнату:</label>
-                            <select id="lobby-gm-room" style="width:100%; margin-top:6px; padding:10px; background:#141312; color:#fff; border:1px solid #524a3d; border-radius:6px; font-size:1rem;">${roomOpts}</select>
-                        </div>
-                        <div style="border-top:1px dashed #423c33; padding-top:14px; margin-bottom:18px;">
-                            <label style="color:#aaa; font-size:0.9rem;">Или создать новую комнату:</label>
+                        <div style="border-top:1px dashed #423c33; padding-top:12px; margin-bottom:16px;">
+                            <label style="color:#aaa; font-size:0.88rem;">Или создать новую комнату:</label>
                             <div style="display:flex; gap:8px; margin-top:6px;">
-                                <input type="text" id="lobby-new-room-name" placeholder="Название кампании..." style="flex:1; padding:10px; background:#141312; color:#fff; border:1px solid #524a3d; border-radius:6px;">
+                                <input type="text" id="lobby-new-room-name" placeholder="Название кампании..." style="flex:1; padding:9px; background:#141312; color:#fff; border:1px solid #524a3d; border-radius:6px; text-align:left;">
                                 <button class="btn-small" onclick="CREATE_NEW_ROOM_AS_GM()">+ Создать</button>
                             </div>
                         </div>
                     </div>
-                    <button style="width:100%; padding:14px; font-size:1.1rem; background:linear-gradient(180deg, #8b5cf6 0%, #5b21b6 100%); color:#fff; border-color:#c084fc;" onclick="ENTER_ROOM_AS_GM(document.getElementById('lobby-gm-room').value)">👑 Открыть Стол Гейм-Мастера</button>
+                    <button style="width:100%; padding:13px; font-size:1.05rem; background:linear-gradient(180deg, #8b5cf6 0%, #5b21b6 100%); color:#fff; border-color:#c084fc;" onclick="ENTER_ROOM_AS_GM(document.getElementById('lobby-gm-room').value)">
+                        👑 Открыть Стол Гейм-Мастера
+                    </button>
+                </div>
+            </div>
+
+            <!-- ВИТРИНА ШАБЛОНОВ ПЕРСОНАЖЕЙ ОТ ИГРОКОВ -->
+            <div class="panel" style="margin-top:24px; border:1px solid #c9a96e; padding:20px; text-align:left;">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:12px;">
+                    <div>
+                        <h3 style="margin:0; border:none; color:#e6c88c; font-size:1.2rem;">🌟 Общественные шаблоны героев (${templates.length})</h3>
+                        <small style="color:#aba498;">Здесь игроки делятся своими готовыми настройками персонажей (как шаблон с 1-го уровня без чужого прогресса в комнатах)</small>
+                    </div>
+                </div>
+                <div style="max-height:260px; overflow-y:auto;">
+                    ${templatesHTML || '<p style="color:#777; text-align:center; padding:14px 0;">Пока никто не поделился шаблоном персонажа. Нажмите «📤 Поделиться» рядом со своим героем, чтобы выложить первый билд!</p>'}
                 </div>
             </div>
         </div>
@@ -3035,7 +3377,7 @@ function RENDER_LOBBY_HTML() {
     let mediaCache = {};
 
     const SYNC_KEYS = [
-        'dnd_users_accounts', 'dnd_characters', 'dnd_rooms', 'dnd_map_state', 'dnd_gm_shop',
+        'dnd_characters', 'dnd_shared_templates', 'dnd_rooms', 'dnd_map_state', 'dnd_gm_shop',
         'dnd_bestiary', 'dnd_npcs', 'dnd_vn_dialog', 'dnd_prepared_events',
         'dnd_custom_lore', 'dnd_gm_event', 'dnd_gm_skill_check',
         'dnd_gm_edit_request', 'dnd_rest_poll', 'dnd_tasks',
@@ -3285,7 +3627,7 @@ function RENDER_LOBBY_HTML() {
                         RENDER_MAP_AREA();
                         CHECK_UNSEEN_SHOP_OPEN();
                         if (sess && sess.role === 'gm') RENDER_GM_LEFT_COLUMN();
-                    } else if (key === 'dnd_characters') {
+                    } else if (key === 'dnd_characters' || key === 'dnd_shared_templates') {
                         RMC();
                         RPL();
                         RENDER_MAP_AREA();
