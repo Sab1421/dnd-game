@@ -39,53 +39,65 @@ function SAVE_ACCOUNTS(accObj) {
 }
 
 // Подгружаем аккаунты с сервера при открытии страницы
-(async function INITIAL_FETCH_ACCOUNTS() {
+// Поддержка старого хэша пароля (для самых первых созданных аккаунтов)
+function LEGACY_SIMPLE_HASH(str) {
+    let h = 0;
+    const s = String(str || '').trim();
+    for (let i = 0; i < s.length; i++) {
+        h = ((h << 5) - h) + s.charCodeAt(i);
+        h |= 0;
+    }
+    return 'h_' + Math.abs(h).toString(36);
+}
+
+// Автоматическая синхронизация всех старых и новых аккаунтов с этого ПК в Firebase при загрузке
+(async function SYNC_ALL_LOCAL_AND_CLOUD_ACCOUNTS() {
     try {
+        let merged = Object.assign({}, GET_ACCOUNTS());
+
+        // 1. Подхватываем старые аккаунты из dnd_accounts_db (если создавались в первой версии)
+        const oldDbRaw = localStorage.getItem('dnd_accounts_db');
+        if (oldDbRaw) {
+            try {
+                const oldDb = JSON.parse(oldDbRaw);
+                Object.values(oldDb).forEach(acc => {
+                    if (acc && acc.login) {
+                        const k = acc.login.toLowerCase().trim();
+                        if (!merged[k]) merged[k] = acc;
+                    }
+                });
+            } catch (e) {}
+        }
+
+        // 2. Если на этом ПК уже выполнен вход в аккаунт — гарантируем, что он есть в общей базе!
+        const activeUser = GET_CURRENT_USER();
+        if (activeUser && activeUser.login) {
+            const k = activeUser.login.toLowerCase().trim();
+            if (!merged[k]) {
+                merged[k] = {
+                    login: activeUser.login,
+                    displayName: activeUser.displayName || activeUser.login,
+                    passHash: activeUser.passHash || '',
+                    createdAt: 'Восстановлен'
+                };
+            }
+        }
+
+        // 3. Скачиваем аккаунты из Firebase, объединяем с локальными и отправляем полный список обратно в облако!
         const res = await fetch(`${AUTH_FIREBASE_URL}/users_accounts.json`);
         if (res.ok) {
             const remote = await res.json();
             if (remote && typeof remote === 'object') {
-                const merged = Object.assign({}, GET_ACCOUNTS(), remote);
-                localStorage.setItem('dnd_users_accounts', JSON.stringify(merged));
+                merged = Object.assign({}, remote, merged);
             }
+        }
+
+        if (Object.keys(merged).length > 0) {
+            SAVE_ACCOUNTS(merged);
         }
     } catch (e) {}
 })();
 
-function GET_CURRENT_USER() {
-    const raw = localStorage.getItem('dnd_active_auth_user');
-    if (!raw) return null;
-    try { return JSON.parse(raw); } catch (e) { return null; } // { login, displayName }
-}
-
-function SAVE_CURRENT_USER(userObj) {
-    if (!userObj) {
-        localStorage.removeItem('dnd_active_auth_user');
-        localStorage.removeItem('dnd_current_account');
-    } else {
-        localStorage.setItem('dnd_active_auth_user', JSON.stringify(userObj));
-        localStorage.setItem('dnd_current_account', JSON.stringify({
-            id: userObj.login,
-            login: userObj.login,
-            displayName: userObj.displayName
-        }));
-    }
-}
-
-function SET_AUTH_MODE(mode) {
-    window._authMode = mode;
-    RENDER_AUTH_SCREEN();
-}
-
-function LOGOUT_ACCOUNT() {
-    if (!confirm('Выйти из текущей учётной записи?')) return;
-    SAVE_SESSION(null);
-    SAVE_CURRENT_USER(null);
-    window._lobbyStep = 'role';
-    APPLY_ROLE_VIEW();
-}
-
-// Вход и регистрация с прямой проверкой облачной базы Firebase (работает на любом устройстве!)
 async function SUBMIT_AUTH_FORM() {
     const loginInp = document.getElementById('auth-login-inp');
     const passInp = document.getElementById('auth-pass-inp');
@@ -106,72 +118,75 @@ async function SUBMIT_AUTH_FORM() {
     };
 
     if (loginKey.length < 2) { showErr('Логин должен содержать минимум 2 символа.'); return; }
-    if (pass.length < 3) { showErr('Пароль должен содержать минимум 3 символа.'); return; }
+    if (pass.length < 2) { showErr('Введите пароль.'); return; }
 
     if (submitBtn) {
         submitBtn.disabled = true;
         submitBtn.textContent = '⏳ Связь с облаком...';
     }
 
-    // 1. Принудительно скачиваем свежий список аккаунтов и персонажей из Firebase перед проверкой!
     let accounts = GET_ACCOUNTS();
     try {
-        const [accRes, stateRes, charRes] = await Promise.all([
+        const [accRes, oldAccRes, charRes] = await Promise.all([
             fetch(`${AUTH_FIREBASE_URL}/users_accounts.json`),
-            fetch(`${AUTH_FIREBASE_URL}/state/dnd_users_accounts.json`),
+            fetch(`${AUTH_FIREBASE_URL}/accounts.json`),
             fetch(`${AUTH_FIREBASE_URL}/state/dnd_characters.json`)
         ]);
         if (accRes.ok) {
             const rem1 = await accRes.json();
             if (rem1 && typeof rem1 === 'object') accounts = Object.assign({}, accounts, rem1);
         }
-        if (stateRes.ok) {
-            const rem2 = await stateRes.json();
-            if (rem2 && rem2.v) {
-                try { accounts = Object.assign({}, accounts, JSON.parse(rem2.v)); } catch (e) {}
+        if (oldAccRes.ok) {
+            const remOld = await oldAccRes.json();
+            if (remOld && typeof remOld === 'object') {
+                Object.values(remOld).forEach(a => {
+                    if (a && a.login) accounts[a.login.toLowerCase().trim()] = a;
+                });
             }
         }
         if (charRes.ok) {
             const remChars = await charRes.json();
-            if (remChars && remChars.v) {
-                localStorage.setItem('dnd_characters', remChars.v);
-            }
+            if (remChars && remChars.v) localStorage.setItem('dnd_characters', remChars.v);
         }
     } catch (e) {}
 
-    const passHash = HASH_PASSWORD(loginKey + ':' + pass);
+    const newHash = HASH_PASSWORD(loginKey + ':' + pass);
+    const oldHash = LEGACY_SIMPLE_HASH(pass);
 
     if (window._authMode === 'register') {
         if (accounts[loginKey]) {
             if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = '✅ Создать аккаунт и войти'; }
-            showErr('Этот логин уже занят! Переключитесь на вкладку «🔑 Вход» сверху и введите свой пароль.');
+            showErr('Этот логин уже занят! Переключитесь на вкладку «🔑 Вход» сверху.');
             return;
         }
         accounts[loginKey] = {
             login: rawLogin,
             displayName: displayName,
-            passHash: passHash,
+            passHash: newHash,
             createdAt: new Date().toLocaleDateString()
         };
         SAVE_ACCOUNTS(accounts);
-        SAVE_CURRENT_USER({ login: loginKey, displayName: displayName });
+        SAVE_CURRENT_USER({ login: loginKey, displayName: displayName, passHash: newHash });
         SAVE_GM_NAME(displayName);
         window._lobbyStep = 'role';
         APPLY_ROLE_VIEW();
     } else {
-        const acc = accounts[loginKey];
+        const acc = accounts[loginKey] || accounts['user_' + loginKey];
         if (!acc) {
             if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = '🚪 Войти в аккаунт'; }
-            showErr('Аккаунт с таким логином не найден. Проверьте логин или нажмите «✨ Регистрация»!');
+            showErr('Аккаунт ещё не выгружен в облако с вашего первого устройства. Откройте сайт на ПК, где создавали аккаунт (он автоматически выгрузится), или нажмите «✨ Регистрация» с тем же логином!');
             return;
         }
-        if (acc.passHash !== passHash) {
+        // Проверяем и новый хэш, и старый хэш первой версии (или пустой хэш после авто-восстановления)
+        if (acc.passHash && acc.passHash !== newHash && acc.passHash !== oldHash) {
             if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = '🚪 Войти в аккаунт'; }
             showErr('Неверный пароль!');
             return;
         }
+        acc.passHash = newHash;
+        accounts[loginKey] = acc;
         SAVE_ACCOUNTS(accounts);
-        SAVE_CURRENT_USER({ login: loginKey, displayName: acc.displayName || acc.login });
+        SAVE_CURRENT_USER({ login: loginKey, displayName: acc.displayName || acc.login, passHash: newHash });
         SAVE_GM_NAME(acc.displayName || acc.login);
         window._lobbyStep = 'role';
         APPLY_ROLE_VIEW();
