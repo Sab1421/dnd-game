@@ -1,6 +1,6 @@
 // ================================================================
-// 🔐 СИСТЕМА УЧЁТНЫХ ЗАПИСЕЙ (С ОБЛАЧНОЙ СИНХРОНИЗАЦИЕЙ НА ЛЮБОМ УСТРОЙСТВЕ),
-// СВОБОДНОГО СОЗДАНИЯ ПЕРСОНАЖА, ОБМЕНА ШАБЛОНАМИ И АНТИ-ЧИТА ПО КОМНАТАМ (auth.js)
+// 🔐 СИСТЕМА УЧЁТНЫХ ЗАПИСЕЙ (СНАЧАЛА ВХОД -> ПОТОМ РОЛЬ ИГРОКА ИЛИ МАСТЕРА),
+// СВОБОДНОЕ СОЗДАНИЕ ПЕРСОНАЖА, ШАБЛОНЫ И АНТИ-ЧИТ ПО КОМНАТАМ (auth.js)
 // ================================================================
 window._authMode = 'login';           // 'login' | 'register'
 window._lobbyStep = 'role';           // 'role' | 'gm_rooms' | 'player_chars' | 'player_rooms'
@@ -21,25 +21,6 @@ function HASH_PASSWORD(str) {
     return 'h_' + (h >>> 0).toString(16);
 }
 
-function GET_ACCOUNTS() {
-    const raw = localStorage.getItem('dnd_users_accounts');
-    if (!raw) return {};
-    try { return JSON.parse(raw); } catch (e) { return {}; }
-}
-
-function SAVE_ACCOUNTS(accObj) {
-    const str = JSON.stringify(accObj);
-    localStorage.setItem('dnd_users_accounts', str);
-    // Дублируем напрямую в Firebase, чтобы телефон/другой ПК мгновенно видел аккаунт!
-    fetch(`${AUTH_FIREBASE_URL}/users_accounts.json`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: str
-    }).catch(() => {});
-}
-
-// Подгружаем аккаунты с сервера при открытии страницы
-// Поддержка старого хэша пароля (для самых первых созданных аккаунтов)
 function LEGACY_SIMPLE_HASH(str) {
     let h = 0;
     const s = String(str || '').trim();
@@ -50,12 +31,74 @@ function LEGACY_SIMPLE_HASH(str) {
     return 'h_' + Math.abs(h).toString(36);
 }
 
+function GET_ACCOUNTS() {
+    const raw = localStorage.getItem('dnd_users_accounts');
+    if (!raw) return {};
+    try { return JSON.parse(raw); } catch (e) { return {}; }
+}
+
+function SAVE_ACCOUNTS(accObj) {
+    const str = JSON.stringify(accObj);
+    localStorage.setItem('dnd_users_accounts', str);
+    fetch(`${AUTH_FIREBASE_URL}/users_accounts.json`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: str
+    }).catch(() => {});
+}
+
+function GET_CURRENT_USER() {
+    const raw = localStorage.getItem('dnd_active_auth_user');
+    if (raw) {
+        try { return JSON.parse(raw); } catch (e) {}
+    }
+    // Если остался вход от прошлой версии в dnd_current_account — подхватываем его!
+    const oldRaw = localStorage.getItem('dnd_current_account');
+    if (oldRaw) {
+        try {
+            const oldAcc = JSON.parse(oldRaw);
+            if (oldAcc && oldAcc.login) {
+                const u = { login: oldAcc.login.toLowerCase(), displayName: oldAcc.displayName || oldAcc.login };
+                localStorage.setItem('dnd_active_auth_user', JSON.stringify(u));
+                return u;
+            }
+        } catch (e) {}
+    }
+    return null;
+}
+
+function SAVE_CURRENT_USER(userObj) {
+    if (!userObj) {
+        localStorage.removeItem('dnd_active_auth_user');
+        localStorage.removeItem('dnd_current_account');
+    } else {
+        localStorage.setItem('dnd_active_auth_user', JSON.stringify(userObj));
+        localStorage.setItem('dnd_current_account', JSON.stringify({
+            id: userObj.login,
+            login: userObj.login,
+            displayName: userObj.displayName
+        }));
+    }
+}
+
+function SET_AUTH_MODE(mode) {
+    window._authMode = mode;
+    RENDER_AUTH_SCREEN();
+}
+
+function LOGOUT_ACCOUNT() {
+    if (!confirm('Выйти из текущей учётной записи?')) return;
+    SAVE_SESSION(null);
+    SAVE_CURRENT_USER(null);
+    window._lobbyStep = 'role';
+    APPLY_ROLE_VIEW();
+}
+
 // Автоматическая синхронизация всех старых и новых аккаунтов с этого ПК в Firebase при загрузке
 (async function SYNC_ALL_LOCAL_AND_CLOUD_ACCOUNTS() {
     try {
         let merged = Object.assign({}, GET_ACCOUNTS());
 
-        // 1. Подхватываем старые аккаунты из dnd_accounts_db (если создавались в первой версии)
         const oldDbRaw = localStorage.getItem('dnd_accounts_db');
         if (oldDbRaw) {
             try {
@@ -69,7 +112,6 @@ function LEGACY_SIMPLE_HASH(str) {
             } catch (e) {}
         }
 
-        // 2. Если на этом ПК уже выполнен вход в аккаунт — гарантируем, что он есть в общей базе!
         const activeUser = GET_CURRENT_USER();
         if (activeUser && activeUser.login) {
             const k = activeUser.login.toLowerCase().trim();
@@ -83,7 +125,6 @@ function LEGACY_SIMPLE_HASH(str) {
             }
         }
 
-        // 3. Скачиваем аккаунты из Firebase, объединяем с локальными и отправляем полный список обратно в облако!
         const res = await fetch(`${AUTH_FIREBASE_URL}/users_accounts.json`);
         if (res.ok) {
             const remote = await res.json();
@@ -153,8 +194,10 @@ async function SUBMIT_AUTH_FORM() {
     const newHash = HASH_PASSWORD(loginKey + ':' + pass);
     const oldHash = LEGACY_SIMPLE_HASH(pass);
 
+    const existingAcc = accounts[loginKey] || accounts['user_' + loginKey];
+
     if (window._authMode === 'register') {
-        if (accounts[loginKey]) {
+        if (existingAcc) {
             if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = '✅ Создать аккаунт и войти'; }
             showErr('Этот логин уже занят! Переключитесь на вкладку «🔑 Вход» сверху.');
             return;
@@ -165,32 +208,51 @@ async function SUBMIT_AUTH_FORM() {
             passHash: newHash,
             createdAt: new Date().toLocaleDateString()
         };
-        SAVE_ACCOUNTS(accounts);
-        SAVE_CURRENT_USER({ login: loginKey, displayName: displayName, passHash: newHash });
-        SAVE_GM_NAME(displayName);
-        window._lobbyStep = 'role';
-        APPLY_ROLE_VIEW();
     } else {
-        const acc = accounts[loginKey] || accounts['user_' + loginKey];
-        if (!acc) {
-            if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = '🚪 Войти в аккаунт'; }
-            showErr('Аккаунт ещё не выгружен в облако с вашего первого устройства. Откройте сайт на ПК, где создавали аккаунт (он автоматически выгрузится), или нажмите «✨ Регистрация» с тем же логином!');
-            return;
+        // Если аккаунт уже есть в базе — проверяем пароль
+        if (existingAcc) {
+            if (existingAcc.passHash && existingAcc.passHash !== newHash && existingAcc.passHash !== oldHash) {
+                if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = '🚪 Войти в аккаунт'; }
+                showErr('Неверный пароль!');
+                return;
+            }
+            existingAcc.passHash = newHash;
+            accounts[loginKey] = existingAcc;
+        } else {
+            // Если это твой старый аккаунт, который ещё не попал в облако — автоматически создаём и привязываем его в облаке!
+            accounts[loginKey] = {
+                login: rawLogin,
+                displayName: displayName,
+                passHash: newHash,
+                createdAt: new Date().toLocaleDateString()
+            };
         }
-        // Проверяем и новый хэш, и старый хэш первой версии (или пустой хэш после авто-восстановления)
-        if (acc.passHash && acc.passHash !== newHash && acc.passHash !== oldHash) {
-            if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = '🚪 Войти в аккаунт'; }
-            showErr('Неверный пароль!');
-            return;
-        }
-        acc.passHash = newHash;
-        accounts[loginKey] = acc;
-        SAVE_ACCOUNTS(accounts);
-        SAVE_CURRENT_USER({ login: loginKey, displayName: acc.displayName || acc.login, passHash: newHash });
-        SAVE_GM_NAME(acc.displayName || acc.login);
-        window._lobbyStep = 'role';
-        APPLY_ROLE_VIEW();
     }
+
+    // Привязываем твоих персонажей с этого устройства или совпадающих по имени владельца к твоему логину
+    const cs = GC();
+    let charsUpdated = false;
+    const hasAnyOwned = cs.some(c => c && (c.owner === loginKey || c.ownerId === loginKey));
+    cs.forEach(c => {
+        if (!c) return;
+        if (!hasAnyOwned && (!c.owner || c.owner.startsWith('guest_') || c.owner.startsWith('acc_'))) {
+            c.owner = loginKey;
+            c.ownerId = loginKey;
+            c.ownerName = accounts[loginKey].displayName || rawLogin;
+            charsUpdated = true;
+        }
+    });
+    if (charsUpdated) SC(cs);
+
+    SAVE_ACCOUNTS(accounts);
+    SAVE_CURRENT_USER({
+        login: loginKey,
+        displayName: accounts[loginKey].displayName || rawLogin,
+        passHash: newHash
+    });
+    SAVE_GM_NAME(accounts[loginKey].displayName || rawLogin);
+    window._lobbyStep = 'role';
+    APPLY_ROLE_VIEW();
 }
 
 function RENDER_AUTH_SCREEN() {
@@ -212,14 +274,14 @@ function RENDER_AUTH_SCREEN() {
     const isReg = (window._authMode === 'register');
 
     authOverlay.innerHTML = `
-        <div class="panel" style="width:460px; max-width:96vw; padding:28px 30px; border:2px solid #c9a96e; box-shadow:0 16px 50px rgba(0,0,0,0.95); text-align:center;">
-            <div style="font-size:2.8rem; margin-bottom:6px;">🐉</div>
-            <h2 style="font-size:1.5rem; margin-bottom:6px; border:none;">D&D: Притишье</h2>
-            <p style="color:#aba498; font-size:0.92rem; margin-bottom:20px;">
-                Единый облачный аккаунт: входите со своего ПК или телефона под одним логином и паролем!
+        <div class="panel" style="width:460px; max-width:96vw; padding:26px 28px; border:2px solid #c9a96e; box-shadow:0 16px 50px rgba(0,0,0,0.95); text-align:center;">
+            <div style="font-size:2.6rem; margin-bottom:4px;">🐉</div>
+            <h2 style="font-size:1.45rem; margin-bottom:6px; border:none;">D&D: Притишье</h2>
+            <p style="color:#aba498; font-size:0.95rem; margin-bottom:18px;">
+                Сначала войдите в свой аккаунт, а затем выберите роль (Игрок или Гейм-Мастер)
             </p>
 
-            <div style="display:flex; gap:8px; margin-bottom:18px;">
+            <div style="display:flex; gap:8px; margin-bottom:16px;">
                 <button class="btn-small" style="flex:1; padding:10px; background:${!isReg ? '#c9a96e' : '#181715'}; color:${!isReg ? '#181510' : '#ccc'}; border-color:${!isReg ? '#e0c58e' : '#3d3830'};" onclick="SET_AUTH_MODE('login')">
                     🔑 Вход
                 </button>
@@ -228,32 +290,32 @@ function RENDER_AUTH_SCREEN() {
                 </button>
             </div>
 
-            <div id="auth-error-box" style="display:none; background:#3a1818; border:1px solid #ef4444; color:#fca5a5; padding:10px; border-radius:8px; font-size:0.88rem; margin-bottom:14px; text-align:left;"></div>
+            <div id="auth-error-box" style="display:none; background:#3a1818; border:1px solid #ef4444; color:#fca5a5; padding:10px; border-radius:8px; font-size:0.92rem; margin-bottom:14px; text-align:left;"></div>
 
             <div style="display:flex; flex-direction:column; gap:12px; text-align:left;">
                 <div>
-                    <label style="color:#e6c88c; font-size:0.9rem; font-weight:bold;">Логин:</label>
+                    <label style="color:#e6c88c; font-size:0.95rem; font-weight:bold;">Ваш логин:</label>
                     <input type="text" id="auth-login-inp" placeholder="Введите ваш логин..."
                            onkeypress="if(event.key==='Enter') SUBMIT_AUTH_FORM();"
-                           style="width:100%; margin-top:4px; padding:11px 14px; background:#141312; color:#fff; border:1px solid #524a3d; border-radius:8px; font-size:1rem; text-align:left;">
+                           style="width:100%; margin-top:4px; padding:10px 12px; background:#141312; color:#fff; border:1px solid #524a3d; border-radius:8px; font-size:1rem; text-align:left;">
                 </div>
 
                 ${isReg ? `
                 <div>
-                    <label style="color:#e6c88c; font-size:0.9rem; font-weight:bold;">Отображаемое имя (Никнейм):</label>
+                    <label style="color:#e6c88c; font-size:0.95rem; font-weight:bold;">Отображаемое имя (Никнейм):</label>
                     <input type="text" id="auth-name-inp" placeholder="Как вас подписывать в игре..."
                            onkeypress="if(event.key==='Enter') SUBMIT_AUTH_FORM();"
-                           style="width:100%; margin-top:4px; padding:11px 14px; background:#141312; color:#fff; border:1px solid #524a3d; border-radius:8px; font-size:1rem; text-align:left;">
+                           style="width:100%; margin-top:4px; padding:10px 12px; background:#141312; color:#fff; border:1px solid #524a3d; border-radius:8px; font-size:1rem; text-align:left;">
                 </div>` : ''}
 
                 <div>
-                    <label style="color:#e6c88c; font-size:0.9rem; font-weight:bold;">Пароль (мин. 3 символа):</label>
+                    <label style="color:#e6c88c; font-size:0.95rem; font-weight:bold;">Пароль:</label>
                     <input type="password" id="auth-pass-inp" placeholder="••••••••"
                            onkeypress="if(event.key==='Enter') SUBMIT_AUTH_FORM();"
-                           style="width:100%; margin-top:4px; padding:11px 14px; background:#141312; color:#fff; border:1px solid #524a3d; border-radius:8px; font-size:1rem; text-align:left;">
+                           style="width:100%; margin-top:4px; padding:10px 12px; background:#141312; color:#fff; border:1px solid #524a3d; border-radius:8px; font-size:1rem; text-align:left;">
                 </div>
 
-                <button id="auth-submit-btn" class="btn-save" style="width:100%; padding:14px; font-size:1.08rem; margin-top:6px;" onclick="SUBMIT_AUTH_FORM()">
+                <button id="auth-submit-btn" class="btn-save" style="width:100%; padding:13px; font-size:1.05rem; margin-top:4px;" onclick="SUBMIT_AUTH_FORM()">
                     ${isReg ? '✅ Создать аккаунт и войти' : '🚪 Войти в аккаунт'}
                 </button>
             </div>
