@@ -1515,6 +1515,10 @@ function APPLY_FEAT_EFFECTS(cs, char, featName, doneCallback) {
 function OPEN_SPELL_SELECTION() {
     const csList = GC();
     const char = csList[PI];
+    if (!char.classLocked) {
+        showMessage('🔒 Сначала сохраните класс', 'Нажмите кнопку «🔒 Сохранить класс», прежде чем выбирать заклинания!');
+        return;
+    }
     if (!char.className || !gameData.classes[char.className]) return;
     const lv = char.level || 1;
     const classTable = gameData.knownSpellsTable && gameData.knownSpellsTable[char.className];
@@ -1648,7 +1652,8 @@ function OCS() {
     const cont = document.getElementById('char-sheet-content');
 
     let topAlerts = '';
-    if (gameData.classes[c.className] && gameData.spells.some(sp => sp.classes.includes(c.className)) && !c._spellsOffered && GET_KNOWN_SPELLS_DEFICIT(c) > 0) {
+    // Кнопка выбора заклинаний появляется ТОЛЬКО после того, как игрок нажал «Сохранить класс» (c.classLocked === true)!
+    if (c.classLocked && gameData.classes[c.className] && gameData.spells.some(sp => sp.classes.includes(c.className)) && !c._spellsOffered && GET_KNOWN_SPELLS_DEFICIT(c) > 0) {
         topAlerts += '<button class="btn-save" style="margin-right:8px; margin-bottom:10px;" onclick="OPEN_SPELL_SELECTION()">✨ Выбрать новые заклинания (' + GET_KNOWN_SPELLS_DEFICIT(c) + ')</button>';
     }
     if (c.pendingChoices && c.pendingChoices.some(p => p.type === 'asi_or_feat' || p.type === 'feat' || p.type === 'expertise')) {
