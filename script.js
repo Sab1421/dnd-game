@@ -1666,15 +1666,15 @@ function OCS() {
     let sso='<option value="">— Выберите подкласс —</option>'; if(c.className&&gameData.classes[c.className]&&gameData.classes[c.className].sub) gameData.classes[c.className].sub.forEach(sn=>{sso+='<option value="'+sn+'"'+(c.subclass===sn?' selected':'')+'>'+sn+'</option>';});
     let bo='<option value="">— Выберите предысторию —</option>'; for(const bn in gameData.backgrounds) bo+='<option value="'+bn+'"'+(c.background===bn?' selected':'')+'>'+bn+'</option>';
     const al=GAL(c),lch=RLCH(c);
-    const as=GAS(c),sc=GSC(c),avail=GASC(c),chs=c.chosenSkills||[],rem=sc-chs.length,skl=c.skillsLocked||false,pv=c._prevSkills?c._prevSkills.slice():[];
+    const as=GAS(c),sc=GSC(c),avail=GASC(c),chs=c.chosenSkills||[],rem=sc-chs.length,skl=c.skillsLocked||false;
 
-    const pp=as.includes('Восприятие')||chs.includes('Восприятие'), isExpPerc=c.expertiseSkills&&c.expertiseSkills.includes(s=>'Восприятие'===s), obsBonus=(c.chosenFeats&&c.chosenFeats.includes('Наблюдатель'))?5:0, pw=10+(pp?(isExpPerc?wm+pb*2:wm+pb):wm)+obsBonus;
-    const acv=CAC(c),cap=CC(c),cpt=cap+' фнт ('+LKG(cap)+' кг)';
+    const pp=as.includes('Восприятие')||chs.includes('Восприятие'), isExpPerc=c.expertiseSkills&&c.expertiseSkills.includes('Восприятие'), obsBonus=(c.chosenFeats&&c.chosenFeats.includes('Наблюдатель'))?5:0, pw=10+(pp?(isExpPerc?wm+pb*2:wm+pb):wm)+obsBonus;
+    const acv=CAC(c),cap=CC(c),cpt=cap+' фунтов ('+LKG(cap)+' кг)';
     const rsp=RSP(c);
 
     const curTab = window._sheetTab || 'all';
-    const tStyle = (t) => `flex:1; min-width:140px; padding:8px 10px; font-size:0.9rem; border-radius:6px; background:${curTab===t?'#c9a96e':'#181715'}; color:${curTab===t?'#181510':'#ccc'}; border:1px solid ${curTab===t?'#e0c58e':'#3d3830'};`;
-    const skillWarnBadge = (rem > 0) ? ` <span style="background:#c97e2e; color:#fff; padding:1px 6px; border-radius:10px; font-size:0.78em;">+${rem}</span>` : '';
+    const tStyle = (t) => `flex:1; min-width:135px; padding:8px 10px; font-size:0.94rem; border-radius:6px; background:${curTab===t?'#c9a96e':'#181715'}; color:${curTab===t?'#181510':'#ccc'}; border:1px solid ${curTab===t?'#e0c58e':'#3d3830'};`;
+    const skillWarnBadge = (rem > 0) ? ` <span style="background:#c97e2e; color:#fff; padding:1px 6px; border-radius:10px; font-size:0.8em;">+${rem}</span>` : '';
 
     const tabsNavHTML = `
         <div style="display:flex; gap:6px; margin-bottom:14px; flex-wrap:wrap;">
@@ -1686,99 +1686,70 @@ function OCS() {
         </div>
     `;
 
-    // --- БЛОК 1: ОСНОВНОЕ И ХАРАКТЕРИСТИКИ ---
+    // --- РАЗДЕЛ 1: ОСНОВНОЕ + ХАРАКТЕРИСТИКИ + БОЕВЫЕ ПАРАМЕТРЫ (СТРОГО В ОДНУ КОЛОНКУ!) ---
     const sectionMainHTML = `
-        <div class="sheet-grid-2col">
-            <div>
-                <h3 style="margin-top:0;">👤 Основная информация</h3>
-                <table>
-                    <colgroup><col style="width:38%;"><col style="width:62%;"></colgroup>
-                    <tr><td>Имя героя</td><td><input type="text" value="${c.name||''}" onchange="UCF('name',this.value);RMC();"></td></tr>
-                    <tr><td>Предыстория</td><td>${bl ? '<span class="locked-field">✅ '+(c.background||'—')+'</span>' : '<div style="display:flex; gap:4px;"><select onchange="UCF(\'background\',this.value);LRB();" class="'+(!c.background?'incomplete':'')+'">'+bo+'</select>'+(c.background?'<button class="btn-small btn-save" onclick="LKBG()">🔒</button>':'')+'</div>'}</td></tr>
-                    <tr><td>Раса</td><td>${rl ? '<span class="locked-field">✅ '+(c.race||'—')+(c.subrace?' ('+c.subrace+')':'')+'</span>' : '<select onchange="UCF(\'race\',this.value);ROS();" class="'+(!c.race?'incomplete':'')+'">'+ro+'</select>'}</td></tr>
-                    ${(!rl && c.race && gameData.races[c.race] && gameData.races[c.race].sub) ? '<tr><td>Подраса</td><td><select onchange="UCF(\'subrace\',this.value);ROS();">'+so+'</select></td></tr>' : ''}
-                    ${(!rl && c.race) ? '<tr><td colspan="2"><button class="btn-small btn-save" style="width:100%;" onclick="LKR()">🔒 Сохранить расу</button></td></tr>' : ''}
-                    <tr><td>Класс</td><td>${cl ? '<span class="locked-field">✅ '+(c.className||'—')+'</span>' : '<select onchange="UCF(\'className\',this.value);ROS();" class="'+(!c.className?'incomplete':'')+'">'+co+'</select>'}</td></tr>
-                    ${sv ? '<tr><td>Подкласс</td><td>'+(sl?'<span class="locked-field">✅ '+(c.subclass||'—')+'</span>':'<div style="display:flex; gap:4px;"><select onchange="UCF(\'subclass\',this.value);ROS();" class="'+(ns?'incomplete':'')+'">'+sso+'</select>'+(cl&&!sl&&c.subclass?'<button class="btn-small btn-save" onclick="LKSB()">🔒</button>':'')+'</div>')+'</td></tr>' : ''}
-                    ${(!cl && c.className) ? '<tr><td colspan="2"><button class="btn-small btn-save" style="width:100%;" onclick="LKC()">🔒 Сохранить класс</button></td></tr>' : ''}
-                    <tr><td>Уровень и БМ</td><td><div style="display:flex; align-items:center; justify-content:center; gap:8px;"><input type="number" min="1" max="20" value="${c.level||1}" onchange="ULV(parseInt(this.value))" style="width:70px;"> <span style="color:#c9a96e;">БМ: <b>+${pb}</b></span></div></td></tr>
-                    <tr><td>Опыт (XP)</td><td><div style="display:flex; align-items:center; justify-content:center; gap:6px;"><input type="number" value="${c.xp||0}" onchange="UCF('xp',parseInt(this.value));ROS();" style="width:95px;"> <span>/ ${XPL((c.level||1)+1)}</span></div></td></tr>
-                </table>
+        <h3 style="margin-top:0;">👤 Основная информация</h3>
+        <table>
+            <tr><td style="width:36%;">Имя персонажа</td><td><input type="text" value="${c.name||''}" onchange="UCF('name',this.value);RMC();"></td></tr>
+            <tr><td>Предыстория</td><td>${bl ? '<span class="locked-field">✅ '+(c.background||'—')+'</span>' : '<div style="display:flex; gap:6px;"><select onchange="UCF(\'background\',this.value);LRB();" class="'+(!c.background?'incomplete':'')+'">'+bo+'</select>'+(c.background?'<button class="btn-small btn-save" onclick="LKBG()">Сохранить</button>':'')+'</div>'}</td></tr>
+            <tr><td>Раса</td><td>${rl ? '<span class="locked-field">✅ '+(c.race||'—')+(c.subrace?' ('+c.subrace+')':'')+'</span>' : '<select onchange="UCF(\'race\',this.value);ROS();" class="'+(!c.race?'incomplete':'')+'">'+ro+'</select>'}</td></tr>
+            ${(!rl && c.race && gameData.races[c.race] && gameData.races[c.race].sub) ? '<tr><td>Подраса</td><td><select onchange="UCF(\'subrace\',this.value);ROS();">'+so+'</select></td></tr>' : ''}
+            ${(!rl && c.race) ? '<tr><td colspan="2"><button class="btn-save" style="width:100%;" onclick="LKR()">🔒 Сохранить расу</button></td></tr>' : ''}
+            <tr><td>Класс</td><td>${cl ? '<span class="locked-field">✅ '+(c.className||'—')+'</span>' : '<select onchange="UCF(\'className\',this.value);ROS();" class="'+(!c.className?'incomplete':'')+'">'+co+'</select>'}</td></tr>
+            ${sv ? '<tr><td>Подкласс</td><td>'+(sl?'<span class="locked-field">✅ '+(c.subclass||'—')+'</span>':'<div style="display:flex; gap:6px;"><select onchange="UCF(\'subclass\',this.value);ROS();" class="'+(ns?'incomplete':'')+'">'+sso+'</select>'+(cl&&!sl&&c.subclass?'<button class="btn-small btn-save" onclick="LKSB()">Сохранить</button>':'')+'</div>')+'</td></tr>' : ''}
+            ${(!cl && c.className) ? '<tr><td colspan="2"><button class="btn-save" style="width:100%;" onclick="LKC()">🔒 Сохранить класс</button></td></tr>' : ''}
+            <tr><td>Уровень и Бонус Мастерства</td><td><div style="display:flex; align-items:center; justify-content:center; gap:12px;"><input type="number" min="1" max="20" value="${c.level||1}" onchange="ULV(parseInt(this.value))" style="width:85px;"> <span style="color:#c9a96e;">Бонус мастерства (БМ): <b>+${pb}</b></span></div></td></tr>
+            <tr><td>Опыт (XP)</td><td><div style="display:flex; align-items:center; justify-content:center; gap:8px;"><input type="number" value="${c.xp||0}" onchange="UCF('xp',parseInt(this.value));ROS();" style="width:110px;"> <span>/ ${XPL((c.level||1)+1)} XP</span></div></td></tr>
+        </table>
 
-                <h3>🛡️ Боевые параметры</h3>
-                <table>
-                    <colgroup><col style="width:46%;"><col style="width:54%;"></colgroup>
-                    <tr><td>Хиты (тек. / макс.)</td><td><div style="display:flex; align-items:center; justify-content:center; gap:6px;"><input type="number" min="0" max="${c.maxHp||10}" value="${c.hp??10}" onchange="UHP('hp',this.value)" style="width:70px;"> <span>/ <b>${c.maxHp||10}</b></span></div></td></tr>
-                    <tr><td>Временные ХП</td><td><input type="number" min="0" value="${c.tempHP||0}" onchange="UHP('tempHP',this.value)" style="width:75px;"></td></tr>
-                    <tr><td>Класс Брони (КБ)</td><td><b>${acv}</b>${c.hasArmorPenalty?' <span style="color:#e06060;font-size:0.8em;">(Штраф)</span>':''}</td></tr>
-                    <tr><td>Инициатива | Скорость</td><td><b>${MS(dm + (c.initiativeBonus || 0))}</b> &nbsp;|&nbsp; <b>${parseInt(c.speed) || 30} фт</b></td></tr>
-                    <tr><td>Кость хитов</td><td>${c.hitDice||'—'} (${Math.max(0, (c.level||1)-(c.spentHitDice||0))}/${c.level||1})</td></tr>
-                    <tr><td>Пассив. Внимательность</td><td><b>${pw}</b></td></tr>
-                    <tr><td>Грузоподъёмность</td><td>${cpt}</td></tr>
-                    <tr><td>Вдохновение</td><td><input type="text" value="${c.inspiration||'0'}" onchange="UCF('inspiration',this.value)" style="width:75px;"></td></tr>
-                </table>
-            </div>
+        <h3>💪 Характеристики</h3>
+        ${!c.statsLocked ? `
+            <div style="margin-bottom:8px; display:flex; gap:8px; flex-wrap:wrap;">
+                <button class="btn-small" style="flex:1;" onclick="AUTO_STATS()">⚡ Авто-подбор под класс</button>
+                <button class="btn-small" style="flex:1;" onclick="ROLL_STATS_4D6()">🎲 Бросить 4к6</button>
+                <button class="btn-small btn-save" style="flex:1;" onclick="LKSTATS()">🔒 Зафиксировать характеристики</button>
+            </div>` : ''}
+        <table>
+            <tr><th style="width:32%;">Характеристика</th><th style="width:18%;">База</th><th style="width:16%;">Бонус расы</th><th style="width:17%;">Итог</th><th style="width:17%;">Модификатор</th></tr>
+            <tr><td><b>Сила</b></td><td>${c.statsLocked ? (c.baseStr||10) : `<input type="number" min="3" max="18" value="${c.baseStr||10}" onchange="UBASE('baseStr',this.value)" style="width:75px;">`}</td><td style="color:#aaa;">${c.strBonus>0?'+'+c.strBonus:'—'}</td><td><b>${str}</b></td><td class="stat-mod">${MS(sm)}</td></tr>
+            <tr><td><b>Ловкость</b></td><td>${c.statsLocked ? (c.baseDex||10) : `<input type="number" min="3" max="18" value="${c.baseDex||10}" onchange="UBASE('baseDex',this.value)" style="width:75px;">`}</td><td style="color:#aaa;">${c.dexBonus>0?'+'+c.dexBonus:'—'}</td><td><b>${dex}</b></td><td class="stat-mod">${MS(dm)}</td></tr>
+            <tr><td><b>Телосложение</b></td><td>${c.statsLocked ? (c.baseCon||10) : `<input type="number" min="3" max="18" value="${c.baseCon||10}" onchange="UBASE('baseCon',this.value)" style="width:75px;">`}</td><td style="color:#aaa;">${c.conBonus>0?'+'+c.conBonus:'—'}</td><td><b>${con}</b></td><td class="stat-mod">${MS(cm)}</td></tr>
+            <tr><td><b>Интеллект</b></td><td>${c.statsLocked ? (c.baseInt||10) : `<input type="number" min="3" max="18" value="${c.baseInt||10}" onchange="UBASE('baseInt',this.value)" style="width:75px;">`}</td><td style="color:#aaa;">${c.intBonus>0?'+'+c.intBonus:'—'}</td><td><b>${intl}</b></td><td class="stat-mod">${MS(im)}</td></tr>
+            <tr><td><b>Мудрость</b></td><td>${c.statsLocked ? (c.baseWis||10) : `<input type="number" min="3" max="18" value="${c.baseWis||10}" onchange="UBASE('baseWis',this.value)" style="width:75px;">`}</td><td style="color:#aaa;">${c.wisBonus>0?'+'+c.wisBonus:'—'}</td><td><b>${wis}</b></td><td class="stat-mod">${MS(wm)}</td></tr>
+            <tr><td><b>Харизма</b></td><td>${c.statsLocked ? (c.baseCha||10) : `<input type="number" min="3" max="18" value="${c.baseCha||10}" onchange="UBASE('baseCha',this.value)" style="width:75px;">`}</td><td style="color:#aaa;">${c.chaBonus>0?'+'+c.chaBonus:'—'}</td><td><b>${cha}</b></td><td class="stat-mod">${MS(hm)}</td></tr>
+        </table>
 
-            <div>
-                <h3 style="margin-top:0;">💪 Характеристики</h3>
-                ${!c.statsLocked ? `
-                    <div style="margin-bottom:8px; display:flex; gap:6px; flex-wrap:wrap;">
-                        <button class="btn-small" style="flex:1;" onclick="AUTO_STATS()">⚡ Авто-подбор</button>
-                        <button class="btn-small" style="flex:1;" onclick="ROLL_STATS_4D6()">🎲 Бросить 4к6</button>
-                        <button class="btn-small btn-save" style="flex:1;" onclick="LKSTATS()">🔒 Сохранить</button>
-                    </div>` : ''}
-                <table>
-                    <colgroup>
-                        <col style="width:34%;">
-                        <col style="width:20%;">
-                        <col style="width:14%;">
-                        <col style="width:16%;">
-                        <col style="width:16%;">
-                    </colgroup>
-                    <tr><th>Параметр</th><th>База</th><th>Раса</th><th>Итог</th><th>Мод</th></tr>
-                    <tr><td><b>Сила</b></td><td>${c.statsLocked ? (c.baseStr||10) : `<input type="number" min="3" max="18" value="${c.baseStr||10}" onchange="UBASE('baseStr',this.value)" style="padding:4px;">`}</td><td style="color:#aaa;">${c.strBonus>0?'+'+c.strBonus:'—'}</td><td><b>${str}</b></td><td class="stat-mod">${MS(sm)}</td></tr>
-                    <tr><td><b>Ловкость</b></td><td>${c.statsLocked ? (c.baseDex||10) : `<input type="number" min="3" max="18" value="${c.baseDex||10}" onchange="UBASE('baseDex',this.value)" style="padding:4px;">`}</td><td style="color:#aaa;">${c.dexBonus>0?'+'+c.dexBonus:'—'}</td><td><b>${dex}</b></td><td class="stat-mod">${MS(dm)}</td></tr>
-                    <tr><td><b>Телослож.</b></td><td>${c.statsLocked ? (c.baseCon||10) : `<input type="number" min="3" max="18" value="${c.baseCon||10}" onchange="UBASE('baseCon',this.value)" style="padding:4px;">`}</td><td style="color:#aaa;">${c.conBonus>0?'+'+c.conBonus:'—'}</td><td><b>${con}</b></td><td class="stat-mod">${MS(cm)}</td></tr>
-                    <tr><td><b>Интеллект</b></td><td>${c.statsLocked ? (c.baseInt||10) : `<input type="number" min="3" max="18" value="${c.baseInt||10}" onchange="UBASE('baseInt',this.value)" style="padding:4px;">`}</td><td style="color:#aaa;">${c.intBonus>0?'+'+c.intBonus:'—'}</td><td><b>${intl}</b></td><td class="stat-mod">${MS(im)}</td></tr>
-                    <tr><td><b>Мудрость</b></td><td>${c.statsLocked ? (c.baseWis||10) : `<input type="number" min="3" max="18" value="${c.baseWis||10}" onchange="UBASE('baseWis',this.value)" style="padding:4px;">`}</td><td style="color:#aaa;">${c.wisBonus>0?'+'+c.wisBonus:'—'}</td><td><b>${wis}</b></td><td class="stat-mod">${MS(wm)}</td></tr>
-                    <tr><td><b>Харизма</b></td><td>${c.statsLocked ? (c.baseCha||10) : `<input type="number" min="3" max="18" value="${c.baseCha||10}" onchange="UBASE('baseCha',this.value)" style="padding:4px;">`}</td><td style="color:#aaa;">${c.chaBonus>0?'+'+c.chaBonus:'—'}</td><td><b>${cha}</b></td><td class="stat-mod">${MS(hm)}</td></tr>
-                </table>
-
-                <h3>💎 Магические ячейки</h3>
-                <div style="background:#181715; border:1px solid #36322b; padding:10px 12px; border-radius:8px; font-size:0.94rem;">
-                    ${(() => {
-                        const maxSlots = GET_SPELL_SLOTS(c);
-                        const usedSlots = c.usedSpellSlots || {};
-                        let result = '';
-                        if (c.className === 'Колдун') {
-                            let pactStr = '';
-                            for (let i = 1; i <= 5; i++) {
-                                if (maxSlots[i]) pactStr += `<b>${i} круг (Договор):</b> ${maxSlots[i] - (usedSlots[i] || 0)} / ${maxSlots[i]} `;
-                            }
-                            result += pactStr ? pactStr : '—';
-                            let arcanumStr = '';
-                            for (let i = 6; i <= 9; i++) {
-                                if (maxSlots[i]) arcanumStr += `${i} кр.: ${maxSlots[i] - (usedSlots[i] || 0)}/${maxSlots[i]} `;
-                            }
-                            if (arcanumStr) result += '<br><b>Арканумы:</b> ' + arcanumStr;
-                        } else {
-                            for (let i = 1; i <= 9; i++) {
-                                if (maxSlots[i]) result += `<span style="display:inline-block; margin-right:10px;"><b>${i} круг:</b> ${maxSlots[i] - (usedSlots[i] || 0)}/${maxSlots[i]}</span>`;
-                            }
-                        }
-                        return result || '<span style="color:#888;">Нет ячеек заклинаний</span>';
-                    })()}
-                </div>
-            </div>
-        </div>
+        <h3>🛡️ Боевые параметры и Магические ячейки</h3>
+        <table>
+            <tr><td style="width:42%;">Хиты (текущие / максимум)</td><td><div style="display:flex; align-items:center; justify-content:center; gap:8px;"><input type="number" min="0" max="${c.maxHp||10}" value="${c.hp??10}" onchange="UHP('hp',this.value)" style="width:85px;"> <span>/ <b>${c.maxHp||10} ХП</b></span></div></td></tr>
+            <tr><td>Временные ХП</td><td><input type="number" min="0" value="${c.tempHP||0}" onchange="UHP('tempHP',this.value)" style="width:85px;"></td></tr>
+            <tr><td>Класс Брони (КБ)</td><td><b>${acv}</b>${c.hasArmorPenalty?' <span style="color:#e06060;">(Штраф: нет владения доспехом)</span>':''}</td></tr>
+            <tr><td>Инициатива / Скорость</td><td><b>${MS(dm + (c.initiativeBonus || 0))}</b> &nbsp;|&nbsp; <b>${parseInt(c.speed) || 30} футов</b></td></tr>
+            <tr><td>Кость хитов</td><td><b>${c.hitDice||'—'}</b> (доступно: ${Math.max(0, (c.level||1)-(c.spentHitDice||0))} из ${c.level||1})</td></tr>
+            <tr><td>Пассивная Внимательность</td><td><b>${pw}</b></td></tr>
+            <tr><td>Грузоподъёмность</td><td>${cpt}</td></tr>
+            <tr><td>Вдохновение</td><td><input type="text" value="${c.inspiration||'0'}" onchange="UCF('inspiration',this.value)" style="width:85px;"></td></tr>
+            <tr><td>Магические ячейки</td><td>${(() => {
+                const maxSlots = GET_SPELL_SLOTS(c);
+                const usedSlots = c.usedSpellSlots || {};
+                let result = '';
+                if (c.className === 'Колдун') {
+                    for (let i = 1; i <= 5; i++) if (maxSlots[i]) result += `<b>${i} круг (Договор):</b> ${maxSlots[i] - (usedSlots[i] || 0)}/${maxSlots[i]} `;
+                    for (let i = 6; i <= 9; i++) if (maxSlots[i]) result += ` | <b>Арканум ${i} кр.:</b> ${maxSlots[i] - (usedSlots[i] || 0)}/${maxSlots[i]} `;
+                } else {
+                    for (let i = 1; i <= 9; i++) if (maxSlots[i]) result += `<span style="margin-right:10px;"><b>${i} круг:</b> ${maxSlots[i] - (usedSlots[i] || 0)}/${maxSlots[i]}</span>`;
+                }
+                return result || '<span style="color:#888;">Нет ячеек заклинаний</span>';
+            })()}</td></tr>
+        </table>
     `;
 
-    // --- БЛОК 2: НАВЫКИ И СПАСБРОСКИ ---
+    // --- РАЗДЕЛ 2: СПАСБРОСКИ И НАВЫКИ (В ОДНУ КОЛОНКУ!) ---
     const cst=GCST(c);
     const hasRingProt = c.inventory && c.inventory.some(i => i.equipped && (i.name || '').toLowerCase().includes('кольцо защиты'));
     const ringBonus = hasRingProt ? 1 : 0;
     const svs=[{n:'Сила',m:sm,p:cst.strength},{n:'Ловкость',m:dm,p:cst.dexterity},{n:'Телосложение',m:cm,p:cst.constitution},{n:'Интеллект',m:im,p:cst.intelligence},{n:'Мудрость',m:wm,p:cst.wisdom},{n:'Харизма',m:hm,p:cst.charisma}];
-    let svHTML=''; svs.forEach(s=>{svHTML+='<tr><td>'+(s.p?'● ':'○ ')+s.n+'</td><td class="stat-mod">'+MS((s.p?s.m+pb:s.m)+ringBonus)+'</td></tr>';});
+    let svHTML=''; svs.forEach(s=>{svHTML+='<tr><td>'+(s.p?'● ':'○ ')+s.n+'</td><td class="stat-mod" style="width:110px;">'+MS((s.p?s.m+pb:s.m)+ringBonus)+'</td></tr>';});
 
     let sHTML='';
     const smods={'Атлетика':sm,'Акробатика':dm,'Ловкость рук':dm,'Скрытность':dm,'Магия':im,'История':im,'Расследование':im,'Природа':im,'Религия':im,'Обращение с животными':wm,'Проницательность':wm,'Медицина':wm,'Восприятие':wm,'Выживание':wm,'Обман':hm,'Запугивание':hm,'Выступление':hm,'Убеждение':hm};
@@ -1812,53 +1783,44 @@ function OCS() {
         else chs.forEach(s => { scHTML += '<span class="chosen-skill locked">' + s + '</span> '; });
         scHTML += '</div>';
         if (!actualSkl && actualRem <= 0) {
-            scHTML += '<button class="btn-small btn-save" style="margin-bottom:8px;" onclick="LKSK()">🔒 Сохранить навыки</button>';
+            scHTML += '<button class="btn-save" style="margin-bottom:10px;" onclick="LKSK()">🔒 Сохранить навыки</button>';
         }
     }
-    if(skl&&rem===0)scHTML+='<p style="color:#52b758; margin-bottom:8px; font-size:0.9rem;">✅ Все навыки распределены и сохранены</p>';
-    if(skl&&rem>0)scHTML+='<p style="color:#c97e2e; margin-bottom:8px; font-size:0.9rem;">⚠️ Свободные навыки ('+rem+')! <button class="btn-small btn-warn" onclick="ULSK()">Выбрать</button></p>';
+    if(skl&&rem===0)scHTML+='<p style="color:#52b758; margin-bottom:8px;">✅ Все навыки распределены и сохранены</p>';
+    if(skl&&rem>0)scHTML+='<p style="color:#c97e2e; margin-bottom:8px;">⚠️ Свободные навыки ('+rem+')! <button class="btn-small btn-warn" onclick="ULSK()">Выбрать</button></p>';
 
     const sectionSkillsHTML = `
+        <h3>🛡️ Спасброски</h3>
+        <table><tr><th>Характеристика</th><th style="width:110px;">Бонус</th></tr>${svHTML}</table>
+
+        <h3>🎯 Навыки <small style="color:#aaa; font-weight:normal;">(● владение, ★ экспертность)</small></h3>
         ${scHTML}
-        <div class="sheet-grid-skills">
-            <div>
-                <h3 style="margin-top:0;">🛡️ Спасброски</h3>
-                <table><colgroup><col style="width:72%;"><col style="width:28%;"></colgroup><tr><th>Характеристика</th><th>Бонус</th></tr>${svHTML}</table>
-                <div style="background:#181715; border:1px solid #36322b; padding:10px; border-radius:8px; margin-top:10px; font-size:0.92rem;">
-                    👁️ <b>Пассивная Внимательность:</b> <span style="color:#e6c88c; font-weight:bold;">${pw}</span>
-                </div>
-            </div>
-            <div>
-                <h3 style="margin-top:0;">🎯 Навыки <small style="color:#888; font-weight:normal;">(● владение, ★ экспертность)</small></h3>
-                <table><colgroup><col style="width:76%;"><col style="width:24%;"></colgroup><tr><th>Навык</th><th>Бонус</th></tr>${sHTML}</table>
-            </div>
-        </div>
+        <table><tr><th>Навык</th><th style="width:110px;">Бонус</th></tr>${sHTML}</table>
     `;
 
-    // --- БЛОК 3: ЧЕРТЫ И АРСЕНАЛ ---
+    // --- РАЗДЕЛ 3: ЧЕРТЫ, СПОСОБНОСТИ И АРСЕНАЛ (В ОДНУ КОЛОНКУ!) ---
     const sectionFeaturesHTML = `
-        <div class="sheet-grid-2col">
-            <div>
-                <h3 style="margin-top:0;">⚔️ Сводка оружия и заклинаний</h3>
-                ${GENERATE_SHEET_ATTACKS_SUMMARY(c)}
-            </div>
-            <div>
-                <h3 style="margin-top:0;">🌟 Черты и Особенности расы</h3>
-                <div style="background:#181715; border:1px solid #36322b; padding:10px 12px; border-radius:8px; margin-bottom:10px; font-size:0.92rem;">
-                    <b style="color:#c9a96e;">Черты (Feats):</b> ${c.chosenFeats && c.chosenFeats.length > 0 ? c.chosenFeats.join(', ') : '<span style="color:#888;">Нет выбранных черт</span>'}
-                </div>
-                <div style="background:#181715; border:1px solid #36322b; padding:10px 12px; border-radius:8px; margin-bottom:10px; font-size:0.92rem;">
-                    <b style="color:#c9a96e;">Особенности расы (${c.race || '—'}):</b><br>${GRT(c)}
-                    ${rsp.length ? '<br><b style="color:#c9a96e;">Врождённые заклинания:</b> ' + rsp.join(', ') : ''}
-                </div>
-                <div style="background:#181715; border:1px solid #36322b; padding:10px 12px; border-radius:8px; font-size:0.92rem;">
-                    <b style="color:#c9a96e;">Прочие способности:</b><br>${c.abilities || '<span style="color:#888;">Нет записей</span>'}
-                </div>
-            </div>
+        <h3>⚔️ Сводка оружия и заклинаний</h3>
+        ${GENERATE_SHEET_ATTACKS_SUMMARY(c)}
+
+        <h3>🌟 Выбранные черты (Feats)</h3>
+        <div style="background:#181715; border:1px solid #36322b; padding:12px 14px; border-radius:8px; margin-bottom:12px;">
+            ${c.chosenFeats && c.chosenFeats.length > 0 ? '<b>' + c.chosenFeats.join(', ') + '</b>' : '<span style="color:#888;">Нет выбранных черт</span>'}
+        </div>
+
+        <h3>🧬 Особенности расы (${c.race || 'Раса не выбрана'})</h3>
+        <div style="background:#181715; border:1px solid #36322b; padding:12px 14px; border-radius:8px; margin-bottom:12px;">
+            ${GRT(c)}
+            ${rsp.length ? '<br><br><b style="color:#c9a96e;">Врождённые заклинания:</b> ' + rsp.join(', ') : ''}
+        </div>
+
+        <h3>📜 Прочие способности и владения</h3>
+        <div style="background:#181715; border:1px solid #36322b; padding:12px 14px; border-radius:8px;">
+            ${c.abilities || '<span style="color:#888;">Нет дополнительных записей</span>'}
         </div>
     `;
 
-    // --- БЛОК 4: ХАРАКТЕР И БИОГРАФИЯ ---
+    // --- РАЗДЕЛ 4: МИРОВОЗЗРЕНИЕ, ЯЗЫКИ И ХАРАКТЕР (В ОДНУ КОЛОНКУ!) ---
     let bt=[],bi=[],bb=[],bf=[];
     if(c.background&&gameData.backgrounds[c.background]){
         const bd=gameData.backgrounds[c.background];
@@ -1869,43 +1831,28 @@ function OCS() {
     const alLock=c.alignmentLocked||false;
 
     const sectionBioHTML = `
-        <div class="sheet-grid-2col">
-            <div>
-                <h3 style="margin-top:0;">🧭 Мировоззрение и Языки</h3>
-                <table>
-                    <colgroup><col style="width:38%;"><col style="width:62%;"></colgroup>
-                    <tr><td>Мировоззрение</td><td>${alLock ? '<span class="locked-field">'+(c.alignment||'—')+'</span>' : '<select onchange="STV(\'alignment\',this.value)">'+ao+'</select><input type="text" value="'+(c.alignment||'')+'" onchange="STV(\'alignment\',this.value)" placeholder="Своё..." style="margin-top:4px;"><button class="btn-small btn-save" style="margin-top:4px; width:100%;" onclick="LKT(\'alignment\')">🔒 Сохранить</button>'}</td></tr>
-                    <tr><td>Известные языки</td><td><b>${al.length ? al.join(', ') : '—'}</b></td></tr>
-                    ${lch ? '<tr><td colspan="2">'+lch+'</td></tr>' : ''}
-                </table>
-                <h3>📖 Предыстория персонажа</h3>
-                ${RSF(c)}
-            </div>
-            <div>
-                <h3 style="margin-top:0;">🎭 Черты характера</h3>
-                ${RTS('traits',c,bt)}
-                <h3>⚖️ Идеалы</h3>
-                ${RTS('ideals',c,bi)}
-                <h3>🤝 Привязанности</h3>
-                ${RTS('bonds',c,bb)}
-                <h3>💔 Слабости</h3>
-                ${RTS('flaws',c,bf)}
-            </div>
-        </div>
+        <h3>🧭 Мировоззрение и Языки</h3>
+        <table>
+            <tr><td style="width:36%;">Мировоззрение</td><td>${alLock ? '<span class="locked-field">'+(c.alignment||'—')+'</span>' : '<select onchange="STV(\'alignment\',this.value)">'+ao+'</select><input type="text" value="'+(c.alignment||'')+'" onchange="STV(\'alignment\',this.value)" placeholder="Своё..." style="margin-top:6px;"><button class="btn-small btn-save" style="margin-top:6px;" onclick="LKT(\'alignment\')">Сохранить</button>'}</td></tr>
+            <tr><td>Известные языки</td><td><b>${al.length ? al.join(', ') : '—'}</b></td></tr>
+            ${lch ? '<tr><td colspan="2">'+lch+'</td></tr>' : ''}
+        </table>
+
+        <h3>🎭 Черты характера</h3>
+        ${RTS('traits',c,bt)}
+        <h3>⚖️ Идеалы</h3>
+        ${RTS('ideals',c,bi)}
+        <h3>🤝 Привязанности</h3>
+        ${RTS('bonds',c,bb)}
+        <h3>💔 Слабости</h3>
+        ${RTS('flaws',c,bf)}
+        <h3>📖 История персонажа</h3>
+        ${RSF(c)}
     `;
 
-    // Сборка выбранной вкладки (или всего листа сразу при curTab === 'all')
     let finalBodyHTML = '';
     if (curTab === 'all') {
-        finalBodyHTML = `
-            ${sectionMainHTML}
-            <hr style="border:none; border-top:1px solid #3d3830; margin:18px 0;">
-            ${sectionSkillsHTML}
-            <hr style="border:none; border-top:1px solid #3d3830; margin:18px 0;">
-            ${sectionFeaturesHTML}
-            <hr style="border:none; border-top:1px solid #3d3830; margin:18px 0;">
-            ${sectionBioHTML}
-        `;
+        finalBodyHTML = sectionMainHTML + sectionSkillsHTML + sectionFeaturesHTML + sectionBioHTML;
     } else if (curTab === 'main') {
         finalBodyHTML = sectionMainHTML;
     } else if (curTab === 'skills') {
@@ -1920,7 +1867,7 @@ function OCS() {
         topAlerts +
         tabsNavHTML +
         finalBodyHTML +
-        '<div style="margin-top:16px; text-align:right; border-top:1px solid #3d3830; padding-top:12px;">' +
+        '<div style="margin-top:18px; text-align:right; border-top:1px solid #3d3830; padding-top:12px;">' +
             '<button onclick="CCS()">Закрыть лист</button>' +
         '</div>';
     OM('char-sheet-modal');
