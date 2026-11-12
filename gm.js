@@ -871,6 +871,58 @@ function GENERATE_WEATHER_OVERLAY_HTML(weather) {
     return '';
 }
 
+// Параметры камеры карты (Масштаб и сдвиг по X / Y)
+window._mapCam = window._mapCam || { zoom: 1, panX: 0, panY: 0, isPanning: false, startX: 0, startY: 0 };
+
+function MOVE_MAP_CAMERA(dx, dy) {
+    window._mapCam.panX += dx;
+    window._mapCam.panY += dy;
+    APPLY_MAP_CAMERA_TRANSFORM();
+}
+
+function ZOOM_MAP_CAMERA(deltaZoom) {
+    const nextZoom = Math.max(0.6, Math.min(3.5, Math.round((window._mapCam.zoom + deltaZoom) * 100) / 100));
+    window._mapCam.zoom = nextZoom;
+    APPLY_MAP_CAMERA_TRANSFORM();
+}
+
+function RESET_MAP_CAMERA() {
+    window._mapCam.zoom = 1;
+    window._mapCam.panX = 0;
+    window._mapCam.panY = 0;
+    APPLY_MAP_CAMERA_TRANSFORM();
+}
+
+function APPLY_MAP_CAMERA_TRANSFORM() {
+    const vp = document.getElementById('map-viewport');
+    const zoomLbl = document.getElementById('map-cam-zoom-lbl');
+    if (vp) {
+        vp.style.transform = `translate(${window._mapCam.panX}px, ${window._mapCam.panY}px) scale(${window._mapCam.zoom})`;
+    }
+    if (zoomLbl) {
+        zoomLbl.textContent = Math.round(window._mapCam.zoom * 100) + '%';
+    }
+}
+
+// Управление камерой карты с клавиатуры (Стрелки Вверх/Вниз/Влево/Вправо и +/-)
+if (!window._mapKeyboardBound) {
+    window._mapKeyboardBound = true;
+    window.addEventListener('keydown', function(e) {
+        const tag = document.activeElement ? document.activeElement.tagName : '';
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+        if (document.querySelector('.modal.active')) return; // Не двигаем карту, если открыто модальное окно
+
+        const step = 45;
+        if (e.key === 'ArrowUp') { e.preventDefault(); MOVE_MAP_CAMERA(0, step); }
+        else if (e.key === 'ArrowDown') { e.preventDefault(); MOVE_MAP_CAMERA(0, -step); }
+        else if (e.key === 'ArrowLeft') { e.preventDefault(); MOVE_MAP_CAMERA(step, 0); }
+        else if (e.key === 'ArrowRight') { e.preventDefault(); MOVE_MAP_CAMERA(-step, 0); }
+        else if (e.key === '+' || e.key === '=') { ZOOM_MAP_CAMERA(0.2); }
+        else if (e.key === '-' || e.key === '_') { ZOOM_MAP_CAMERA(-0.2); }
+        else if (e.key === '0') { RESET_MAP_CAMERA(); }
+    });
+}
+
 function RENDER_MAP_AREA() {
     const mapArea = document.getElementById('map-area');
     if (!mapArea) return;
@@ -882,7 +934,7 @@ function RENDER_MAP_AREA() {
     const myPlayerIdx = (sess && sess.role === 'player') ? (sess.playerIdx || 0) : -1;
     const cs = GC();
 
-    // 1. Шапка над картой: только «🗺️ Карта» и название локации посередине (без лишней кнопки лавки!)
+    // 1. Шапка над картой
     const mapPanel = mapArea.parentElement;
     if (mapPanel) {
         const h2 = mapPanel.querySelector('h2');
@@ -895,13 +947,13 @@ function RENDER_MAP_AREA() {
                 <span>🗺️ Карта</span>
                 <span style="color:#c9a96e; font-size:1.05rem; font-weight:bold; text-align:center; flex:1;">
                     ${locTitle}${fogTag}
-                    ${st.desc && (!st.fog || isGM) ? `<div style="color:#9e988e; font-size:0.8rem; font-weight:normal; margin-top:2px;">${st.desc}</div>` : ''}
+                    ${st.desc && (!st.fog || isGM) ? `<div style="color:#9e988e; font-size:0.85rem; font-weight:normal; margin-top:2px;">${st.desc}</div>` : ''}
                 </span>
             `;
         }
     }
 
-    // Единственная аккуратная кнопка Лавки у Игрока — под кнопкой «🎒 Рюкзак» слева
+    // Кнопка Лавки у Игрока слева
     let leftShopBtn = document.getElementById('player-left-shop-btn');
     const leftCol = document.getElementById('left-column');
     if (leftCol && !isGM) {
@@ -929,11 +981,31 @@ function RENDER_MAP_AREA() {
     mapArea.style.overflow = 'hidden';
     mapArea.style.padding = '0';
     mapArea.style.userSelect = 'none';
-    mapArea.style.cursor = (isGM && window._gmPinPlacementMode) ? 'crosshair' : 'default';
+    mapArea.style.background = '#0d0c0b';
+    mapArea.style.cursor = (isGM && window._gmPinPlacementMode) ? 'crosshair' : 'grab';
 
+    // Колёсико мыши над картой — плавный зум камеры
+    mapArea.onwheel = function(e) {
+        if (showVN) return;
+        e.preventDefault();
+        const delta = e.deltaY < 0 ? 0.15 : -0.15;
+        ZOOM_MAP_CAMERA(delta);
+    };
+
+    // Зажатие мыши по пустому фону карты — перетаскивание самой карты (панорамирование)
+    mapArea.onmousedown = function(e) {
+        if (e.button !== 0 || window._draggingMapObj || window._gmPinPlacementMode || showVN) return;
+        window._mapCam.isPanning = true;
+        window._mapCam.startX = e.clientX - window._mapCam.panX;
+        window._mapCam.startY = e.clientY - window._mapCam.panY;
+        mapArea.style.cursor = 'grabbing';
+    };
+
+    // Вычисляем координаты клика и перетаскивания внутри подвижного #map-viewport (чтобы фишки стояли точно на своих местах при любом сдвиге и зуме!)
     mapArea.onclick = function(e) {
         if (!isGM || !window._gmPinPlacementMode) return;
-        const rect = mapArea.getBoundingClientRect();
+        const vp = document.getElementById('map-viewport') || mapArea;
+        const rect = vp.getBoundingClientRect();
         const xPct = Math.round(((e.clientX - rect.left) / rect.width) * 1000) / 10;
         const yPct = Math.round(((e.clientY - rect.top) / rect.height) * 1000) / 10;
         window._gmPinPlacementMode = false;
@@ -941,21 +1013,33 @@ function RENDER_MAP_AREA() {
     };
 
     mapArea.onmousemove = function(e) {
-        if (!window._draggingMapObj) return;
-        const rect = mapArea.getBoundingClientRect();
-        const xPct = Math.max(4, Math.min(96, Math.round(((e.clientX - rect.left) / rect.width) * 1000) / 10));
-        const yPct = Math.max(6, Math.min(94, Math.round(((e.clientY - rect.top) / rect.height) * 1000) / 10));
-        const el = document.getElementById(window._draggingMapObj.domId);
-        if (el) {
-            el.style.left = xPct + '%';
-            el.style.top = yPct + '%';
+        if (window._draggingMapObj) {
+            const vp = document.getElementById('map-viewport') || mapArea;
+            const rect = vp.getBoundingClientRect();
+            const xPct = Math.max(2, Math.min(98, Math.round(((e.clientX - rect.left) / rect.width) * 1000) / 10));
+            const yPct = Math.max(3, Math.min(97, Math.round(((e.clientY - rect.top) / rect.height) * 1000) / 10));
+            const el = document.getElementById(window._draggingMapObj.domId);
+            if (el) {
+                el.style.left = xPct + '%';
+                el.style.top = yPct + '%';
+            }
+            window._draggingMapObj.lastX = xPct;
+            window._draggingMapObj.lastY = yPct;
+            window._draggingMapObj.moved = true;
+            return;
         }
-        window._draggingMapObj.lastX = xPct;
-        window._draggingMapObj.lastY = yPct;
-        window._draggingMapObj.moved = true;
+        if (window._mapCam.isPanning) {
+            window._mapCam.panX = e.clientX - window._mapCam.startX;
+            window._mapCam.panY = e.clientY - window._mapCam.startY;
+            APPLY_MAP_CAMERA_TRANSFORM();
+        }
     };
 
     mapArea.onmouseup = function() {
+        if (window._mapCam.isPanning) {
+            window._mapCam.isPanning = false;
+            mapArea.style.cursor = (isGM && window._gmPinPlacementMode) ? 'crosshair' : 'grab';
+        }
         if (!window._draggingMapObj) return;
         const drag = window._draggingMapObj;
         window._draggingMapObj = null;
@@ -976,18 +1060,18 @@ function RENDER_MAP_AREA() {
     let baseMapHTML = '';
 
     if (st.fog && !isGM) {
-        mapArea.style.background = '#0d0d0d';
         baseMapHTML = `
             <div style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:30px; color:#888;">
                 <div style="font-size:3rem; margin-bottom:10px;">🌫️</div>
                 <div style="font-size:1.15rem; color:#c9a96e; font-weight:bold;">Скрыто туманом войны</div>
             </div>`;
     } else if (st.img) {
-        baseMapHTML = `<img src="${st.img}" alt="Карта" style="width:100%; height:100%; object-fit:cover; display:block; pointer-events:none; ${st.fog && isGM ? 'opacity:0.45;' : ''}">`;
+        // ВАЖНО: object-fit: contain гарантирует, что даже вертикальная картинка НИКОГДА не обрежется на ПК,
+        // а с помощью стрелок и зума её можно приблизить и прокрутить вверх/вниз!
+        baseMapHTML = `<img src="${st.img}" alt="Карта" style="width:100%; height:100%; object-fit:contain; display:block; pointer-events:none; ${st.fog && isGM ? 'opacity:0.45;' : ''}">`;
     } else {
-        mapArea.style.background = 'radial-gradient(circle, #25221e 0%, #141312 100%)';
         baseMapHTML = `
-            <div style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:25px; text-align:center; pointer-events:none;">
+            <div style="width:100%; height:100%; background:radial-gradient(circle, #25221e 0%, #141312 100%); display:flex; flex-direction:column; align-items:center; justify-content:center; padding:25px; text-align:center; pointer-events:none;">
                 <div style="font-size:2.4rem; margin-bottom:8px;">🗺️</div>
                 <div style="font-size:1.25rem; color:#e6c88c; font-weight:bold;">📍 ${st.title || 'Карта кампании'}</div>
                 <div style="font-size:0.95rem; color:#aba498; margin-top:6px; max-width:85%;">${st.desc || ''}</div>
@@ -1009,7 +1093,7 @@ function RENDER_MAP_AREA() {
     let topFloatingButtonsHTML = '';
     if (playerLeftVN && vn && vn.active && !showVN) {
         topFloatingButtonsHTML = `
-            <div style="position:absolute; top:10px; left:50%; transform:translateX(-50%); z-index:9;">
+            <div style="position:absolute; top:10px; left:50%; transform:translateX(-50%); z-index:12;">
                 <button class="btn-small" style="background:#7c3aed; color:#fff; border-color:#c084fc;" onclick="event.stopPropagation(); PLAYER_REJOIN_VN_DIALOG();">
                     🎭 Вернуться в диалог с «${vn.name}»
                 </button>
@@ -1021,7 +1105,7 @@ function RENDER_MAP_AREA() {
         const curTurnIdx = (st.turnOrder.currentIdx || 0) % st.tokens.length;
         const activeTok = st.tokens[curTurnIdx];
         turnBarHTML = `
-            <div style="position:absolute; top:8px; left:10px; right:10px; background:rgba(18,17,16,0.92); border:1px solid #c9a96e; border-radius:8px; padding:6px 12px; z-index:8; display:flex; justify-content:space-between; align-items:center; gap:8px; box-shadow:0 4px 14px rgba(0,0,0,0.8);">
+            <div style="position:absolute; top:8px; left:10px; right:10px; background:rgba(18,17,16,0.92); border:1px solid #c9a96e; border-radius:8px; padding:6px 12px; z-index:11; display:flex; justify-content:space-between; align-items:center; gap:8px; box-shadow:0 4px 14px rgba(0,0,0,0.8);">
                 <div style="font-size:0.88rem; color:#e6c88c;">
                     ⚔️ <b>Раунд ${st.turnOrder.round || 1}</b> • Сейчас ходит: <b style="color:#4cd964; font-size:0.98rem;">${activeTok ? activeTok.name : '—'}</b>
                 </div>
@@ -1101,8 +1185,34 @@ function RENDER_MAP_AREA() {
             </div>`;
     }
 
-    // 5. РЕЖИМ ВИЗУАЛЬНОЙ НОВЕЛЛЫ:
-    // СВЕРХУ — Реплика NPC, а НИЖЕ НЕЁ в нижней части карты — ответы игроков (и собственные, и выбранные)!
+    // Пульт управления камерой карты (Стрелки + Зум) в правом нижнем углу карты
+    let cameraControlsHTML = '';
+    if ((!st.fog || isGM) && !showVN) {
+        const camBtnStyle = 'width:30px; height:30px; padding:0; display:flex; align-items:center; justify-content:center; background:rgba(24,23,21,0.9); color:#e6c88c; border:1px solid #524a3d; border-radius:6px; font-size:0.9rem; box-shadow:none;';
+        cameraControlsHTML = `
+            <div onmousedown="event.stopPropagation();" onclick="event.stopPropagation();"
+                 style="position:absolute; bottom:10px; right:10px; z-index:12; background:rgba(15,14,13,0.88); border:1px solid #423c33; border-radius:10px; padding:6px; display:flex; flex-direction:column; align-items:center; gap:4px; box-shadow:0 4px 14px rgba(0,0,0,0.8);">
+                <div style="display:grid; grid-template-columns:30px 30px 30px; gap:3px; justify-items:center;">
+                    <div></div>
+                    <button style="${camBtnStyle}" title="Сдвинуть карту вверх (Стрелка Вверх)" onclick="MOVE_MAP_CAMERA(0, 55)">⬆️</button>
+                    <div></div>
+                    <button style="${camBtnStyle}" title="Сдвинуть карту влево (Стрелка Влево)" onclick="MOVE_MAP_CAMERA(55, 0)">⬅️</button>
+                    <button style="${camBtnStyle}" title="Сбросить камеру по центру (Клавиша 0)" onclick="RESET_MAP_CAMERA()">🎯</button>
+                    <button style="${camBtnStyle}" title="Сдвинуть карту вправо (Стрелка Вправо)" onclick="MOVE_MAP_CAMERA(-55, 0)">➡️</button>
+                    <div></div>
+                    <button style="${camBtnStyle}" title="Сдвинуть карту вниз (Стрелка Вниз)" onclick="MOVE_MAP_CAMERA(0, -55)">⬇️</button>
+                    <div></div>
+                </div>
+                <div style="display:flex; align-items:center; gap:4px; margin-top:2px;">
+                    <button style="${camBtnStyle}" title="Отдалить (-)" onclick="ZOOM_MAP_CAMERA(-0.2)">➖</button>
+                    <span id="map-cam-zoom-lbl" style="font-size:0.75rem; color:#c9a96e; font-weight:bold; min-width:38px; text-align:center;">${Math.round(window._mapCam.zoom * 100)}%</span>
+                    <button style="${camBtnStyle}" title="Приблизить (+)" onclick="ZOOM_MAP_CAMERA(0.2)">➕</button>
+                </div>
+            </div>
+        `;
+    }
+
+    // Режим Визуальной Новеллы
     let vnOverlayHTML = '';
     if (showVN) {
         const portraitHTML = vn.avatar
@@ -1164,7 +1274,7 @@ function RENDER_MAP_AREA() {
         }
 
         vnOverlayHTML = `
-            <div style="position:absolute; inset:0; background:rgba(0,0,0,0.4); display:flex; flex-direction:column; justify-content:flex-end; z-index:10;" onclick="event.stopPropagation();">
+            <div style="position:absolute; inset:0; background:rgba(0,0,0,0.4); display:flex; flex-direction:column; justify-content:flex-end; z-index:14;" onclick="event.stopPropagation();">
                 <div style="flex:1; display:flex; align-items:flex-end; justify-content:center; padding-bottom:4px; overflow:hidden; pointer-events:none;">
                     ${portraitHTML}
                 </div>
@@ -1180,23 +1290,31 @@ function RENDER_MAP_AREA() {
                             </div>
                             ${isGM ? `<button class="btn-small btn-danger" style="padding:3px 9px; font-size:0.78rem;" onclick="GM_HIDE_VN_DIALOG()">✕ Завершить диалог</button>` : ''}
                         </div>
-
-                        <!-- 1. Реплика NPC сверху -->
                         <div style="color:#f5f3ef; font-size:1.02rem; line-height:1.45; overflow-y:auto; max-height:70px; padding-right:6px; font-family:Georgia, serif;">
                             «${vn.text || '...'}»
                         </div>
-
-                        <!-- 2. Ответы игроков (собственные или выбранные) — ПРЯМО ПОД РЕПЛИКОЙ NPC! -->
                         ${playerRepliesBelowHTML}
-
-                        <!-- 3. Кнопки выбора и строка ввода -->
                         ${playerControlsHTML}
                     </div>
                 </div>
             </div>`;
     }
 
-    mapArea.innerHTML = baseMapHTML + gridOverlayHTML + weatherOverlayHTML + topFloatingButtonsHTML + turnBarHTML + pinsOverlayHTML + tokensOverlayHTML + placementBanner + vnOverlayHTML;
+    // Вся карта, сетка, значки и фишки находятся внутри подвижного #map-viewport, а интерфейс (стрелки, очередь хода, новелла) — поверх!
+    mapArea.innerHTML = `
+        <div id="map-viewport" style="width:100%; height:100%; position:relative; transform-origin:center center; transform:translate(${window._mapCam.panX}px, ${window._mapCam.panY}px) scale(${window._mapCam.zoom}); transition:transform 0.06s ease-out;">
+            ${baseMapHTML}
+            ${gridOverlayHTML}
+            ${pinsOverlayHTML}
+            ${tokensOverlayHTML}
+        </div>
+        ${weatherOverlayHTML}
+        ${topFloatingButtonsHTML}
+        ${turnBarHTML}
+        ${placementBanner}
+        ${cameraControlsHTML}
+        ${vnOverlayHTML}
+    `;
 }
 
 function START_DRAG_MAP_OBJ(type, index, domId) {
