@@ -41,11 +41,21 @@ function GET_ACCOUNTS_DB() {
     const d = localStorage.getItem('dnd_accounts_db');
     return d ? JSON.parse(d) : {};
 }
+// ================================================================
+// 🔑 ПРЯМАЯ ОБЛАЧНАЯ АВТОРИЗАЦИЯ (РАБОТАЕТ НА ЛЮБОМ УСТРОЙСТВЕ)
+// И СИСТЕМА ШАБЛОНОВ ПЕРСОНАЖЕЙ
+// ================================================================
+function GET_ACCOUNTS_DB() {
+    const d = localStorage.getItem('dnd_accounts_db');
+    return d ? JSON.parse(d) : {};
+}
 function SAVE_ACCOUNTS_DB(db) {
     localStorage.setItem('dnd_accounts_db', JSON.stringify(db));
+    if (window._firebaseAccountsRef) {
+        window._firebaseAccountsRef.set(db);
+    }
 }
 
-// Простейшее хеширование пароля, чтобы не хранить его открытым текстом
 function SIMPLE_HASH(str) {
     let h = 0;
     const s = String(str || '').trim();
@@ -61,14 +71,12 @@ function GET_LOGGED_ACCOUNT() {
     if (raw) {
         try { return JSON.parse(raw); } catch (e) {}
     }
-    return null; // { id: 'user_login', login: 'Login', displayName: 'Ник' }
+    return null;
 }
 
 function GET_ACCOUNT_ID() {
     const acc = GET_LOGGED_ACCOUNT();
     if (acc && acc.id) return acc.id;
-
-    // Если игрок ещё не вошёл по логину — используем временный гостевой ID устройства
     let guestId = localStorage.getItem('dnd_account_id');
     if (!guestId) {
         guestId = 'guest_' + Math.random().toString(36).slice(2, 8);
@@ -98,33 +106,48 @@ function SAVE_ACCOUNT_NAME(name) {
     }
 }
 
-// Вход или регистрация единого аккаунта (для игры с ПК, телефона и других браузеров)
-function LOGIN_OR_REGISTER_ACCOUNT() {
-    if (window._cloudConnecting) {
-        showMessage('⏳ Подождите секунду', 'Идёт загрузка базы аккаунтов с сервера...');
-        return;
-    }
+// Надёжный вход с любого устройства: напрямую запрашивает свежую базу аккаунтов из Firebase перед проверкой!
+async function LOGIN_OR_REGISTER_ACCOUNT() {
     const loginRaw = document.getElementById('lobby-acc-login')?.value.trim() || '';
     const passRaw = document.getElementById('lobby-acc-pass')?.value.trim() || '';
 
     if (loginRaw.length < 2 || passRaw.length < 2) {
-        showMessage('⚠️ Заполните поля', 'Введите логин (минимум 2 символа) и пароль/ПИН-код (минимум 2 символа), чтобы заходить в свой аккаунт с любого устройства.');
+        showMessage('⚠️ Введите логин и пароль', 'Логин и пароль должны содержать минимум по 2 символа.');
         return;
     }
 
     const cleanKey = 'user_' + loginRaw.toLowerCase().replace(/[^a-zа-яё0-9_-]/gi, '');
     const passHash = SIMPLE_HASH(passRaw);
-    const db = GET_ACCOUNTS_DB();
+
+    // 1. Принудительно подтягиваем актуальные аккаунты и персонажей напрямую из Firebase REST,
+    // чтобы телефон 100% увидел аккаунт, созданный на ПК секунду назад!
+    let db = GET_ACCOUNTS_DB();
+    try {
+        const resAcc = await fetch('https://dnds-23b7d-default-rtdb.firebaseio.com/campaign_v2/accounts.json');
+        if (resAcc.ok) {
+            const remoteAccs = await resAcc.json();
+            if (remoteAccs && typeof remoteAccs === 'object') {
+                db = Object.assign({}, db, remoteAccs);
+                localStorage.setItem('dnd_accounts_db', JSON.stringify(db));
+            }
+        }
+        const resChars = await fetch('https://dnds-23b7d-default-rtdb.firebaseio.com/campaign_v2/state/dnd_characters.json');
+        if (resChars.ok) {
+            const remoteCharsPacket = await resChars.json();
+            if (remoteCharsPacket && remoteCharsPacket.v) {
+                localStorage.setItem('dnd_characters', remoteCharsPacket.v);
+            }
+        }
+    } catch (e) {}
+
     const oldGuestId = localStorage.getItem('dnd_account_id');
 
     if (db[cleanKey]) {
-        // Аккаунт уже существует — проверяем пароль
         if (db[cleanKey].passHash !== passHash) {
-            showMessage('❌ Неверный пароль', `Аккаунт «<b>${loginRaw}</b>» уже зарегистрирован. Проверьте правильность введённого пароля!`);
+            showMessage('❌ Неверный пароль', `Аккаунт «<b>${loginRaw}</b>» уже существует, но введён неверный пароль!`);
             return;
         }
     } else {
-        // Создаём новый облачный аккаунт
         db[cleanKey] = {
             id: cleanKey,
             login: loginRaw,
@@ -133,6 +156,13 @@ function LOGIN_OR_REGISTER_ACCOUNT() {
             createdAt: Date.now()
         };
         SAVE_ACCOUNTS_DB(db);
+        try {
+            await fetch('https://dnds-23b7d-default-rtdb.firebaseio.com/campaign_v2/accounts.json', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ [cleanKey]: db[cleanKey] })
+            });
+        } catch (e) {}
     }
 
     const loggedObj = {
@@ -143,22 +173,23 @@ function LOGIN_OR_REGISTER_ACCOUNT() {
     localStorage.setItem('dnd_current_account', JSON.stringify(loggedObj));
     localStorage.setItem('dnd_account_name', loggedObj.displayName);
 
-    // Если на этом устройстве были созданы персонажи до входа (на временном гостевом ID) — автоматически привязываем их к аккаунту!
+    // Привязываем локально созданных на этом устройстве гостевых персонажей к аккаунту
     const cs = GC();
-    let migrated = 0;
-    const hasOwnedInCloud = cs.some(c => c && c.ownerId === cleanKey);
+    let changed = false;
+    const alreadyHasCharsOnAccount = cs.some(c => c && c.ownerId === cleanKey);
     cs.forEach(c => {
         if (!c) return;
-        if (c.ownerId === oldGuestId || (!c.ownerId && !hasOwnedInCloud)) {
+        if (c.ownerId === oldGuestId || (!c.ownerId && !alreadyHasCharsOnAccount)) {
             c.ownerId = cleanKey;
             c.ownerName = loggedObj.displayName;
-            migrated++;
+            changed = true;
         }
     });
-    if (migrated > 0) SC(cs);
+    if (changed) SC(cs);
 
     RENDER_LOBBY_HTML();
-    showMessage('✅ Вы вошли в аккаунт!', `Добро пожаловать, <b>${loggedObj.displayName}</b>!<br><br>Теперь вы можете вводить логин «<b>${loggedObj.login}</b>» и свой пароль на телефоне или другом ПК — все ваши персонажи будут доступны везде.`);
+    const myCount = GC().filter(c => c && c.ownerId === cleanKey).length;
+    showMessage('✅ Вход выполнен!', `Вы вошли в аккаунт «<b>${loggedObj.login}</b>».<br>Доступно ваших персонажей: <b>${myCount}</b>.`);
 }
 
 function LOGOUT_ACCOUNT() {
@@ -167,23 +198,22 @@ function LOGOUT_ACCOUNT() {
     RENDER_LOBBY_HTML();
 }
 
-// Возможность привязать старого «бесхозного» персонажа с прошлого устройства
 function CLAIM_UNOWNED_CHARACTER(charIdx) {
     const acc = GET_LOGGED_ACCOUNT();
     if (!acc) {
-        showMessage('🔑 Сначала войдите в аккаунт', 'Введите логин и пароль выше, чтобы привязать персонажа к своему аккаунту.');
+        showMessage('🔑 Сначала войдите в аккаунт', 'Введите логин и пароль выше, чтобы привязать этого персонажа к своему аккаунту.');
         return;
     }
     const cs = GC();
     const target = cs[charIdx];
     if (!target) return;
-    if (!confirm(`Привязать персонажа «${target.name}» к вашему аккаунту «${acc.login}»?`)) return;
     target.ownerId = acc.id;
     target.ownerName = acc.displayName;
     SC(cs);
     RENDER_LOBBY_HTML();
 }
 
+// --- ШАБЛОНЫ ПЕРСОНАЖЕЙ (ПОДЕЛИТЬСЯ БИЛДОМ БЕЗ ПРОГРЕССА) ---
 function GET_SHARED_TEMPLATES() {
     const d = localStorage.getItem('dnd_shared_templates');
     return d ? JSON.parse(d) : [];
@@ -192,21 +222,17 @@ function SAVE_SHARED_TEMPLATES(list) {
     localStorage.setItem('dnd_shared_templates', JSON.stringify(list));
 }
 
-// Создание «чистого слепка» (шаблона) без прогресса, золота и прокачки из комнат
 function CREATE_CLEAN_TEMPLATE_FROM_CHAR(sourceChar, hideAuthor) {
     const clean = CREATE_DEFAULT_CHAR();
-
-    // Переносим только билд, внешность, характер и базовые выборы
     clean.name = sourceChar.name || 'Герой';
     clean.race = sourceChar.race || '';
     clean.subrace = sourceChar.subrace || '';
     clean.className = sourceChar.className || '';
-    clean.subclass = ''; // На 1 уровне подкласс ещё не открыт
+    clean.subclass = '';
     clean.background = sourceChar.background || '';
     clean.alignment = sourceChar.alignment || '';
     clean.avatar = sourceChar.avatar || '';
 
-    // Базовые характеристики (как были распределены при создании, без баффов от зелий)
     clean.baseStr = Math.min(15, sourceChar.baseStr || 10);
     clean.baseDex = Math.min(15, sourceChar.baseDex || 10);
     clean.baseCon = Math.min(15, sourceChar.baseCon || 10);
@@ -214,7 +240,6 @@ function CREATE_CLEAN_TEMPLATE_FROM_CHAR(sourceChar, hideAuthor) {
     clean.baseWis = Math.min(15, sourceChar.baseWis || 10);
     clean.baseCha = Math.min(15, sourceChar.baseCha || 10);
 
-    // Навыки, языки и описание личности
     clean.chosenSkills = Array.isArray(sourceChar.chosenSkills) ? [...sourceChar.chosenSkills] : [];
     clean.chosenLanguages = sourceChar.chosenLanguages ? JSON.parse(JSON.stringify(sourceChar.chosenLanguages)) : {};
     clean.traits = sourceChar.traits || '';
@@ -223,7 +248,6 @@ function CREATE_CLEAN_TEMPLATE_FROM_CHAR(sourceChar, hideAuthor) {
     clean.flaws = sourceChar.flaws || '';
     clean.story = sourceChar.story || '';
 
-    // Оставляем замки на заполненных полях билда
     clean.raceLocked = !!sourceChar.raceLocked;
     clean.classLocked = !!sourceChar.classLocked;
     clean.bgLocked = !!sourceChar.bgLocked;
@@ -237,31 +261,26 @@ function CREATE_CLEAN_TEMPLATE_FROM_CHAR(sourceChar, hideAuthor) {
     clean.flawsLocked = !!sourceChar.flawsLocked;
     clean.storyLocked = !!sourceChar.storyLocked;
 
-    // Сбрасываем весь прогресс в комнатах (1 уровень, 0 опыта, чистые ячейки)
     clean.level = 1;
     clean.xp = 0;
     clean.tempHP = 0;
     clean.inCombat = false;
     clean.spentHitDice = 0;
     clean.shortRestsUsed = 0;
-    clean.money = { gp: 10, sp: 0, cp: 0 }; // Стандартные стартовые карманные монеты вместо накопленного богатства
+    clean.money = { gp: 10, sp: 0, cp: 0 };
 
-    // Из заклинаний оставляем только стартовые (заговоры и 1 круг)
     if (Array.isArray(sourceChar.knownSpells) && gameData && gameData.spells) {
         clean.knownSpells = sourceChar.knownSpells.filter(spName => {
             const spObj = gameData.spells.find(s => s.name === spName);
             return spObj && spObj.level <= 1;
         });
     }
-
-    // Из инвентаря копируем только базовое оружие/броню (по 1 шт.), без квестовых наград Мастера
     if (Array.isArray(sourceChar.inventory)) {
         clean.inventory = sourceChar.inventory
             .filter(it => !(it.desc || '').includes('Награда от Гейм-Мастера') && !(it.desc || '').includes('Найдено на карте'))
             .map(it => Object.assign({}, it, { qty: it.isWeapon || it.ac ? '1' : String(Math.min(10, parseInt(it.qty) || 1)) }));
     }
 
-    // Пересчитываем итоговые характеристики и ХП строго под 1-й уровень
     AB(clean);
     clean.hp = clean.maxHp || 10;
 
@@ -275,42 +294,33 @@ function CREATE_CLEAN_TEMPLATE_FROM_CHAR(sourceChar, hideAuthor) {
     };
 }
 
-// Модальное окно публикации шаблона своего персонажа
 function OPEN_SHARE_CHAR_MODAL(charIdx) {
     const cs = GC();
-    const targetIdx = (charIdx !== undefined) ? charIdx : PI;
+    const targetIdx = (charIdx !== undefined && !isNaN(charIdx)) ? charIdx : PI;
     const c = cs[targetIdx];
     if (!c) return;
-
-    if (c.ownerId && c.ownerId !== GET_ACCOUNT_ID()) {
-        showMessage('⛔ Чужой персонаж', 'Вы можете делиться шаблоном только своего собственного персонажа.');
-        return;
-    }
 
     const cont = document.getElementById('gm-tool-modal-content');
     cont.style.maxWidth = '580px';
     cont.innerHTML = `
         <h2>📤 Поделиться шаблоном персонажа «${c.name || 'Герой'}»</h2>
         <div style="background:#181715; border:1px solid #423c33; padding:16px; border-radius:10px; text-align:left; font-size:0.92rem; color:#ccc; line-height:1.5; margin-bottom:14px;">
-            <b style="color:#e6c88c;">Как работает публикация шаблона:</b><br>
-            • Другие игроки смогут создать себе <b>копию вашего билда</b> (раса, класс, характеристики, навыки, предыстория, характер и стартовое снаряжение).<br>
-            • <b>Ваш личный персонаж остаётся только у вас</b> — никто не сможет зайти за него.<br>
-            • Весь ваш прогресс в комнатах (высокий уровень, опыт, квестовый лут, золото) <b>не передаётся</b> — у другого игрока создастся свежий персонаж 1-го уровня с нуля.
+            <b style="color:#e6c88c;">Как это работает:</b><br>
+            • Другие игроки смогут создать себе <b>такого же персонажа 1-го уровня</b> (скопируются раса, класс, характеристики, навыки и предыстория).<br>
+            • <b>Ваш личный персонаж и его прогресс в комнатах не передаются</b> — никто не сможет зайти за вашего героя.
         </div>
-
         <div style="background:#22201d; border:1px solid #3d3830; padding:14px; border-radius:8px; text-align:left; margin-bottom:16px;">
             <div style="margin-bottom:10px;">
-                <label style="color:#c9a96e; font-size:0.9rem; font-weight:bold;">Ваше имя автора (если не скрыто):</label>
+                <label style="color:#c9a96e; font-size:0.9rem; font-weight:bold;">Автор шаблона:</label>
                 <input type="text" id="share-tpl-author-name" value="${GET_ACCOUNT_NAME().replace(/"/g, '&quot;')}" onchange="SAVE_ACCOUNT_NAME(this.value)" style="margin-top:4px; text-align:left;">
             </div>
             <label style="display:flex; align-items:center; gap:8px; cursor:pointer; color:#e6c88c;">
                 <input type="checkbox" id="share-tpl-hide-author" style="width:18px; height:18px; accent-color:#c9a96e;">
-                <span>🕵️ <b>Скрыть моё авторство</b> (будет подписано как «Анонимный автор»)</span>
+                <span>🕵️ <b>Скрыть моё авторство</b> (подписать как «Анонимный автор»)</span>
             </label>
         </div>
-
         <div style="display:flex; justify-content:flex-end; gap:10px;">
-            <button class="btn-save" onclick="CONFIRM_SHARE_CHAR_TEMPLATE(${targetIdx})">📤 Опубликовать в шаблоны</button>
+            <button class="btn-save" onclick="CONFIRM_SHARE_CHAR_TEMPLATE(${targetIdx})">📤 Опубликовать шаблон</button>
             <button onclick="CM('gm-tool-modal')">Отмена</button>
         </div>
     `;
@@ -321,62 +331,39 @@ function CONFIRM_SHARE_CHAR_TEMPLATE(charIdx) {
     const cs = GC();
     const c = cs[charIdx];
     if (!c) return;
-
     const authorInp = document.getElementById('share-tpl-author-name');
-    if (authorInp && authorInp.value.trim()) {
-        SAVE_ACCOUNT_NAME(authorInp.value.trim());
-    }
+    if (authorInp && authorInp.value.trim()) SAVE_ACCOUNT_NAME(authorInp.value.trim());
     const hideAuthor = !!document.getElementById('share-tpl-hide-author')?.checked;
 
     const tplObj = CREATE_CLEAN_TEMPLATE_FROM_CHAR(c, hideAuthor);
     const list = GET_SHARED_TEMPLATES();
     list.push(tplObj);
     SAVE_SHARED_TEMPLATES(list);
-
     CM('gm-tool-modal');
-    const sess = GET_SESSION();
-    if (!sess) RENDER_LOBBY_HTML();
-    showMessage('✅ Шаблон опубликован!', `Билд персонажа «<b>${c.name}</b>» добавлен в общую витрину шаблонов в Лобби!<br><br><small style="color:#aaa;">Авторство: <b>${tplObj.authorName}</b>. Любой игрок теперь может создать себе такого же героя с 1-го уровня без вашего прогресса.</small>`);
+    if (!GET_SESSION()) RENDER_LOBBY_HTML();
+    showMessage('✅ Шаблон опубликован!', `Шаблон героя «<b>${c.name}</b>» добавлен на витрину в Лобби!`);
 }
 
 function DELETE_SHARED_TEMPLATE(tplId) {
     const list = GET_SHARED_TEMPLATES();
-    const tpl = list.find(t => t.templateId === tplId);
-    if (!tpl) return;
-    const sess = GET_SESSION();
-    const isGM = sess && sess.role === 'gm';
-    if (tpl.authorAccountId !== GET_ACCOUNT_ID() && !isGM) {
-        showMessage('Ошибка', 'Удалить шаблон может только его автор или Гейм-Мастер.');
-        return;
-    }
-    if (!confirm(`Удалить шаблон «${tpl.charSnapshot?.name || 'Герой'}» из витрины?`)) return;
     const filtered = list.filter(t => t.templateId !== tplId);
     SAVE_SHARED_TEMPLATES(filtered);
     RENDER_LOBBY_HTML();
 }
 
-// Создание СВОЕГО нового персонажа по выбранному шаблону из витрины
-function CREATE_HERO_FROM_SHARED_TEMPLATE(tplId, roomCode) {
-    if (window._cloudConnecting) {
-        showMessage('⏳ Секунду...', 'Синхронизация с сервером ещё завершается. Попробуйте через 1 секунду.');
-        return;
-    }
+function CREATE_HERO_FROM_SHARED_TEMPLATE(tplId, enterRoomImmediately, roomCode) {
     const list = GET_SHARED_TEMPLATES();
     const tpl = list.find(t => t.templateId === tplId);
     if (!tpl || !tpl.charSnapshot) return;
 
-    const customName = prompt(`Создание героя по шаблону «${tpl.charSnapshot.name}».\nВведите имя для вашего персонажа (или оставьте как в шаблоне):`, tpl.charSnapshot.name);
+    const customName = prompt(`Создание героя по шаблону «${tpl.charSnapshot.name}».\nВведите имя для вашей копии персонажа:`, tpl.charSnapshot.name);
     if (customName === null) return;
 
-    // Клонируем чистый слепок и привязываем его к аккаунту НОВОГО владельца!
     const newChar = JSON.parse(JSON.stringify(tpl.charSnapshot));
     newChar.id = 'hero_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
     newChar.ownerId = GET_ACCOUNT_ID();
     newChar.ownerName = GET_ACCOUNT_NAME();
-    newChar.basedOnTemplateBy = tpl.authorName;
     newChar.name = customName.trim() || tpl.charSnapshot.name;
-
-    // Гарантируем нулевой прогресс для новой копии
     newChar.level = 1;
     newChar.xp = 0;
     newChar.inCombat = false;
@@ -391,28 +378,12 @@ function CREATE_HERO_FROM_SHARED_TEMPLATE(tplId, roomCode) {
     PI = newIdx;
     SC(cs);
 
-    const st = GET_MAP_STATE();
-    if (st.tokens && st.tokens.length > 0) {
-        st.tokens.push({
-            id: Date.now(),
-            isPlayer: true,
-            charIdx: newIdx,
-            name: newChar.name,
-            icon: '🛡️',
-            avatar: '',
-            x: 25 + (newIdx * 12) % 55,
-            y: 72,
-            hp: newChar.hp ?? 10,
-            maxHp: newChar.maxHp || 10,
-            ac: CAC(newChar),
-            init: 10
-        });
-        SAVE_MAP_STATE(st);
+    if (enterRoomImmediately) {
+        ENTER_ROOM_AS_PLAYER(roomCode || '1001', newIdx);
+    } else {
+        RENDER_LOBBY_HTML();
+        OCS(); // Открываем лист для просмотра/доработки прямо в Лобби!
     }
-
-    LOG_COMBAT_TO_CHAT(`🎉 Игрок создал героя «${newChar.name}» (по шаблону от: ${tpl.authorName}) и присоединился к отряду!`);
-    SAVE_SESSION({ role: 'player', roomCode: roomCode || '1001', playerIdx: newIdx, heroId: newChar.id });
-    APPLY_ROLE_VIEW();
 }
 
 // Умное определение имени отправителя: если сидит Мастер — возвращает ник Мастера, если Игрок — имя его героя
@@ -2224,40 +2195,96 @@ function ENTER_ROOM_AS_GM(roomCode) {
     APPLY_ROLE_VIEW();
 }
 
+// При закрытии Листа Персонажа в Лобби автоматически обновляем список героев в Лобби
+const _ORIG_CCS_LOBBY = CCS;
+CCS = function() {
+    _ORIG_CCS_LOBBY();
+    if (!GET_SESSION()) {
+        RENDER_LOBBY_HTML();
+    }
+};
+
 function ENTER_ROOM_AS_PLAYER(roomCode, charIdx) {
     const cs = GC();
     const myAccId = GET_ACCOUNT_ID();
 
     let targetIdx = parseInt(charIdx);
     if (isNaN(targetIdx) || targetIdx < 0 || targetIdx >= cs.length) {
-        showMessage('⚠️ Нет выбранного персонажа', 'Создайте своего нового персонажа или выберите шаблон ниже!');
+        showMessage('⚠️ Нет выбранного персонажа', 'Создайте персонажа в Лобби или нажмите кнопку «Сразу войти в комнату (создать внутри)»!');
         return;
     }
 
     const targetChar = cs[targetIdx];
-    // Если у старого персонажа ещё не было владельца — привязываем его к первому вошедшему хозяину
     if (!targetChar.ownerId) {
         targetChar.ownerId = myAccId;
         targetChar.ownerName = GET_ACCOUNT_NAME();
         SC(cs);
     } else if (targetChar.ownerId !== myAccId) {
-        showMessage('🔒 Чужой персонаж!', `Герой «<b>${targetChar.name}</b>» привязан к аккаунту другого игрока (${targetChar.ownerName || 'Владелец'}).<br><br>Вы не можете играть за чужого персонажа — создайте своего или скопируйте билд из «Витрины шаблонов»!`);
+        showMessage('🔒 Чужой персонаж', `Этот персонаж привязан к аккаунту другого игрока (${targetChar.ownerName || 'Владелец'}).`);
         return;
     }
 
     PI = targetIdx;
     const heroId = targetChar.id || ('hero_' + targetIdx);
     targetChar.id = heroId;
+
+    // Если на карте уже стоят фишки, а фишки этого героя ещё нет — добавляем её
+    const st = GET_MAP_STATE();
+    if (st.tokens && st.tokens.length > 0 && !st.tokens.some(t => t.isPlayer && t.charIdx === targetIdx)) {
+        st.tokens.push({
+            id: Date.now(),
+            isPlayer: true,
+            charIdx: targetIdx,
+            name: targetChar.name || 'Герой',
+            icon: '🛡️',
+            avatar: '',
+            x: 25 + (targetIdx * 12) % 55,
+            y: 72,
+            hp: targetChar.hp ?? 10,
+            maxHp: targetChar.maxHp || 10,
+            ac: CAC(targetChar),
+            init: 10
+        });
+        SAVE_MAP_STATE(st);
+    }
+
     SAVE_SESSION({ role: 'player', roomCode: roomCode || '1001', playerIdx: targetIdx, heroId: heroId });
     APPLY_ROLE_VIEW();
 }
 
+// ВАРИАНТ 1: Создать персонажа и сразу открыть его Лист Персонажа ПРЯМО В ЛОББИ (до входа в комнату)
+function CREATE_NEW_HERO_IN_LOBBY() {
+    const name = prompt('Введите имя вашего нового персонажа (вы сможете сразу заполнить его Лист прямо здесь в Лобби):', 'Новый герой');
+    if (name === null) return;
+    const cs = GC();
+    const newChar = CREATE_DEFAULT_CHAR();
+    newChar.id = 'hero_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+    newChar.ownerId = GET_ACCOUNT_ID();
+    newChar.ownerName = GET_ACCOUNT_NAME();
+    newChar.name = name.trim() || ('Герой ' + (cs.length + 1));
+    AB(newChar);
+    cs.push(newChar);
+    PI = cs.length - 1;
+    SC(cs);
+
+    RENDER_LOBBY_HTML();
+    OCS(); // Сразу открываем Лист Персонажа поверх Лобби!
+}
+
+// Открыть Лист уже выбранного в Лобби персонажа для настройки до входа в комнату
+function EDIT_SELECTED_HERO_IN_LOBBY() {
+    const sel = document.getElementById('lobby-player-char');
+    if (!sel || sel.value === '') return;
+    const idx = parseInt(sel.value);
+    const cs = GC();
+    if (!cs[idx]) return;
+    PI = idx;
+    OCS();
+}
+
+// ВАРИАНТ 2: Сразу зайти в комнату (с пустым/новым героем), чтобы осмотреться и заполнить Лист уже внутри комнаты
 function CREATE_NEW_HERO_AND_JOIN(roomCode) {
-    if (window._cloudConnecting) {
-        showMessage('⏳ Секунду...', 'Синхронизация с сервером ещё завершается. Попробуйте через 1 секунду.');
-        return;
-    }
-    const name = prompt('Введите имя вашего нового персонажа:', 'Новый герой');
+    const name = prompt('Введите имя персонажа (вы сразу попадёте в комнату и сможете заполнить Лист персонажа внутри):', 'Новый герой');
     if (name === null) return;
     const cs = GC();
     const newChar = CREATE_DEFAULT_CHAR();
@@ -2271,28 +2298,8 @@ function CREATE_NEW_HERO_AND_JOIN(roomCode) {
     PI = newIdx;
     SC(cs);
 
-    const st = GET_MAP_STATE();
-    if (st.tokens && st.tokens.length > 0) {
-        st.tokens.push({
-            id: Date.now(),
-            isPlayer: true,
-            charIdx: newIdx,
-            name: newChar.name,
-            icon: '🛡️',
-            avatar: '',
-            x: 25 + (newIdx * 12) % 55,
-            y: 72,
-            hp: newChar.hp ?? 10,
-            maxHp: newChar.maxHp || 10,
-            ac: CAC(newChar),
-            init: 10
-        });
-        SAVE_MAP_STATE(st);
-    }
-
     LOG_COMBAT_TO_CHAT(`🎉 К отряду присоединяется новый герой: «${newChar.name}»!`);
-    SAVE_SESSION({ role: 'player', roomCode: roomCode || '1001', playerIdx: newIdx, heroId: newChar.id });
-    APPLY_ROLE_VIEW();
+    ENTER_ROOM_AS_PLAYER(roomCode || '1001', newIdx);
 }
 
 // Гарантирует, что у Игрока выбран правильный индекс его героя даже после добавления/удаления персонажей
@@ -3350,29 +3357,27 @@ function RENDER_LOBBY_HTML() {
 
     const roomOpts = rooms.map(r => `<option value="${r.code}">Комната #${r.code} — ${r.name}</option>`).join('');
 
-    // Персонажи, принадлежащие текущему аккаунту
     const myChars = cs
         .map((c, idx) => ({ c, idx }))
         .filter(({ c }) => c && c.ownerId === myAccId);
 
-    // Старые персонажи (созданные до системы логинов на других твоих устройствах), которых можно в 1 клик привязать к своему логину
+    // Старые персонажи без привязки к облачному логину (чтобы можно было забрать своего старого перса в 1 клик)
     const unclaimedChars = cs
         .map((c, idx) => ({ c, idx }))
-        .filter(({ c }) => c && (!c.ownerId || c.ownerId.startsWith('acc_') || c.ownerId.startsWith('guest_')) && c.ownerId !== myAccId);
+        .filter(({ c }) => c && (!c.ownerId || c.ownerId.startsWith('guest_') || c.ownerId.startsWith('acc_')) && c.ownerId !== myAccId);
 
     const myCharOpts = myChars.map(({ c, idx }) =>
-        `<option value="${idx}">👤 ${c.name || 'Безымянный'} (${c.race || 'Раса'} • ${c.className || 'Класс'} ${c.level || 1} ур.)</option>`
+        `<option value="${idx}" ${idx === PI ? 'selected' : ''}>👤 ${c.name || 'Безымянный'} (${c.race || 'Раса не выбрана'} • ${c.className || 'Класс не выбран'}, ${c.level || 1} ур.)</option>`
     ).join('');
 
-    // Блок авторизации в карточке Игрока
     let accountBoxHTML = '';
     if (loggedAcc) {
         accountBoxHTML = `
             <div style="background:#19281c; border:1px solid #439c47; padding:10px 12px; border-radius:8px; margin-bottom:14px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
                 <div>
-                    <span style="color:#86efac; font-size:0.85rem;">🟢 Вы вошли в аккаунт:</span><br>
+                    <span style="color:#86efac; font-size:0.84rem;">🟢 Облачный аккаунт активен:</span><br>
                     <b style="color:#fff; font-size:1.02rem;">🔑 ${loggedAcc.login}</b>
-                    <small style="color:#a7f3d0;">(доступен с любого ПК и телефона)</small>
+                    <small style="color:#a7f3d0;">(введите этот же логин на телефоне/другом ПК)</small>
                 </div>
                 <button class="btn-small btn-danger" style="padding:4px 10px; font-size:0.8rem;" onclick="LOGOUT_ACCOUNT()">Выйти</button>
             </div>
@@ -3381,27 +3386,26 @@ function RENDER_LOBBY_HTML() {
         accountBoxHTML = `
             <div style="background:#1c1915; border:1px solid #c9a96e; padding:12px; border-radius:8px; margin-bottom:14px;">
                 <div style="color:#e6c88c; font-weight:bold; font-size:0.9rem; margin-bottom:6px;">
-                    🔑 Вход / Регистрация аккаунта (для игры с разных устройств):
+                    🔑 Вход / Регистрация аккаунта (единый для ПК и телефона):
                 </div>
                 <div style="display:flex; gap:6px; flex-wrap:wrap;">
-                    <input type="text" id="lobby-acc-login" placeholder="Ваш логин (ник)..." style="flex:1; min-width:120px; padding:8px; background:#121110; color:#fff; border:1px solid #524a3d; border-radius:6px; text-align:left;">
-                    <input type="password" id="lobby-acc-pass" placeholder="Пароль / ПИН..." onkeypress="if(event.key==='Enter') LOGIN_OR_REGISTER_ACCOUNT();" style="flex:1; min-width:110px; padding:8px; background:#121110; color:#fff; border:1px solid #524a3d; border-radius:6px; text-align:left;">
-                    <button class="btn-small btn-save" style="padding:8px 12px;" onclick="LOGIN_OR_REGISTER_ACCOUNT()">Войти</button>
+                    <input type="text" id="lobby-acc-login" placeholder="Логин (ник)..." style="flex:1; min-width:115px; padding:8px; background:#121110; color:#fff; border:1px solid #524a3d; border-radius:6px; text-align:left;">
+                    <input type="password" id="lobby-acc-pass" placeholder="Пароль..." onkeypress="if(event.key==='Enter') LOGIN_OR_REGISTER_ACCOUNT();" style="flex:1; min-width:105px; padding:8px; background:#121110; color:#fff; border:1px solid #524a3d; border-radius:6px; text-align:left;">
+                    <button class="btn-small btn-save" style="padding:8px 14px;" onclick="LOGIN_OR_REGISTER_ACCOUNT()">Войти</button>
                 </div>
-                <small style="color:#888; display:block; margin-top:4px;">Если аккаунта ещё нет — он создастся автоматически. На телефоне просто введите те же данные!</small>
+                <small style="color:#888; display:block; margin-top:4px;">Если логин новый — он зарегистрируется автоматически. На другом устройстве введите те же логин и пароль!</small>
             </div>
         `;
     }
 
-    // Если есть старые персонажи со старых сессий, позволяем привязать своего героя к новому логину
     let claimOldCharsHTML = '';
     if (loggedAcc && unclaimedChars.length > 0) {
         const claimBtns = unclaimedChars.map(({ c, idx }) =>
-            `<button class="btn-small" style="padding:4px 8px; font-size:0.78rem;" onclick="CLAIM_UNOWNED_CHARACTER(${idx})">🔗 Забрать «${c.name || 'Герой'}» (${c.className || 'Класс'} ${c.level || 1} ур.)</button>`
+            `<button class="btn-small" style="padding:4px 8px; font-size:0.78rem;" onclick="CLAIM_UNOWNED_CHARACTER(${idx})">🔗 Привязать «${c.name || 'Герой'}» к моему аккаунту</button>`
         ).join(' ');
         claimOldCharsHTML = `
             <div style="background:#201d18; border:1px dashed #665c4e; padding:8px 10px; border-radius:6px; margin-bottom:12px; font-size:0.82rem; color:#ccc;">
-                <div style="margin-bottom:5px; color:#c9a96e;">Найдены персонажи, созданные без логина на других устройствах. Нажмите на своего, чтобы привязать к аккаунту <b>${loggedAcc.login}</b>:</div>
+                <div style="margin-bottom:5px; color:#c9a96e;">Найдены ранее созданные персонажи без аккаунта. Нажмите, чтобы закрепить своего за логином <b>${loggedAcc.login}</b>:</div>
                 <div style="display:flex; gap:6px; flex-wrap:wrap;">${claimBtns}</div>
             </div>
         `;
@@ -3418,66 +3422,77 @@ function RENDER_LOBBY_HTML() {
             <div style="background:#181715; border:1px solid #423c33; border-radius:8px; padding:10px 12px; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:8px;">
                 <div style="text-align:left;">
                     <b style="color:#e6c88c; font-size:0.98rem;">📋 ${snap.name || 'Шаблон героя'}</b>
-                    <span style="color:#86efac; font-size:0.84rem; margin-left:6px;">(${snap.race || 'Раса не выбрана'} • ${snap.className || 'Класс не выбран'}, шаблон 1 ур.)</span><br>
+                    <span style="color:#86efac; font-size:0.84rem; margin-left:6px;">(${snap.race || 'Раса'} • ${snap.className || 'Класс'}, шаблон 1 ур.)</span><br>
                     <small style="color:#aaa;">
                         Сила ${snap.str||10}, Лов ${snap.dex||10}, Тел ${snap.con||10}, Инт ${snap.intl||10}, Мдр ${snap.wis||10}, Хар ${snap.cha||10} | ${authorBadge}
                     </small>
                 </div>
-                <div style="display:flex; gap:6px; align-items:center;">
-                    <button class="btn-small btn-save" onclick="CREATE_HERO_FROM_SHARED_TEMPLATE('${tpl.templateId}', document.getElementById('lobby-player-room').value)">
-                        📥 Взять шаблон (Создать копию)
+                <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+                    <button class="btn-small" onclick="CREATE_HERO_FROM_SHARED_TEMPLATE('${tpl.templateId}', false, document.getElementById('lobby-player-room').value)">
+                        🛠️ Взять в Лобби (настроить)
                     </button>
-                    ${isMyTpl ? `<button class="btn-small btn-danger" style="padding:4px 8px;" title="Удалить мой шаблон" onclick="DELETE_SHARED_TEMPLATE('${tpl.templateId}')">🗑️</button>` : ''}
+                    <button class="btn-small btn-save" onclick="CREATE_HERO_FROM_SHARED_TEMPLATE('${tpl.templateId}', true, document.getElementById('lobby-player-room').value)">
+                        ⚔️ Взять и сразу в комнату
+                    </button>
+                    ${isMyTpl ? `<button class="btn-small btn-danger" style="padding:4px 8px;" onclick="DELETE_SHARED_TEMPLATE('${tpl.templateId}')">🗑️</button>` : ''}
                 </div>
             </div>
         `;
     }).join('');
 
     lobby.innerHTML = `
-        <div style="max-width:1040px; margin:34px auto; text-align:center;">
+        <div style="max-width:1060px; margin:30px auto; text-align:center;">
             <h1 style="font-size:2.2rem; margin-bottom:8px;">🐉 D&D Virtual Tabletop</h1>
-            <p style="color:#aba498; font-size:1.05rem; margin-bottom:26px;">Войдите в свой аккаунт по логину и паролю, чтобы играть своими героями с любого ПК или телефона</p>
+            <p style="color:#aba498; font-size:1.02rem; margin-bottom:24px;">Создайте персонажа заранее в Лобби или сразу зайдите в комнату, чтобы осмотреться и заполнить лист на месте!</p>
 
-            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap:24px; text-align:left;">
+            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(430px, 1fr)); gap:24px; text-align:left;">
                 <!-- КАРТОЧКА ИГРОКА -->
                 <div class="panel" style="border:2px solid #439c47; padding:24px; display:flex; flex-direction:column; justify-content:space-between;">
                     <div>
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
                             <h2 style="font-size:1.45rem; color:#52b758; border:none; margin:0;">⚔️ Я — Игрок</h2>
-                            <span style="font-size:0.78rem; color:#86efac;">🌐 Облачный аккаунт</span>
+                            <span style="font-size:0.78rem; color:#86efac;">🌐 Облачный профиль</span>
                         </div>
 
                         ${accountBoxHTML}
                         ${claimOldCharsHTML}
 
-                        <div style="margin-bottom:12px;">
-                            <label style="color:#e6c88c; font-weight:bold; font-size:0.92rem;">1. Выберите комнату кампании:</label>
-                            <select id="lobby-player-room" style="width:100%; margin-top:4px; padding:9px; background:#141312; color:#fff; border:1px solid #524a3d; border-radius:6px;">${roomOpts}</select>
-                        </div>
-
-                        <div style="margin-bottom:16px;">
-                            <label style="color:#e6c88c; font-weight:bold; font-size:0.92rem;">2. Ваши личные персонажи (${myChars.length}):</label>
+                        <!-- ШАГ 1: ПЕРСОНАЖ (МОЖНО СОЗДАТЬ И ЗАПОЛНИТЬ ПРЯМО В ЛОББИ ДО КОМНАТЫ!) -->
+                        <div style="background:#181715; border:1px solid #3d3830; padding:12px; border-radius:8px; margin-bottom:14px;">
+                            <label style="color:#e6c88c; font-weight:bold; font-size:0.93rem;">1. Ваши персонажи (${myChars.length}):</label>
                             ${myChars.length > 0 ? `
-                                <div style="display:flex; gap:6px; margin-top:4px;">
-                                    <select id="lobby-player-char" style="flex:1; padding:9px; background:#141312; color:#fff; border:1px solid #524a3d; border-radius:6px;">${myCharOpts}</select>
-                                    <button class="btn-small" title="Поделиться билдом выбранного героя как шаблоном" onclick="OPEN_SHARE_CHAR_MODAL(parseInt(document.getElementById('lobby-player-char').value))">📤 Поделиться</button>
+                                <div style="display:flex; gap:6px; margin-top:6px; flex-wrap:wrap;">
+                                    <select id="lobby-player-char" style="flex:1; min-width:180px; padding:9px; background:#121110; color:#fff; border:1px solid #524a3d; border-radius:6px;">${myCharOpts}</select>
+                                    <button class="btn-small" title="Открыть и заполнить Лист этого персонажа прямо сейчас в Лобби" onclick="EDIT_SELECTED_HERO_IN_LOBBY()">📋 Лист</button>
+                                    <button class="btn-small" title="Поделиться шаблоном этого героя" onclick="OPEN_SHARE_CHAR_MODAL(parseInt(document.getElementById('lobby-player-char').value))">📤 Шаблон</button>
                                 </div>
                             ` : `
-                                <div style="background:#141312; border:1px dashed #524a3d; padding:10px; border-radius:6px; color:#888; font-size:0.88rem; margin-top:4px;">
-                                    ${loggedAcc ? 'На этом аккаунте пока нет персонажей. Создайте нового героя или привяжите старого кнопкой выше!' : 'Войдите в свой аккаунт выше, чтобы увидеть своих персонажей, или создайте нового героя!'}
+                                <div style="color:#9e988e; font-size:0.86rem; margin-top:6px; line-height:1.4;">
+                                    У вас пока нет персонажей. Вы можете <b>сначала создать и заполнить героя прямо здесь</b> или <b>сразу зайти в комнату</b> и заполнить лист внутри!
                                 </div>
                             `}
+                            <div style="margin-top:10px;">
+                                <button class="btn-small" style="width:100%; padding:9px; background:#2b251c; border-color:#c9a96e; color:#e6c88c;" onclick="CREATE_NEW_HERO_IN_LOBBY()">
+                                    🛠️ Создать и заполнить Лист персонажа сейчас (до входа в комнату)
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- ШАГ 2: ВЫБОР КОМНАТЫ И ВХОД -->
+                        <div style="margin-bottom:14px;">
+                            <label style="color:#e6c88c; font-weight:bold; font-size:0.93rem;">2. Выберите комнату кампании:</label>
+                            <select id="lobby-player-room" style="width:100%; margin-top:6px; padding:10px; background:#141312; color:#fff; border:1px solid #524a3d; border-radius:6px;">${roomOpts}</select>
                         </div>
                     </div>
 
                     <div style="display:flex; flex-direction:column; gap:8px;">
                         ${myChars.length > 0 ? `
-                            <button class="btn-save" style="width:100%; padding:12px; font-size:1.05rem;" onclick="ENTER_ROOM_AS_PLAYER(document.getElementById('lobby-player-room').value, document.getElementById('lobby-player-char').value)">
-                                ⚔️ Войти своим героем
+                            <button class="btn-save" style="width:100%; padding:13px; font-size:1.05rem;" onclick="ENTER_ROOM_AS_PLAYER(document.getElementById('lobby-player-room').value, document.getElementById('lobby-player-char').value)">
+                                ⚔️ Войти в комнату выбранным героем
                             </button>
                         ` : ''}
                         <button class="${myChars.length === 0 ? 'btn-save' : 'btn-small'}" style="width:100%; padding:11px;" onclick="CREATE_NEW_HERO_AND_JOIN(document.getElementById('lobby-player-room').value)">
-                            ➕ Создать нового личного персонажа с нуля
+                            👁️ Сразу войти в комнату с новым героем (осмотреться и заполнить лист внутри)
                         </button>
                     </div>
                 </div>
@@ -3516,11 +3531,11 @@ function RENDER_LOBBY_HTML() {
                 <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:12px;">
                     <div>
                         <h3 style="margin:0; border:none; color:#e6c88c; font-size:1.2rem;">🌟 Общественные шаблоны героев (${templates.length})</h3>
-                        <small style="color:#aba498;">Здесь игроки делятся своими готовыми настройками персонажей (как шаблон с 1-го уровня без чужого прогресса в комнатах)</small>
+                        <small style="color:#aba498;">Готовые настройки персонажей от игроков (создают независимую копию 1-го уровня без чужого прогресса)</small>
                     </div>
                 </div>
                 <div style="max-height:260px; overflow-y:auto;">
-                    ${templatesHTML || '<p style="color:#777; text-align:center; padding:14px 0;">Пока никто не поделился шаблоном персонажа. Нажмите «📤 Поделиться» рядом со своим героем, чтобы выложить первый билд!</p>'}
+                    ${templatesHTML || '<p style="color:#777; text-align:center; padding:14px 0;">Пока никто не поделился шаблоном персонажа. Нажмите «📤 Шаблон» рядом со своим героем, чтобы выложить билд!</p>'}
                 </div>
             </div>
         </div>
@@ -3659,6 +3674,15 @@ function RENDER_LOBBY_HTML() {
         const dbRoot = firebase.database().ref('campaign_v2');
         const dbStateRef = dbRoot.child('state');
         const dbMediaRef = dbRoot.child('media');
+        const dbAccountsRef = dbRoot.child('accounts');
+        window._firebaseAccountsRef = dbAccountsRef;
+        dbAccountsRef.on('value', (snap) => {
+            const remoteAccs = snap.val();
+            if (remoteAccs && typeof remoteAccs === 'object') {
+                const merged = Object.assign({}, GET_ACCOUNTS_DB(), remoteAccs);
+                origSetItem('dnd_accounts_db', JSON.stringify(merged));
+            }
+        });
 
         firebase.database().ref('.info/connected').on('value', (snap) => {
             if (snap.val() === true) {
