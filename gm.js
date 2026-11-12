@@ -3568,7 +3568,8 @@ function RENDER_LOBBY_HTML() {
     let mediaCache = {};
 
     const SYNC_KEYS = [
-        'dnd_characters', 'dnd_accounts_db', 'dnd_shared_templates', 'dnd_rooms', 'dnd_map_state', 'dnd_gm_shop',
+        'dnd_characters', 'dnd_users_accounts', 'dnd_accounts_db', 'dnd_shared_templates',
+        'dnd_rooms', 'dnd_map_state', 'dnd_gm_shop',
         'dnd_bestiary', 'dnd_npcs', 'dnd_vn_dialog', 'dnd_prepared_events',
         'dnd_custom_lore', 'dnd_gm_event', 'dnd_gm_skill_check',
         'dnd_gm_edit_request', 'dnd_rest_poll', 'dnd_tasks',
