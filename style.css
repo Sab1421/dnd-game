@@ -758,3 +758,33 @@ button:disabled {
 .custom-tooltip:hover::after {
     opacity: 1;
 }
+
+/* --- ЭФФЕКТ ОБЛАЧНОГО ТУМАНА ВОЙНЫ --- */
+.fog-of-war-clouds {
+    position: absolute;
+    top: -50%; /* С запасом, чтобы покрыть края при зуме/панорамировании */
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    pointer-events: none; /* Пропускаем клики сквозь туман к карте/фишкам (если разрешено) */
+    z-index: 4; /* Поверх карты и сетки, но под значками и фишками, чтобы их было видно в открытых зонах */
+    
+    /* Текстура облаков/тумана через CSS Radial Gradients */
+    background-color: rgba(20, 25, 30, 0.95); /* Тёмно-сизый базовый цвет */
+    background-image: 
+        radial-gradient(circle at 20% 30%, rgba(255, 255, 255, 0.08) 0%, transparent 20%),
+        radial-gradient(circle at 80% 70%, rgba(255, 255, 255, 0.05) 0%, transparent 25%),
+        radial-gradient(circle at 50% 50%, rgba(0, 0, 0, 0.2) 0%, transparent 40%);
+    background-size: 200px 200px, 300px 300px, 150px 150px;
+    
+    /* Добавляем SVG фильтр турбулентности для "клубящегося" эффекта, если браузер поддерживает */
+    filter: url(#cloud-turbulence) blur(4px);
+    
+    opacity: 1;
+    transition: opacity 0.3s ease;
+}
+
+/* Фон за краями карты - тоже туманный */
+#map-viewport {
+    background: radial-gradient(circle, #2a2c30 0%, #0d0c0b 100%); /* Немного сизого оттенка для пустоты */
+}
