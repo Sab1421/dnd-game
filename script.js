@@ -747,9 +747,32 @@ function LKS(){const cs=GC();cs[PI].storyLocked=true;SC(cs);ROS();}
 function ULS(){const cs=GC();cs[PI].storyLocked=false;SC(cs);ROS();}
 
 // Авто-распределение стандартного набора (15, 14, 13, 12, 10, 8) под выбранный класс («кнопка для ленивых»)
+// Расчёт пула доступных очков характеристик (на старте даётся 24 очка поверх базы 8, т.е. сумма характеристик = 72)
+function GET_STAT_POOL_INFO(c) {
+    const keys = ['baseStr', 'baseDex', 'baseCon', 'baseInt', 'baseWis', 'baseCha'];
+    // Если персонаж только создан и все статы стоят по дефолту 10 (сумма 60), его стартовый бюджет = 72 (как у стандартного набора 15,14,13,12,10,8)
+    if (!c._statBudgetTotal) {
+        c._statBudgetTotal = 72;
+    }
+    const currentSum = keys.reduce((acc, k) => acc + (parseInt(c[k]) || 10), 0);
+    const remaining = c._statBudgetTotal - currentSum;
+    const isAsiMode = !!c._asiModeActive;
+    const maxCap = isAsiMode ? 20 : 15; // На 1 уровне при создании потолок базы = 15, при прокачке уровня = 20
+    return {
+        budget: c._statBudgetTotal,
+        currentSum: currentSum,
+        remaining: remaining,
+        maxCap: maxCap,
+        isAsiMode: isAsiMode,
+        minFloor: c._asiMinFloor || { baseStr: 8, baseDex: 8, baseCon: 8, baseInt: 8, baseWis: 8, baseCha: 8 }
+    };
+}
+
+// Авто-распределение стандартного набора (15, 14, 13, 12, 10, 8 — сумма ровно 72, остаток очков = 0)
 function AUTO_STATS() {
     const cs = GC();
     const c = cs[PI];
+    if (c.statsLocked) return;
     const presets = {
         'Варвар':    [15, 13, 14, 8, 12, 10],
         'Воин':      [15, 13, 14, 8, 12, 10],
@@ -767,35 +790,97 @@ function AUTO_STATS() {
     const arr = presets[c.className] || [15, 14, 13, 12, 10, 8];
     c.baseStr = arr[0]; c.baseDex = arr[1]; c.baseCon = arr[2];
     c.baseInt = arr[3]; c.baseWis = arr[4]; c.baseCha = arr[5];
+    c._statBudgetTotal = 72;
+    c._asiModeActive = false;
     AB(c); SC(cs); RMC(); ROS();
 }
 
-// Честный бросок 4к6 (отбрасывая наименьший) — можно нажать только до фиксации характеристик
+// Сбросить все характеристики в 8, чтобы вручную с нуля раскидать все 24 очка
+function RESET_STATS_TO_8() {
+    const cs = GC();
+    const c = cs[PI];
+    if (c.statsLocked || c._asiModeActive) return;
+    c.baseStr = 8; c.baseDex = 8; c.baseCon = 8;
+    c.baseInt = 8; c.baseWis = 8; c.baseCha = 8;
+    c._statBudgetTotal = 72;
+    AB(c); SC(cs); RMC(); ROS();
+}
+
+// Честный бросок 4к6 (фиксирует выпавший бюджет, чтобы нельзя было накрутить сверху лишние очки, но можно было перекинуть между статами)
 function ROLL_STATS_4D6() {
     const cs = GC();
     const c = cs[PI];
+    if (c.statsLocked || c._asiModeActive) return;
     function rollOne() {
         const r = [1,2,3,4].map(() => Math.floor(Math.random()*6)+1).sort((a,b)=>a-b);
-        return r[1] + r[2] + r[3];
+        return Math.min(15, Math.max(8, r[1] + r[2] + r[3]));
     }
     c.baseStr = rollOne(); c.baseDex = rollOne(); c.baseCon = rollOne();
     c.baseInt = rollOne(); c.baseWis = rollOne(); c.baseCha = rollOne();
+    c._statBudgetTotal = c.baseStr + c.baseDex + c.baseCon + c.baseInt + c.baseWis + c.baseCha;
     AB(c); SC(cs); RMC(); ROS();
+}
+
+// Пошаговое изменение характеристики (+1 или -1) со строгим контролем доступных очков!
+function STEP_STAT(baseKey, delta) {
+    const cs = GC();
+    const c = cs[PI];
+    if (c.statsLocked) return;
+
+    const info = GET_STAT_POOL_INFO(c);
+    const curVal = parseInt(c[baseKey]) || 10;
+    const minVal = info.minFloor[baseKey] !== undefined ? info.minFloor[baseKey] : 8;
+    const maxVal = info.maxCap;
+
+    if (delta > 0) {
+        if (info.remaining <= 0) {
+            showMessage('⚠️ Очки закончились', 'Вы уже распределили все доступные очки характеристик! Чтобы повысить этот параметр, сначала убавьте «−» у другого.');
+            return;
+        }
+        if (curVal >= maxVal) return;
+        c[baseKey] = curVal + 1;
+    } else if (delta < 0) {
+        if (curVal <= minVal) return;
+        c[baseKey] = curVal - 1;
+    }
+
+    AB(c);
+    SC(cs);
+    RMC();
+    ROS();
 }
 
 function LKSTATS() {
     const cs = GC();
-    cs[PI].statsLocked = true;
+    const c = cs[PI];
+    const info = GET_STAT_POOL_INFO(c);
+    if (info.remaining > 0) {
+        showMessage('⚠️ Остались нераспределённые очки!', `У вас осталось ещё <b>${info.remaining}</b> свободных очков характеристик. Распределите их кнопками «+» перед сохранением!`);
+        return;
+    }
+    if (info.remaining < 0) {
+        showMessage('⚠️ Перерасход очков!', `Вы распределили на <b>${Math.abs(info.remaining)}</b> очков больше доступного лимита. Убавьте лишние очки кнопкой «−»!`);
+        return;
+    }
+    c.statsLocked = true;
+    c._asiModeActive = false;
+    delete c._asiMinFloor;
     SC(cs);
+    RMC();
     ROS();
 }
 
-// Изменение базовых характеристик (Сила, Ловкость и т.д.) прямо из Листа Персонажа
 function UBASE(baseKey, val) {
     const cs = GC();
     const c = cs[PI];
     if (c.statsLocked) return;
-    c[baseKey] = Math.max(3, Math.min(18, parseInt(val) || 10));
+    const info = GET_STAT_POOL_INFO(c);
+    const oldVal = parseInt(c[baseKey]) || 10;
+    const minVal = info.minFloor[baseKey] !== undefined ? info.minFloor[baseKey] : 8;
+    let desired = Math.max(minVal, Math.min(info.maxCap, parseInt(val) || minVal));
+    const maxAllowedByPool = oldVal + Math.max(0, info.remaining);
+    if (desired > maxAllowedByPool) desired = maxAllowedByPool;
+    c[baseKey] = desired;
     AB(c);
     SC(cs);
     RMC();
@@ -835,6 +920,7 @@ function LKR() {
         SHOW_OPTION_CHOICE('Вариант человека: Выберите 2 характеристики (+1)', statNames, 2, function(selected) {
             const fCs = GC(); const fC = fCs[PI];
             selected.forEach(s => { const k = codeByRus[s]; if (k) fC[k] = (fC[k] || 10) + 1; });
+            fC._statBudgetTotal = (fC._statBudgetTotal || 72) + selected.length;
             AB(fC); SC(fCs); RMC(); ROS();
         });
         return;
@@ -1243,64 +1329,29 @@ function CANCEL_ASI_CHOICE() {
 
 function START_ASI_CHOICE() {
     if (document.getElementById('temp-asi-modal')) document.getElementById('temp-asi-modal').remove();
-    let html = '<div class="modal-content" style="max-width:500px;">';
-    html += '<h2>Повышение характеристик</h2>';
-    html += '<p>Выберите вариант улучшения:</p>';
-    html += '<div id="asi-distribution"></div>';
-    html += '<br><button class="btn-save" id="confirm-asi">Подтвердить</button> ';
-    html += '<button onclick="document.getElementById(\'temp-asi-modal\').remove(); ROS();">Отмена</button>';
-    html += '</div>';
-    let modal = document.createElement('div');
-    modal.className = 'modal active';
-    modal.id = 'temp-asi-modal';
-    modal.innerHTML = html;
-    document.body.appendChild(modal);
+    const cs = GC();
+    const c = cs[PI];
 
-    const c = GC()[PI];
-    const stats = ['str','dex','con','intl','wis','cha'];
-    const names = {str:'Сила', dex:'Ловкость', con:'Телосложение', intl:'Интеллект', wis:'Мудрость', cha:'Харизма'};
-    const baseKeyMap = {str:'baseStr', dex:'baseDex', con:'baseCon', intl:'baseInt', wis:'baseWis', cha:'baseCha'};
-
-    let distHTML = '<p><label><input type="radio" name="asi-mode" value="+2" checked> +2 к одной характеристике</label></p>';
-    distHTML += '<select id="asi-single-stat">';
-    stats.forEach(s => { distHTML += '<option value="'+s+'">'+names[s]+' (сейчас ' + (c[s] || 10) + ')</option>'; });
-    distHTML += '</select>';
-    distHTML += '<br><br><p><label><input type="radio" name="asi-mode" value="+1+1"> +1 к двум разным характеристикам</label></p>';
-    distHTML += '<select id="asi-double-1"><option value="">—</option>';
-    stats.forEach(s => { distHTML += '<option value="'+s+'">'+names[s]+' (сейчас ' + (c[s] || 10) + ')</option>'; });
-    distHTML += '</select> и <select id="asi-double-2"><option value="">—</option>';
-    stats.forEach(s => { distHTML += '<option value="'+s+'">'+names[s]+' (сейчас ' + (c[s] || 10) + ')</option>'; });
-    distHTML += '</select>';
-    document.getElementById('asi-distribution').innerHTML = distHTML;
-
-    document.getElementById('confirm-asi').onclick = function() {
-        const mode = document.querySelector('input[name="asi-mode"]:checked').value;
-        const csList = GC();
-        const c2 = csList[PI];
-        if (mode === '+2') {
-            const stat = document.getElementById('asi-single-stat').value;
-            const capName = baseKeyMap[stat];
-            c2[capName] = (c2[capName] || 10) + 2;
-        } else {
-            const s1 = document.getElementById('asi-double-1').value;
-            const s2 = document.getElementById('asi-double-2').value;
-            if (!s1 || !s2 || s1 === s2) {
-                showMessage('Ошибка', 'Выберите две разные характеристики.');
-                return;
-            }
-            const cap1 = baseKeyMap[s1];
-            const cap2 = baseKeyMap[s2];
-            c2[cap1] = (c2[cap1] || 10) + 1;
-            c2[cap2] = (c2[cap2] || 10) + 1;
-        }
-        AB(c2);
-        REMOVE_PENDING_CHOICE(c2, window._asiChoice ? window._asiChoice.label : '');
-        c2._processingChoices = false;
-        SC(csList);
-        RMC();
-        ROS();
-        document.getElementById('temp-asi-modal').remove();
+    // Запоминаем текущие характеристики как неснижаемый минимум и выдаём ровно +2 очка в пул!
+    const keys = ['baseStr', 'baseDex', 'baseCon', 'baseInt', 'baseWis', 'baseCha'];
+    const curSum = keys.reduce((acc, k) => acc + (parseInt(c[k]) || 10), 0);
+    c._asiMinFloor = {
+        baseStr: c.baseStr || 10,
+        baseDex: c.baseDex || 10,
+        baseCon: c.baseCon || 10,
+        baseInt: c.baseInt || 10,
+        baseWis: c.baseWis || 10,
+        baseCha: c.baseCha || 10
     };
+    c._statBudgetTotal = curSum + 2;
+    c._asiModeActive = true;
+    c.statsLocked = false;
+
+    REMOVE_PENDING_CHOICE(c, window._asiChoice ? window._asiChoice.label : '');
+    SC(cs);
+    RMC();
+    ROS();
+    showMessage('🌟 +2 очка характеристик!', 'Вам начислено <b>+2 свободных очка характеристик</b>!<br><br>Распределите их кнопками <b>«+»</b> в таблице характеристик (можно вложить +2 в одну или по +1 в две разные) и нажмите <b>«🔒 Зафиксировать характеристики»</b>.');
 }
 
 function SHOW_FEAT_CHOICE(availableFeats, onConfirm) {
@@ -1708,21 +1759,63 @@ function OCS() {
         </table>
 
         <h3>💪 Характеристики</h3>
-        ${!c.statsLocked ? `
-            <div style="margin-bottom:8px; display:flex; gap:8px; flex-wrap:wrap;">
-                <button class="btn-small" style="flex:1;" onclick="AUTO_STATS()">⚡ Авто-подбор под класс</button>
-                <button class="btn-small" style="flex:1;" onclick="ROLL_STATS_4D6()">🎲 Бросить 4к6</button>
-                <button class="btn-small btn-save" style="flex:1;" onclick="LKSTATS()">🔒 Зафиксировать характеристики</button>
-            </div>` : ''}
-        <table>
-            <tr><th style="width:32%;">Характеристика</th><th style="width:18%;">База</th><th style="width:16%;">Бонус расы</th><th style="width:17%;">Итог</th><th style="width:17%;">Модификатор</th></tr>
-            <tr><td><b>Сила</b></td><td>${c.statsLocked ? (c.baseStr||10) : `<input type="number" min="3" max="18" value="${c.baseStr||10}" onchange="UBASE('baseStr',this.value)" style="width:75px;">`}</td><td style="color:#aaa;">${c.strBonus>0?'+'+c.strBonus:'—'}</td><td><b>${str}</b></td><td class="stat-mod">${MS(sm)}</td></tr>
-            <tr><td><b>Ловкость</b></td><td>${c.statsLocked ? (c.baseDex||10) : `<input type="number" min="3" max="18" value="${c.baseDex||10}" onchange="UBASE('baseDex',this.value)" style="width:75px;">`}</td><td style="color:#aaa;">${c.dexBonus>0?'+'+c.dexBonus:'—'}</td><td><b>${dex}</b></td><td class="stat-mod">${MS(dm)}</td></tr>
-            <tr><td><b>Телосложение</b></td><td>${c.statsLocked ? (c.baseCon||10) : `<input type="number" min="3" max="18" value="${c.baseCon||10}" onchange="UBASE('baseCon',this.value)" style="width:75px;">`}</td><td style="color:#aaa;">${c.conBonus>0?'+'+c.conBonus:'—'}</td><td><b>${con}</b></td><td class="stat-mod">${MS(cm)}</td></tr>
-            <tr><td><b>Интеллект</b></td><td>${c.statsLocked ? (c.baseInt||10) : `<input type="number" min="3" max="18" value="${c.baseInt||10}" onchange="UBASE('baseInt',this.value)" style="width:75px;">`}</td><td style="color:#aaa;">${c.intBonus>0?'+'+c.intBonus:'—'}</td><td><b>${intl}</b></td><td class="stat-mod">${MS(im)}</td></tr>
-            <tr><td><b>Мудрость</b></td><td>${c.statsLocked ? (c.baseWis||10) : `<input type="number" min="3" max="18" value="${c.baseWis||10}" onchange="UBASE('baseWis',this.value)" style="width:75px;">`}</td><td style="color:#aaa;">${c.wisBonus>0?'+'+c.wisBonus:'—'}</td><td><b>${wis}</b></td><td class="stat-mod">${MS(wm)}</td></tr>
-            <tr><td><b>Харизма</b></td><td>${c.statsLocked ? (c.baseCha||10) : `<input type="number" min="3" max="18" value="${c.baseCha||10}" onchange="UBASE('baseCha',this.value)" style="width:75px;">`}</td><td style="color:#aaa;">${c.chaBonus>0?'+'+c.chaBonus:'—'}</td><td><b>${cha}</b></td><td class="stat-mod">${MS(hm)}</td></tr>
-        </table>
+        ${(() => {
+            const pInfo = GET_STAT_POOL_INFO(c);
+            const remCol = pInfo.remaining > 0 ? '#facc15' : (pInfo.remaining === 0 ? '#52b758' : '#e06060');
+            const statRows = [
+                { label: 'Сила', key: 'baseStr', bonus: c.strBonus, total: str, mod: sm },
+                { label: 'Ловкость', key: 'baseDex', bonus: c.dexBonus, total: dex, mod: dm },
+                { label: 'Телосложение', key: 'baseCon', bonus: c.conBonus, total: con, mod: cm },
+                { label: 'Интеллект', key: 'baseInt', bonus: c.intBonus, total: intl, mod: im },
+                { label: 'Мудрость', key: 'baseWis', bonus: c.wisBonus, total: wis, mod: wm },
+                { label: 'Харизма', key: 'baseCha', bonus: c.chaBonus, total: cha, mod: hm }
+            ].map(st => {
+                const baseVal = c[st.key] || 10;
+                const minV = pInfo.minFloor[st.key] !== undefined ? pInfo.minFloor[st.key] : 8;
+                const canMinus = !c.statsLocked && baseVal > minV;
+                const canPlus = !c.statsLocked && pInfo.remaining > 0 && baseVal < pInfo.maxCap;
+
+                const baseControlHTML = c.statsLocked
+                    ? `<b>${baseVal}</b>`
+                    : `<div style="display:inline-flex; align-items:center; gap:6px;">
+                           <button class="btn-small" ${!canMinus ? 'disabled' : ''} style="padding:3px 9px; font-size:1rem;" onclick="STEP_STAT('${st.key}', -1)">−</button>
+                           <b style="min-width:28px; display:inline-block; font-size:1.08rem; color:#fff;">${baseVal}</b>
+                           <button class="btn-small btn-save" ${!canPlus ? 'disabled' : ''} style="padding:3px 9px; font-size:1rem;" onclick="STEP_STAT('${st.key}', 1)">+</button>
+                       </div>`;
+
+                return `<tr>
+                    <td><b>${st.label}</b></td>
+                    <td>${baseControlHTML}</td>
+                    <td style="color:#aaa;">${st.bonus > 0 ? '+' + st.bonus : '—'}</td>
+                    <td><b>${st.total}</b></td>
+                    <td class="stat-mod">${MS(st.mod)}</td>
+                </tr>`;
+            }).join('');
+
+            return `
+                ${!c.statsLocked ? `
+                    <div style="background:#181715; border:1px solid ${remCol}; border-radius:8px; padding:10px 14px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+                        <div>
+                            <span style="color:#ebe8e2;">🎯 Доступно очков для распределения:</span>
+                            <b style="color:${remCol}; font-size:1.2rem; margin-left:6px;">${pInfo.remaining}</b>
+                            <small style="color:#9e988e; display:block;">(Мин: 8, Макс: ${pInfo.maxCap}. Нажимайте «+» и «−» для распределения без перерасхода)</small>
+                        </div>
+                        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                            ${!pInfo.isAsiMode ? `
+                                <button class="btn-small" onclick="RESET_STATS_TO_8()">🔄 Сбросить в 8 (24 очка)</button>
+                                <button class="btn-small" onclick="AUTO_STATS()">⚡ Авто-подбор</button>
+                                <button class="btn-small" onclick="ROLL_STATS_4D6()">🎲 Бросить 4к6</button>
+                            ` : ''}
+                            <button class="btn-small btn-save" ${pInfo.remaining !== 0 ? 'disabled title="Сначала распределите все очки до 0"' : ''} onclick="LKSTATS()">🔒 Сохранить характеристики</button>
+                        </div>
+                    </div>
+                ` : ''}
+                <table>
+                    <tr><th style="width:30%;">Характеристика</th><th style="width:24%;">База</th><th style="width:14%;">Раса</th><th style="width:16%;">Итог</th><th style="width:16%;">Мод</th></tr>
+                    ${statRows}
+                </table>
+            `;
+        })()}
 
         <h3>🛡️ Боевые параметры и Магические ячейки</h3>
         <table>
