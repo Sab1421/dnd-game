@@ -499,42 +499,82 @@ function BG3_PLAYER_DRINK_POTION(invIdx) {
     RENDER_MAP_AREA();
 }
 
+// Проверяет, видна ли точка на карте игроку (учитывает сплошной и динамический туман войны)
+function IS_MAP_POINT_VISIBLE_FOR_PLAYER(st, xPct, yPct) {
+    if (!st || !st.fogMode || st.fogMode === 'none') return true;
+    if (st.fogMode === 'full') return false;
+    if (st.fogMode === 'dynamic') {
+        const areas = st.revealedAreas || [];
+        if (areas.length === 0) return false;
+        const vp = document.getElementById('map-viewport');
+        const aspect = (vp && vp.clientWidth > 0) ? (vp.clientHeight / vp.clientWidth) : 1;
+        return areas.some(a => {
+            const dx = (xPct - a.x);
+            const dy = (yPct - a.y) * aspect;
+            return Math.hypot(dx, dy) <= (a.r || 9) * 0.95;
+        });
+    }
+    return true;
+}
+
 function OPEN_AMBUSH_MODAL() {
-    const cs = GC();
-    const bestiary = GET_BESTIARY();
+    const st = GET_MAP_STATE();
+    SYNC_PLAYER_TOKENS_WITH_CHARS(st);
+    const tokens = st.tokens || [];
     const vn = GET_ACTIVE_VN_DIALOG();
     const cont = document.getElementById('gm-tool-modal-content');
     cont.style.maxWidth = '640px';
 
     let ambushTargetsHTML = '';
-    if (vn && vn.active && vn.name) {
+
+    // 1. Активный собеседник-NPC (если игрок сейчас ведёт с ним диалог)
+    const playerLeftVN = (vn && vn.leftPlayers && vn.leftPlayers.includes(PI));
+    if (vn && vn.active && vn.name && !playerLeftVN) {
         ambushTargetsHTML += `
             <button class="btn-danger" style="width:100%; padding:12px; text-align:left; margin-bottom:8px;" onclick="START_PLAYER_AMBUSH('${vn.name.replace(/'/g, "\\'")}', '🎭', 35, 14)">
                 🗡️ Напасть на собеседника: <b>${vn.name}</b> (${vn.role || 'NPC'})
             </button>`;
     }
 
-    bestiary.forEach(m => {
+    // 2. Только те враги / NPC, чьи фишки РЕАЛЬНО стоят на карте и видны игроку (не в тумане!)
+    tokens.forEach((tok, tIdx) => {
+        if (tok.isPlayer) return;
+        if ((tok.hp ?? 1) <= 0) return;
+        if (!IS_MAP_POINT_VISIBLE_FOR_PLAYER(st, tok.x, tok.y)) return;
+
         ambushTargetsHTML += `
-            <button class="btn-small" style="width:100%; padding:10px; text-align:left; margin-bottom:6px; display:flex; justify-content:space-between;" onclick="START_PLAYER_AMBUSH('${m.name.replace(/'/g, "\\'")}', '${m.icon || '👹'}', ${m.hp || 20}, ${m.ac || 13})">
-                <span>${m.icon || '👹'} <b>${m.name}</b> (ХП ${m.hp}, КБ ${m.ac})</span>
-                <span style="color:#ef4444;">⚔️ Атаковать</span>
+            <button class="btn-small" style="width:100%; padding:10px; text-align:left; margin-bottom:6px; display:flex; justify-content:space-between; align-items:center;" onclick="START_PLAYER_AMBUSH_TOKEN(${tIdx})">
+                <span>${tok.icon || '👹'} <b>${tok.name}</b> (ХП ${tok.hp}/${tok.maxHp}, КБ ${tok.ac || 12})</span>
+                <span style="color:#ef4444; font-weight:bold;">⚔️ Атаковать</span>
             </button>`;
     });
 
-    cs.forEach((member, idx) => {
-        if (idx === PI) return;
+    // 3. Другие игроки, чьи фишки реально стоят на карте и видны
+    tokens.forEach((tok, tIdx) => {
+        if (!tok.isPlayer || tok.charIdx === PI) return;
+        if ((tok.hp ?? 1) <= 0) return;
+        if (!IS_MAP_POINT_VISIBLE_FOR_PLAYER(st, tok.x, tok.y)) return;
+
         ambushTargetsHTML += `
-            <button class="btn-small" style="width:100%; padding:10px; text-align:left; margin-bottom:6px; display:flex; justify-content:space-between;" onclick="START_PLAYER_AMBUSH_PARTY_DUEL(${idx})">
-                <span>🛡️ <b>${member.name || 'Союзник'}</b> (Дуэль / PvP с игроком отряда)</span>
-                <span style="color:#f59e0b;">⚔️ Вызвать на бой</span>
+            <button class="btn-small" style="width:100%; padding:10px; text-align:left; margin-bottom:6px; display:flex; justify-content:space-between; align-items:center;" onclick="START_PLAYER_AMBUSH_TOKEN(${tIdx})">
+                <span>🛡️ <b>${tok.name || 'Союзник'}</b> (Дуэль на карте • ХП ${tok.hp}/${tok.maxHp})</span>
+                <span style="color:#f59e0b; font-weight:bold;">⚔️ Вызвать на бой</span>
             </button>`;
     });
+
+    if (!ambushTargetsHTML) {
+        ambushTargetsHTML = `
+            <div style="background:#181715; border:1px dashed #524a3d; border-radius:8px; padding:18px; text-align:center; color:#aba498;">
+                🌫️ <b>На карте сейчас нет видимых целей для нападения.</b><br>
+                <small style="color:#888;">Дождитесь, пока Гейм-Мастер выставит врагов на карту или откроет область из-под тумана войны.</small>
+            </div>
+        `;
+    }
 
     cont.innerHTML = `
-        <h2>🗡️ Внезапная атака (Инициация боя)</h2>
+        <h2>🗡️ Внезапная атака (Цели на карте)</h2>
         <p style="color:#aba498; font-size:0.92rem; margin-bottom:14px;">
-            Выберите, на кого вы хотите напасть. Отряд автоматически перейдёт в пошаговый боевой режим, а вы получите право первого удара!
+            Выберите цель среди тех, кто сейчас находится на карте рядом с вами. Вы получите право первого хода!
         </p>
         <div style="max-height:340px; overflow-y:auto; margin-bottom:14px;">
             ${ambushTargetsHTML}
@@ -544,6 +584,63 @@ function OPEN_AMBUSH_MODAL() {
     OM('gm-tool-modal');
 }
 
+// Гарантирует, что фишка атакующего игрока есть на карте, не сдвигая уже стоящие фишки
+function ENSURE_ATTACKER_TOKEN_ON_MAP(st, cs) {
+    if (!st.tokens) st.tokens = [];
+    let myIdx = st.tokens.findIndex(t => t.isPlayer && t.charIdx === PI);
+    if (myIdx === -1 && cs[PI]) {
+        const c = cs[PI];
+        st.tokens.push({
+            id: Date.now(),
+            isPlayer: true,
+            charIdx: PI,
+            name: c.name || 'Герой',
+            icon: '🛡️',
+            avatar: c.avatar || '',
+            x: 25 + (PI * 12) % 55,
+            y: 72,
+            hp: c.hp ?? 10,
+            maxHp: c.maxHp || 10,
+            ac: CAC(c),
+            init: 10
+        });
+        myIdx = st.tokens.length - 1;
+    }
+    return myIdx;
+}
+
+// Внезапная атака по уже существующей фишке на карте (без дублирования монстров!)
+function START_PLAYER_AMBUSH_TOKEN(targetTokIdx) {
+    CM('gm-tool-modal');
+    const cs = GC();
+    cs.forEach(m => { m.inCombat = true; });
+    SC(cs);
+
+    SAVE_ACTIVE_VN_DIALOG(null);
+    const st = GET_MAP_STATE();
+    if (!st.tokens || !st.tokens[targetTokIdx]) return;
+
+    const targetTok = st.tokens[targetTokIdx];
+    const myTokIdx = ENSURE_ATTACKER_TOKEN_ON_MAP(st, cs);
+
+    st.turnOrder = {
+        active: true,
+        round: 1,
+        currentIdx: myTokIdx !== -1 ? myTokIdx : 0,
+        actionsLeft: 1,
+        attacksLeft: GET_MAX_ATTACKS_PER_ACTION(cs[PI]),
+        bonusLeft: 1
+    };
+    window._bg3SelectedTargetIdx = targetTokIdx;
+    SAVE_MAP_STATE(st);
+
+    CANCEL_REST_POLL_IF_COMBAT(cs[PI]?.name || 'Игрок');
+    LOG_COMBAT_TO_CHAT(`🗡️ ВНЕЗАПНАЯ АТАКА! «${cs[PI]?.name || 'Герой'}» нападает на «${targetTok.name}»! Начинается Раунд 1!`);
+    RMC();
+    RENDER_MAP_AREA();
+}
+
+// Внезапная атака по собеседнику-NPC из окна диалога
 function START_PLAYER_AMBUSH(enemyName, icon, hp, ac) {
     CM('gm-tool-modal');
     const cs = GC();
@@ -551,25 +648,29 @@ function START_PLAYER_AMBUSH(enemyName, icon, hp, ac) {
     SC(cs);
 
     SAVE_ACTIVE_VN_DIALOG(null);
-    GM_SPAWN_PARTY_TOKENS();
-
     const st = GET_MAP_STATE();
-    st.tokens.push({
-        id: Date.now() + 999,
-        isPlayer: false,
-        name: enemyName,
-        icon: icon || '👹',
-        x: 50,
-        y: 32,
-        hp: hp || 25,
-        maxHp: hp || 25,
-        ac: ac || 13,
-        atkBonus: 5,
-        dmgFormula: '1к8+3',
-        init: 10
-    });
+    const myTokIdx = ENSURE_ATTACKER_TOKEN_ON_MAP(st, cs);
 
-    const myTokIdx = st.tokens.findIndex(t => t.isPlayer && t.charIdx === PI);
+    // Если такой NPC уже есть на карте — выбираем его, иначе выставляем его фишку
+    let targetTokIdx = st.tokens.findIndex(t => !t.isPlayer && t.name === enemyName && (t.hp ?? 1) > 0);
+    if (targetTokIdx === -1) {
+        st.tokens.push({
+            id: Date.now() + 999,
+            isPlayer: false,
+            name: enemyName,
+            icon: icon || '🎭',
+            x: 50,
+            y: 35,
+            hp: hp || 25,
+            maxHp: hp || 25,
+            ac: ac || 13,
+            atkBonus: 5,
+            dmgFormula: '1к8+3',
+            init: 10
+        });
+        targetTokIdx = st.tokens.length - 1;
+    }
+
     st.turnOrder = {
         active: true,
         round: 1,
@@ -578,38 +679,11 @@ function START_PLAYER_AMBUSH(enemyName, icon, hp, ac) {
         attacksLeft: GET_MAX_ATTACKS_PER_ACTION(cs[PI]),
         bonusLeft: 1
     };
-    window._bg3SelectedTargetIdx = st.tokens.length - 1;
+    window._bg3SelectedTargetIdx = targetTokIdx;
     SAVE_MAP_STATE(st);
 
     CANCEL_REST_POLL_IF_COMBAT(cs[PI]?.name || 'Игрок');
     LOG_COMBAT_TO_CHAT(`🗡️ ВНЕЗАПНАЯ АТАКА! «${cs[PI]?.name || 'Герой'}» нападает на «${enemyName}»! Начинается Раунд 1!`);
-    RMC();
-    RENDER_MAP_AREA();
-}
-
-function START_PLAYER_AMBUSH_PARTY_DUEL(targetCharIdx) {
-    CM('gm-tool-modal');
-    const cs = GC();
-    cs.forEach(m => { m.inCombat = true; });
-    SC(cs);
-
-    GM_SPAWN_PARTY_TOKENS();
-    const st = GET_MAP_STATE();
-    const myTokIdx = st.tokens.findIndex(t => t.isPlayer && t.charIdx === PI);
-    const targetTokIdx = st.tokens.findIndex(t => t.isPlayer && t.charIdx === targetCharIdx);
-
-    st.turnOrder = {
-        active: true,
-        round: 1,
-        currentIdx: myTokIdx !== -1 ? myTokIdx : 0,
-        actionsLeft: 1,
-        attacksLeft: GET_MAX_ATTACKS_PER_ACTION(cs[PI]),
-        bonusLeft: 1
-    };
-    if (targetTokIdx !== -1) window._bg3SelectedTargetIdx = targetTokIdx;
-    SAVE_MAP_STATE(st);
-
-    LOG_COMBAT_TO_CHAT(`⚔️ «${cs[PI]?.name || 'Герой'}» вступает в поединок против «${cs[targetCharIdx]?.name || 'Союзника'}»!`);
     RMC();
     RENDER_MAP_AREA();
 }
