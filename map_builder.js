@@ -1,5 +1,5 @@
 // ================================================================
-// 🎨 ПРОДВИНУТЫЙ КОНСТРУКТОР КАРТ V2 (HD-РЕНДЕР, СВЕТ, СЛОИ И ГЕНЕРАТОР)
+// 🎨 СТУДИЯ КАРТ HD V3 (LIGHTMAP-СВЕТ, ГЛУБИНА, 13 БИОМОВ, СТРОГАЯ ЛОГИКА)
 // ================================================================
 window._mbStampCat = window._mbStampCat || 'nature';
 window._mbStampSearch = window._mbStampSearch || '';
@@ -11,8 +11,9 @@ window._mbSelectedStamp = window._mbSelectedStamp || '';
 window._mbShowGrid = (window._mbShowGrid !== undefined) ? window._mbShowGrid : true;
 window._mbRandBiome = window._mbRandBiome || 'random';
 window._mbLighting = window._mbLighting || 'day';   // 'day' | 'sunset' | 'tavern' | 'night' | 'dungeon'
-window._mbStampScale = window._mbStampScale || 1.0; // Множитель размера кисти объектов
-window._mbStampRot = window._mbStampRot || 0;       // Угол поворота в градусах
+window._mbPostFx = (window._mbPostFx !== undefined) ? window._mbPostFx : true;
+window._mbStampScale = window._mbStampScale || 1.0;
+window._mbStampRot = window._mbStampRot || 0;
 window._mbRandRot = (window._mbRandRot !== undefined) ? window._mbRandRot : false;
 window._mbSnapGrid = (window._mbSnapGrid !== undefined) ? window._mbSnapGrid : false;
 window._mbIsDrawing = false;
@@ -27,38 +28,42 @@ const MB_SIZE_PRESETS = [
 ];
 
 const MB_LIGHTING_MODES = {
-    day:     { label: '☀️ Дневной свет',       tint: 'rgba(255, 246, 224, 0.06)', ambientDark: 0.0,  vignette: 0.22, glowPower: 0.45 },
-    sunset:  { label: '🌅 Золотой закат',      tint: 'rgba(255, 132, 48, 0.16)',  ambientDark: 0.12, vignette: 0.36, glowPower: 0.72 },
-    tavern:  { label: '🕯️ Уютная таверна',     tint: 'rgba(255, 168, 76, 0.10)',  ambientDark: 0.26, vignette: 0.44, glowPower: 0.95 },
-    night:   { label: '🌙 Лунная ночь',        tint: 'rgba(18, 36, 86, 0.46)',    ambientDark: 0.44, vignette: 0.52, glowPower: 1.15 },
-    dungeon: { label: '🏰 Мрачное подземелье', tint: 'rgba(14, 12, 22, 0.38)',    ambientDark: 0.38, vignette: 0.62, glowPower: 1.05 }
+    day:     { label: '☀️ Ясный день',         ambient: [252, 249, 242], bloom: 0.20, vignette: 0.22 },
+    sunset:  { label: '🌅 Золотой закат',      ambient: [238, 192, 148], bloom: 0.34, vignette: 0.34 },
+    tavern:  { label: '🕯️ Уютный полумрак',    ambient: [162, 142, 126], bloom: 0.44, vignette: 0.46 },
+    night:   { label: '🌙 Лунная ночь',        ambient: [94,  116, 168], bloom: 0.52, vignette: 0.52 },
+    dungeon: { label: '🏰 Глубокое подземелье', ambient: [108, 104, 122], bloom: 0.50, vignette: 0.62 }
 };
 
-// Порядок наслоения покрытий для мягких органических переходов
-const MB_TILE_ORDER = ['abyss', 'water', 'lava', 'sand', 'dirt', 'grass', 'snow', 'cobble', 'flagstone', 'stone', 'wood', 'wall'];
+// Базовый порядок слоёв (любые новые кастомные текстуры из assets.js автоматически добавляются перед стенами)
+const MB_BASE_TILE_ORDER = ['abyss', 'water', 'lava', 'sand', 'dirt', 'grass', 'leaves_green', 'leaves_red', 'snow', 'cobble', 'flagstone', 'stone', 'wood'];
 
 function GET_MB_TILES() {
     const src = (window.SITE_ASSETS && window.SITE_ASSETS.builderTiles) ? Object.assign({}, window.SITE_ASSETS.builderTiles) : {};
     const defaults = {
-        grass:     { name: 'Трава',       icon: '🌿', bg: '#31542c', border: '#233d1f', img: 'assets/tiles/grass.jpg' },
-        dirt:      { name: 'Тропа/Земля', icon: '🛤️', bg: '#694f37', border: '#4f3a27', img: 'assets/tiles/dirt.jpg' },
-        cobble:    { name: 'Брусчатка',   icon: '🏛️', bg: '#64666b', border: '#484a4f', img: 'assets/tiles/cobble.jpg' },
-        stone:     { name: 'Каменный пол',icon: '🪨', bg: '#4b4e54', border: '#35383d', img: 'assets/tiles/stone.jpg' },
-        flagstone: { name: 'Плитка зала', icon: '⬜', bg: '#5a5d63', border: '#3f4247', img: 'assets/stamps/other/floor_flagstone_tiling_6x6.png' },
-        wood:      { name: 'Доски (Пол)', icon: '🪵', bg: '#734b2c', border: '#54351d', img: 'assets/stamps/other/floor_floorboards_tiling_8x8.png' },
-        wall:      { name: 'Стена',       icon: '🧱', bg: '#262422', border: '#57534e', img: 'assets/tiles/wall.jpg' },
-        water:     { name: 'Вода',        icon: '🌊', bg: '#1e527d', border: '#153c5c', img: 'assets/tiles/water.jpg' },
-        lava:      { name: 'Лава',        icon: '🔥', bg: '#b91c1c', border: '#f97316', img: 'assets/tiles/lava.jpg' },
-        snow:      { name: 'Снег/Лёд',    icon: '❄️', bg: '#cbd5e1', border: '#94a3b8', img: 'assets/tiles/snow.png' },
-        sand:      { name: 'Песок',       icon: '🏜️', bg: '#c2a878', border: '#9e8559', img: 'assets/tiles/sand.jpg' },
-        abyss:     { name: 'Пропасть',    icon: '🕳️', bg: '#0c0c0e', border: '#1d1d21', img: 'assets/tiles/abyss.png' }
+        grass:        { name: 'Трава',         icon: '🌿', bg: '#34592e', border: '#233d1f', img: 'assets/tiles/grass.jpg' },
+        dirt:         { name: 'Тропа/Земля',   icon: '🛤️', bg: '#6b5138', border: '#4f3a27', img: 'assets/tiles/dirt.jpg' },
+        leaves_green: { name: 'Лесная листва', icon: '🍃', bg: '#3f6230', border: '#2a4220', img: 'assets/stamps/other/texture_leaf_litter_green_1.png' },
+        leaves_red:   { name: 'Осенний лист',  icon: '🍁', bg: '#7c4328', border: '#542c1a', img: 'assets/stamps/other/texture_leaf_litter_red.png' },
+        sand:         { name: 'Песок',         icon: '🏜️', bg: '#c7ad7c', border: '#9e8559', img: 'assets/tiles/sand.jpg' },
+        snow:         { name: 'Снег/Лёд',      icon: '❄️', bg: '#d7e2ec', border: '#9eb1c4', img: 'assets/tiles/snow.jpg' },
+        cobble:       { name: 'Брусчатка',     icon: '🏛️', bg: '#65686e', border: '#484a4f', img: 'assets/tiles/cobble.jpg' },
+        flagstone:    { name: 'Плиты зала',    icon: '⬜', bg: '#5d6066', border: '#3f4247', img: 'assets/stamps/other/floor_flagstone_tiling_6x6.png' },
+        stone:        { name: 'Каменный пол',  icon: '🪨', bg: '#4b4e54', border: '#35383d', img: 'assets/tiles/stone.jpg' },
+        wood:         { name: 'Доски (Пол)',   icon: '🪵', bg: '#734b2c', border: '#54351d', img: 'assets/stamps/other/floor_floorboards_tiling_8x8.png' },
+        water:        { name: 'Вода',          icon: '🌊', bg: '#1e527d', border: '#153c5c', img: 'assets/tiles/water.jpg' },
+        lava:         { name: 'Лава',          icon: '🔥', bg: '#b91c1c', border: '#f97316', img: 'assets/tiles/lava.jpg' },
+        abyss:        { name: 'Пропасть',      icon: '🕳️', bg: '#0c0c10', border: '#1d1d24', img: 'assets/tiles/abyss.jpg' },
+        wall:         { name: 'Стена',         icon: '🧱', bg: '#282523', border: '#57534e', img: 'assets/tiles/wall.jpg' }
     };
+
     const merged = {};
     for (const key of Object.keys(defaults)) {
         merged[key] = src[key] ? Object.assign({}, defaults[key], src[key]) : defaults[key];
     }
+    // Автоматически подхватываем ЛЮБЫЕ новые текстуры, которые ты сама добавишь в assets.js -> builderTiles!
     for (const [k, v] of Object.entries(src)) {
-        if (!merged[k]) merged[k] = v;
+        if (!merged[k]) merged[k] = Object.assign({ name: k, icon: '🎨', bg: '#555', border: '#333', img: '' }, v);
     }
     return merged;
 }
@@ -75,7 +80,6 @@ function GET_MB_STAMPS() {
     ];
 }
 
-// Убирает дубли _2 / _3 при показе в каталоге кнопок, чтобы список был чистым
 function GET_UNIQUE_MB_STAMPS() {
     if (window._mbUniqueStampsCache) return window._mbUniqueStampsCache;
     const all = GET_MB_STAMPS();
@@ -83,8 +87,7 @@ function GET_UNIQUE_MB_STAMPS() {
     const out = [];
     for (const s of all) {
         const normKey = (s.cat || 'other') + '|' + (s.label || s.id).toLowerCase().replace(/\s+/g, ' ').trim();
-        const isNumericDup = /_[234]$/.test(s.id || '') && seen.has(normKey);
-        if (isNumericDup) continue;
+        if (/_[234]$/.test(s.id || '') && seen.has(normKey)) continue;
         seen.add(normKey);
         out.push(s);
     }
@@ -92,9 +95,10 @@ function GET_UNIQUE_MB_STAMPS() {
     return out;
 }
 
-// --- КЭШ ИЗОБРАЖЕНИЙ И БЕСШОВНЫХ ПАТТЕРНОВ ---
+// --- КЭШ ИЗОБРАЖЕНИЙ, БЕСШОВНЫХ ПАТТЕРНОВ И ПРОЦЕДУРНЫХ ТЕКСТУР ---
 window._mbImgCache = window._mbImgCache || {};
 window._mbPatternCache = window._mbPatternCache || {};
+window._mbNoisePattern = window._mbNoisePattern || null;
 
 function MB_GET_LOADED_IMG(src) {
     if (!src) return null;
@@ -105,14 +109,14 @@ function MB_GET_LOADED_IMG(src) {
     window._mbImgCache[src] = { status: 'loading', img };
     img.onload = function() {
         window._mbImgCache[src].status = 'ok';
-        delete window._mbPatternCache[src];
-        if (document.getElementById('mb-editor-canvas')) {
-            if (!window._mbRedrawTimer) {
-                window._mbRedrawTimer = setTimeout(() => {
-                    window._mbRedrawTimer = null;
-                    DRAW_MB_CANVAS();
-                }, 40);
-            }
+        for (const k of Object.keys(window._mbPatternCache)) {
+            if (k.includes(src)) delete window._mbPatternCache[k];
+        }
+        if (document.getElementById('mb-editor-canvas') && !window._mbRedrawTimer) {
+            window._mbRedrawTimer = setTimeout(() => {
+                window._mbRedrawTimer = null;
+                DRAW_MB_CANVAS();
+            }, 35);
         }
     };
     img.onerror = function() {
@@ -122,17 +126,75 @@ function MB_GET_LOADED_IMG(src) {
     return null;
 }
 
-function MB_GET_TILE_PATTERN(ctx, tileKey, tileImg, cellPx) {
-    const cacheKey = `${tileKey}_${Math.round(cellPx)}`;
+// Процедурный качественный паттерн (используется если файл в assets/tiles/ не найден, например snow или abyss)
+function MB_BUILD_PROCEDURAL_PATTERN(ctx, tileKey, cfg, cellPx) {
+    const cacheKey = `proc_${tileKey}_${Math.round(cellPx)}`;
     if (window._mbPatternCache[cacheKey]) return window._mbPatternCache[cacheKey];
 
-    // Масштабируем текстуру на 4–5 клеток, чтобы не было уродливой мелкой «плитки»
-    const repeatCells = (tileKey === 'wood' || tileKey === 'flagstone' || tileKey === 'cobble') ? 3.5 : (tileKey === 'wall' ? 2.2 : 4.5);
-    const targetPx = Math.max(96, Math.min(360, Math.round(cellPx * repeatCells)));
+    const size = 192;
+    const off = document.createElement('canvas');
+    off.width = size; off.height = size;
+    const o = off.getContext('2d');
+    o.fillStyle = cfg.bg || '#444';
+    o.fillRect(0, 0, size, size);
+
+    // Псевдослучайный генератор (детерминированный)
+    let seed = 1337 + tileKey.split('').reduce((a, ch) => a + ch.charCodeAt(0) * 31, 0);
+    const rnd = () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };
+
+    if (tileKey === 'snow') {
+        const g = o.createLinearGradient(0, 0, size, size);
+        g.addColorStop(0, '#dde7f0'); g.addColorStop(0.5, '#cfdce8'); g.addColorStop(1, '#dde7f0');
+        o.fillStyle = g; o.fillRect(0, 0, size, size);
+        for (let i = 0; i < 65; i++) {
+            o.fillStyle = rnd() > 0.5 ? 'rgba(255,255,255,0.45)' : 'rgba(130,160,190,0.18)';
+            o.beginPath(); o.arc(rnd() * size, rnd() * size, 3 + rnd() * 14, 0, Math.PI * 2); o.fill();
+        }
+        for (let i = 0; i < 90; i++) {
+            o.fillStyle = 'rgba(255,255,255,0.75)';
+            o.fillRect(rnd() * size, rnd() * size, 2, 2);
+        }
+    } else if (tileKey === 'abyss') {
+        o.fillStyle = '#09090d'; o.fillRect(0, 0, size, size);
+        for (let i = 0; i < 35; i++) {
+            o.fillStyle = 'rgba(42, 34, 66, 0.16)';
+            o.beginPath(); o.arc(rnd() * size, rnd() * size, 8 + rnd() * 22, 0, Math.PI * 2); o.fill();
+        }
+    } else if (tileKey === 'wood') {
+        const planks = 6, ph = size / planks;
+        for (let p = 0; p < planks; p++) {
+            o.fillStyle = p % 2 === 0 ? '#744c2d' : '#6b4527';
+            o.fillRect(0, p * ph, size, ph);
+            o.strokeStyle = 'rgba(28, 14, 5, 0.45)';
+            o.lineWidth = 1.5;
+            o.strokeRect(0, p * ph, size, ph);
+            const splitX = Math.floor(rnd() * size);
+            o.beginPath(); o.moveTo(splitX, p * ph); o.lineTo(splitX, (p + 1) * ph); o.stroke();
+        }
+    } else {
+        for (let i = 0; i < 90; i++) {
+            o.fillStyle = rnd() > 0.5 ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.08)';
+            o.beginPath(); o.arc(rnd() * size, rnd() * size, 3 + rnd() * 12, 0, Math.PI * 2); o.fill();
+        }
+    }
+
+    const pat = ctx.createPattern(off, 'repeat');
+    window._mbPatternCache[cacheKey] = pat;
+    return pat;
+}
+
+function MB_GET_TILE_PATTERN(ctx, tileKey, tileImg, src, cellPx) {
+    const cacheKey = `img_${src}_${Math.round(cellPx)}`;
+    if (window._mbPatternCache[cacheKey]) return window._mbPatternCache[cacheKey];
+
+    const repeatCells = (tileKey === 'wood' || tileKey === 'flagstone' || tileKey === 'cobble') ? 3.8 : (tileKey === 'wall' ? 2.4 : 4.8);
+    const targetPx = Math.max(110, Math.min(380, Math.round(cellPx * repeatCells)));
     const off = document.createElement('canvas');
     off.width = targetPx;
     off.height = targetPx;
     const octx = off.getContext('2d');
+    octx.imageSmoothingEnabled = true;
+    octx.imageSmoothingQuality = 'high';
     octx.drawImage(tileImg, 0, 0, targetPx, targetPx);
 
     const pat = ctx.createPattern(off, 'repeat');
@@ -140,52 +202,80 @@ function MB_GET_TILE_PATTERN(ctx, tileKey, tileImg, cellPx) {
     return pat;
 }
 
+// Бесшовный мягкий органический шум поверх ландшафта (убирает эффект «повторяющейся плитки»)
+function MB_GET_ORGANIC_NOISE_PATTERN(ctx) {
+    if (window._mbNoisePattern) return window._mbNoisePattern;
+    const s = 320;
+    const off = document.createElement('canvas');
+    off.width = s; off.height = s;
+    const o = off.getContext('2d');
+    let seed = 918273;
+    const rnd = () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };
+
+    for (let i = 0; i < 42; i++) {
+        const x = rnd() * s, y = rnd() * s, r = 24 + rnd() * 58;
+        const isLight = rnd() > 0.48;
+        const col = isLight ? '255, 248, 224' : '12, 18, 24';
+        const alpha = isLight ? 0.055 : 0.075;
+        // Рисуем с бесшовным переносом через края
+        for (const dx of [-s, 0, s]) {
+            for (const dy of [-s, 0, s]) {
+                if (x + dx + r < 0 || x + dx - r > s || y + dy + r < 0 || y + dy - r > s) continue;
+                const g = o.createRadialGradient(x + dx, y + dy, r * 0.1, x + dx, y + dy, r);
+                g.addColorStop(0, `rgba(${col}, ${alpha})`);
+                g.addColorStop(1, `rgba(${col}, 0)`);
+                o.fillStyle = g;
+                o.beginPath(); o.arc(x + dx, y + dy, r, 0, Math.PI * 2); o.fill();
+            }
+        }
+    }
+    window._mbNoisePattern = ctx.createPattern(off, 'repeat');
+    return window._mbNoisePattern;
+}
+
 function MB_PRELOAD_TILES() {
     const tiles = GET_MB_TILES();
     Object.values(tiles).forEach(t => { if (t.img) MB_GET_LOADED_IMG(t.img); });
 }
 
-// --- ОПРЕДЕЛЕНИЕ НАТУРАЛЬНОГО РАЗМЕРА, СЛОЯ И СВЕЧЕНИЯ ОБЪЕКТА ---
+// --- СЛОИ, ПРОПОРЦИИ И СВЕЧЕНИЕ СПРАЙТОВ ---
 function MB_ANALYZE_STAMP_META(stObj) {
     const id = ((stObj?.id || '') + ' ' + (stObj?.label || '')).toLowerCase();
 
-    // 1. Определяем слой Z (0 = подложка, 1 = обычный объект, 2 = высокий/крыша/крона)
     let layer = 1;
     if (/(rug|carpet|mat|tatami|puddle|leaf_litter|duff|clover|soil_patch|dirt_patch|paving_stone|blood|webs|lily|submerged|current|rapids|river_edge|road_edge|path_edge|bridge|floor|ruin|shadow|shade|embers|fiery_area|oasis|watertransparent|spore)/i.test(id)) {
         layer = 0;
-    } else if (/(roof|tree|palm|canopy|balloon|wing|tower|watchpost|chandelier|lightning|fireball|burning_hands|breath_weapon|wall_of_fire)/i.test(id) && !/(stump|fallen|branch|root|log)/i.test(id)) {
+    } else if (/(roof|tree|palm|canopy|balloon|wing|tower|watchpost|chandelier|lightning|fireball|burning_hands|breath_weapon|wall_of_fire)/i.test(id) && !/(stump|fallen|branch|root|log|trunk)/i.test(id)) {
         layer = 2;
     }
 
-    // 2. Определяем базовый размер в клетках (учитывая пометки вроде 6x4, 3x2 в имени файла!)
     let baseCells = 1.15;
     const dimMatch = id.match(/(\d+)\s*x\s*(\d+)/i);
     if (dimMatch) {
         const wC = parseInt(dimMatch[1]) || 1;
         const hC = parseInt(dimMatch[2]) || 1;
-        baseCells = Math.max(0.8, Math.min(6.5, Math.max(wC, hC) * 0.72));
+        baseCells = Math.max(0.8, Math.min(6.2, Math.max(wC, hC) * 0.72));
     } else if (/(roof|tent_large|tent_round_large|pavillion|balloon)/i.test(id)) {
         baseCells = 3.6;
-    } else if (/(tree_bigger|tree_large|tree_big|palmtree|fountain|wagon|catapult|shelter|watchpost|oasis|bigstatue|large_statue|pool)/i.test(id)) {
-        baseCells = 2.4;
-    } else if (/(tree|palm|tent|ballista|cannon|table_long|tabledinning|tableroundlarge|carpet|rug_6|bed_pattern|bedframeddouble|billiards_table|piano|sofa|forge|altar|tomb|bridge|rock_formation|fallen_tree|boulder|cart|thicket)/i.test(id)) {
-        baseCells = 1.75;
-    } else if (/(table|bed|desk|bench|bookshelf|dresser|statue|well|barrel|crate|chest|campfire|brazier|cauldron|oven|stove|throne|bush|shrub|cactus|fungi|mushroom|rock|stump|log|pillar|door|grave|bonepile|crystal|flytrap)/i.test(id)) {
+    } else if (/(tree_bigger|tree_large|tree_big|palmtree|fountain|wagon|catapult|shelter|watchpost|oasis|bigstatue|large_statue|tatami_mat_large)/i.test(id)) {
+        baseCells = 2.35;
+    } else if (/(tree|palm|tent|ballista|cannon$|table_long|tabledinning|tableroundlarge|carpet|rug_6|bed_pattern|bedframeddouble|billiards_table|piano|sofa|forge|altar|tomb|bridge|rock_formation|fallen_tree|boulder|cart|thicket|casting_table|chandelier|orrery_huge)/i.test(id)) {
+        baseCells = 1.72;
+    } else if (/(table|bed|desk|bench|bookshelf|dresser|cupboard|statue|well|barrel|crate|chest|campfire|brazier|cauldron|oven|stove|throne|bush|shrub|cactus|fungi|mushroom|rock|stump|log|pillar|door|grave|bonepile|crystal|flytrap|anvil|melting_pot|shrine|samurai_armor|taiko|bonsai|totem|meatrack|tanningrack|barricade|woodenstakes|shipswheel|anchor)/i.test(id)) {
         baseCells = 1.15;
-    } else if (/(candle|lantern|torch|flower|apple|egg|pie|plate|meat|tankard|card|scroll|skull|bone|coin|shell|starfish|crab|parrot|cat_|bottle|chair|stool|cushion|sack|bucket|hammer|axe|sword|shield)/i.test(id)) {
+    } else if (/(candle|lantern|torch|flower|apple|egg|pie|plate|meat|tankard|card|scroll|skull|bone|coin|shell|starfish|crab|parrot|seagull|cat_|bottle|chair|stool|cushion|sack|bucket|hammer|axe|sword|shield|ingot|tongs|spyglass|parchment)/i.test(id)) {
         baseCells = 0.72;
     }
 
-    // 3. Автоматическое свечение для огня, свечей, фонарей, жаровен, кристаллов и магии
     let glow = null;
-    if (/(campfire|fireball|fiery|burning|flaming|flame|embers|forge|oven_fireplace|melting_pot|wall_of_fire)/i.test(id) && !/unlit|empty|wood$|ring$/i.test(id)) {
-        glow = { color: '255, 142, 52', radius: 3.2, intensity: 0.58 };
+    if (/(campfire|fireball|fiery|burning|flaming|flame|embers|forge|oven_fireplace|melting_pot|wall_of_fire)/i.test(id) && !/unlit|empty|wood$|ring$|smoke/i.test(id)) {
+        glow = { color: [255, 148, 56], radius: 3.4, intensity: 0.92 };
     } else if (/(brazier|torch|lantern|lamp|candle|chandelier|stand_lit|jack_o_lantern|hole_roof_glow)/i.test(id) && !/unlit/i.test(id)) {
-        glow = { color: '255, 192, 96', radius: 2.3, intensity: 0.46 };
-    } else if (/(lightning|crystalblue|crystal_vertical|crystal_horizontal|arcane|magic)/i.test(id)) {
-        glow = { color: '96, 195, 255', radius: 2.5, intensity: 0.44 };
+        glow = { color: [255, 198, 104], radius: 2.5, intensity: 0.78 };
+    } else if (/(lightning|crystalblue|crystal_vertical|crystal_horizontal|arcane|magic|rootsorb)/i.test(id)) {
+        glow = { color: [92, 200, 255], radius: 2.7, intensity: 0.76 };
     } else if (/(crystalred|acid|spore)/i.test(id)) {
-        glow = { color: '180, 255, 110', radius: 2.1, intensity: 0.36 };
+        glow = { color: [175, 255, 105], radius: 2.2, intensity: 0.62 };
     }
 
     return { layer, baseCells, glow };
@@ -199,7 +289,7 @@ function MB_FIND_STAMP_OBJ(stampVal) {
     return { id: stampVal, icon: '📦', label: stampVal, img: '' };
 }
 
-// --- ХРАНИЛИЩЕ, МИГРАЦИЯ СТАРЫХ КАРТ И UNDO ---
+// --- ХРАНИЛИЩЕ И UNDO ---
 function CREATE_EMPTY_MB_DATA(baseTile = 'grass', cols = window._mbCols, rows = window._mbRows) {
     const cells = [];
     for (let i = 0; i < rows * cols; i++) cells.push({ t: baseTile });
@@ -215,7 +305,6 @@ function GET_MB_DATA() {
                 window._mbCols = parsed.cols;
                 window._mbRows = parsed.rows;
                 if (parsed.lighting) window._mbLighting = parsed.lighting;
-                // Авто-миграция старых cell.s в новый слой свободных объектов
                 if (!Array.isArray(parsed.objects)) {
                     parsed.objects = [];
                     for (let r = 0; r < parsed.rows; r++) {
@@ -294,12 +383,10 @@ function OPEN_GM_MAP_BUILDER() {
     }
     const cont = document.getElementById('gm-tool-modal-content');
     cont.style.maxWidth = '1220px';
-
     RENDER_GM_MAP_BUILDER_UI();
     OM('gm-tool-modal');
 }
 
-// Клавиши R (поворот объекта) и Ctrl+Z (отмена) внутри конструктора
 if (!window._mbKeyBound) {
     window._mbKeyBound = true;
     window.addEventListener('keydown', function(e) {
@@ -335,21 +422,21 @@ function RENDER_GM_MAP_BUILDER_UI() {
     const tiles = GET_MB_TILES();
     const stamps = GET_UNIQUE_MB_STAMPS();
 
-    // Высокое разрешение холста для чёткой графики (до 1560px)
-    const cellPx = Math.max(34, Math.min(64, Math.floor(1560 / Math.max(cols, rows * 1.45))));
+    const cellPx = Math.max(36, Math.min(68, Math.floor(1640 / Math.max(cols, rows * 1.45))));
     const canvasW = cols * cellPx;
     const canvasH = rows * cellPx;
 
     let tileBtnsHTML = '';
     for (const [key, cfg] of Object.entries(tiles)) {
         const isSel = (window._mbTool === 'tile' || window._mbTool === 'brush3') && window._mbSelectedTile === key;
-        const thumbStyle = cfg.img
+        const imgOk = cfg.img && window._mbImgCache[cfg.img]?.status !== 'error';
+        const thumbStyle = imgOk
             ? `background-image:url('${cfg.img}'); background-size:cover; background-color:${cfg.bg};`
             : `background:${cfg.bg}; border:1px solid ${cfg.border};`;
 
         tileBtnsHTML += `
             <button class="btn-small" onclick="MB_SELECT_TILE('${key}')"
-                style="background:${isSel ? '#c9a96e' : '#181715'}; color:${isSel ? '#141210' : '#ebe8e2'}; border:2px solid ${isSel ? '#fff' : cfg.bg}; padding:4px 8px; display:inline-flex; align-items:center; gap:5px; font-size:0.81rem;">
+                style="background:${isSel ? '#c9a96e' : '#181715'}; color:${isSel ? '#141210' : '#ebe8e2'}; border:2px solid ${isSel ? '#fff' : cfg.bg}; padding:4px 8px; display:inline-flex; align-items:center; gap:5px; font-size:0.8rem;">
                 <span style="display:inline-block; width:16px; height:16px; border-radius:3px; ${thumbStyle}"></span>
                 <span>${cfg.name}</span>
             </button>
@@ -381,93 +468,104 @@ function RENDER_GM_MAP_BUILDER_UI() {
 
     const tModeBtn = (mode, label) => `
         <button class="btn-small" onclick="window._mbTool='${mode}'; RENDER_GM_MAP_BUILDER_UI();"
-            style="background:${window._mbTool===mode ? '#7c3aed' : '#22201d'}; color:#fff; border:1px solid ${window._mbTool===mode ? '#e9d5ff' : '#423c33'}; font-size:0.81rem; padding:5px 9px;">
+            style="background:${window._mbTool===mode ? '#7c3aed' : '#22201d'}; color:#fff; border:1px solid ${window._mbTool===mode ? '#e9d5ff' : '#423c33'}; font-size:0.8rem; padding:5px 9px;">
             ${label}
         </button>
     `;
 
     const sizePresetBtns = MB_SIZE_PRESETS.map(p => {
         const isAct = (cols === p.cols && rows === p.rows);
-        return `<button class="btn-small" style="padding:3px 7px; font-size:0.76rem; background:${isAct ? '#c9a96e' : '#22201d'}; color:${isAct ? '#141210' : '#ddd'};" onclick="MB_RESIZE_GRID(${p.cols}, ${p.rows})">${p.label} ${p.cols}×${p.rows}</button>`;
+        return `<button class="btn-small" style="padding:3px 7px; font-size:0.75rem; background:${isAct ? '#c9a96e' : '#22201d'}; color:${isAct ? '#141210' : '#ddd'};" onclick="MB_RESIZE_GRID(${p.cols}, ${p.rows})">${p.label} ${p.cols}×${p.rows}</button>`;
     }).join('');
 
     const curTitleVal = document.getElementById('mb-map-title-inp')?.value ?? (GET_MAP_STATE().title || 'Новая локация');
 
     cont.innerHTML = `
         <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #3d3830; padding-bottom:8px; margin-bottom:9px; flex-wrap:wrap; gap:8px;">
-            <h2 style="margin:0; border:none; padding:0; font-size:1.25rem;">🎨 Студия Карт HD (${cols}×${rows} кл. • объектов: ${(data.objects||[]).length})</h2>
+            <h2 style="margin:0; border:none; padding:0; font-size:1.22rem;">🎨 Студия Карт HD (${cols}×${rows} кл. • объектов: ${(data.objects||[]).length})</h2>
             <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
-                <button class="btn-small" style="font-size:0.8rem;" onclick="MB_UNDO()" ${!window._mbUndoStack.length ? 'disabled' : ''}>↩️ Отменить (Ctrl+Z)</button>
-                <button class="btn-small btn-danger" style="font-size:0.8rem;" onclick="MB_CLEAR_OBJECTS()">🧹 Убрать объекты</button>
-                <button class="btn-small btn-danger" style="font-size:0.8rem;" onclick="MB_FILL_ALL(window._mbSelectedTile || 'grass')">🗑️ Очистить всё</button>
+                <button class="btn-small" style="font-size:0.78rem;" onclick="MB_UNDO()" ${!window._mbUndoStack.length ? 'disabled' : ''}>↩️ Отменить (Ctrl+Z)</button>
+                <button class="btn-small btn-danger" style="font-size:0.78rem;" onclick="MB_CLEAR_OBJECTS()">🧹 Убрать объекты</button>
+                <button class="btn-small btn-danger" style="font-size:0.78rem;" onclick="MB_FILL_ALL(window._mbSelectedTile || 'grass')">🗑️ Очистить всё</button>
             </div>
         </div>
 
-        <!-- Размер + Рандомный генератор + Атмосфера/Свет -->
-        <div style="display:grid; grid-template-columns: 1.05fr 1.25fr 0.8fr; gap:8px; margin-bottom:8px;">
+        <!-- Размер + Генератор (13 биомов) + Свет -->
+        <div style="display:grid; grid-template-columns: 1.02fr 1.28fr 0.85fr; gap:8px; margin-bottom:8px;">
             <div style="background:#181715; border:1px solid #423c33; border-radius:9px; padding:8px 10px; display:flex; flex-direction:column; gap:6px;">
                 <div style="display:flex; justify-content:space-between; align-items:center; gap:4px; flex-wrap:wrap;">
-                    <b style="color:#c9a96e; font-size:0.82rem;">📏 Размер:</b>
+                    <b style="color:#c9a96e; font-size:0.81rem;">📏 Размер:</b>
                     <div style="display:flex; align-items:center; gap:4px;">
-                        <input type="number" id="mb-cols-inp" min="8" max="50" value="${cols}" style="width:52px; padding:2px 4px; font-size:0.8rem;">
+                        <input type="number" id="mb-cols-inp" min="8" max="50" value="${cols}" style="width:50px; padding:2px 4px; font-size:0.8rem;">
                         <span>×</span>
-                        <input type="number" id="mb-rows-inp" min="6" max="40" value="${rows}" style="width:52px; padding:2px 4px; font-size:0.8rem;">
-                        <button class="btn-small btn-save" style="padding:3px 7px; font-size:0.76rem;" onclick="MB_RESIZE_GRID(document.getElementById('mb-cols-inp').value, document.getElementById('mb-rows-inp').value)">Ок</button>
+                        <input type="number" id="mb-rows-inp" min="6" max="40" value="${rows}" style="width:50px; padding:2px 4px; font-size:0.8rem;">
+                        <button class="btn-small btn-save" style="padding:3px 7px; font-size:0.75rem;" onclick="MB_RESIZE_GRID(document.getElementById('mb-cols-inp').value, document.getElementById('mb-rows-inp').value)">Ок</button>
                     </div>
                 </div>
                 <div style="display:flex; gap:4px; flex-wrap:wrap;">${sizePresetBtns}</div>
             </div>
 
             <div style="background:#1b1824; border:1px solid #7c3aed; border-radius:9px; padding:8px 10px; display:flex; flex-direction:column; justify-content:space-between; gap:6px;">
-                <b style="color:#d8b4fe; font-size:0.82rem;">🎲 Умная рандомная генерация (8 биомов, живой декор):</b>
+                <b style="color:#d8b4fe; font-size:0.81rem;">🎲 Генератор локаций (13 биомов + случайные планировки):</b>
                 <div style="display:flex; gap:6px; align-items:center;">
-                    <select id="mb-rand-biome" onchange="window._mbRandBiome=this.value;" style="flex:1; padding:4px 7px; font-size:0.82rem; text-align:left;">
+                    <select id="mb-rand-biome" onchange="window._mbRandBiome=this.value;" style="flex:1; padding:4px 7px; font-size:0.81rem; text-align:left;">
                         <option value="random" ${window._mbRandBiome==='random'?'selected':''}>🎲 Любая случайная локация</option>
-                        <option value="forest" ${window._mbRandBiome==='forest'?'selected':''}>🌲 Дикий лес / река / лагерь</option>
+                        <option value="forest" ${window._mbRandBiome==='forest'?'selected':''}>🌲 Дикий лес (река / перекрёсток / руины)</option>
                         <option value="tavern" ${window._mbRandBiome==='tavern'?'selected':''}>🍺 Уютная таверна / постоялый двор</option>
                         <option value="dungeon" ${window._mbRandBiome==='dungeon'?'selected':''}>🏰 Подземелье / катакомбы</option>
                         <option value="city" ${window._mbRandBiome==='city'?'selected':''}>👑 Город / Столица / Рынок</option>
+                        <option value="mansion" ${window._mbRandBiome==='mansion'?'selected':''}>🏛️ Богатый особняк / тронный зал</option>
+                        <option value="dwarven" ${window._mbRandBiome==='dwarven'?'selected':''}>⚒️ Кузница и залы дварфов</option>
+                        <option value="pirate" ${window._mbRandBiome==='pirate'?'selected':''}>🏴‍☠️ Пиратская бухта и побережье</option>
                         <option value="desert" ${window._mbRandBiome==='desert'?'selected':''}>🏜️ Пустынный оазис и караван</option>
-                        <option value="fey" ${window._mbRandBiome==='fey'?'selected':''}>🍄 Волшебный лес / грибная роща</option>
-                        <option value="battlefield" ${window._mbRandBiome==='battlefield'?'selected':''}>⚔️ Поле битвы / осадный лагерь</option>
-                        <option value="snow" ${window._mbRandBiome==='snow'?'selected':''}>❄️ Снежный перевал / привал</option>
+                        <option value="fey" ${window._mbRandBiome==='fey'?'selected':''}>🍄 Фейский лес (магическая роща)</option>
+                        <option value="eastern" ${window._mbRandBiome==='eastern'?'selected':''}>⛩️ Восточный храм / додзё</option>
+                        <option value="warcamp" ${window._mbRandBiome==='warcamp'?'selected':''}>⛺ Лагерь охотников / орков</option>
+                        <option value="battlefield" ${window._mbRandBiome==='battlefield'?'selected':''}>⚔️ Поле битвы / осада</option>
+                        <option value="snow" ${window._mbRandBiome==='snow'?'selected':''}>❄️ Снежный перевал и привал</option>
                     </select>
-                    <button class="btn-small" style="background:linear-gradient(180deg,#8b5cf6 0%,#5b21b6 100%); color:#fff; border-color:#c084fc; padding:5px 11px; font-size:0.82rem; white-space:nowrap;" onclick="MB_GENERATE_RANDOM(document.getElementById('mb-rand-biome').value)">
+                    <button class="btn-small" style="background:linear-gradient(180deg,#8b5cf6 0%,#5b21b6 100%); color:#fff; border-color:#c084fc; padding:5px 11px; font-size:0.81rem; white-space:nowrap;" onclick="MB_GENERATE_RANDOM(document.getElementById('mb-rand-biome').value)">
                         🎲 Собрать!
                     </button>
                 </div>
             </div>
 
-            <div style="background:#181715; border:1px solid #c9a96e; border-radius:9px; padding:8px 10px; display:flex; flex-direction:column; justify-content:space-between; gap:6px;">
-                <b style="color:#e6c88c; font-size:0.82rem;">💡 Освещение и атмосфера:</b>
-                <select id="mb-lighting-sel" onchange="window._mbLighting=this.value; if(window._mbData){window._mbData.lighting=this.value; SAVE_MB_DATA(window._mbData);} DRAW_MB_CANVAS();" style="padding:4px 7px; font-size:0.82rem; text-align:left;">
+            <div style="background:#181715; border:1px solid #c9a96e; border-radius:9px; padding:8px 10px; display:flex; flex-direction:column; justify-content:space-between; gap:5px;">
+                <b style="color:#e6c88c; font-size:0.81rem;">💡 Освещение и детали:</b>
+                <select id="mb-lighting-sel" onchange="window._mbLighting=this.value; if(window._mbData){window._mbData.lighting=this.value; SAVE_MB_DATA(window._mbData);} DRAW_MB_CANVAS();" style="padding:3px 7px; font-size:0.8rem; text-align:left;">
                     ${lightOpts}
                 </select>
-                <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:0.78rem; color:#ccc;">
-                    <input type="checkbox" ${window._mbShowGrid ? 'checked' : ''} onchange="window._mbShowGrid=this.checked; DRAW_MB_CANVAS();">
-                    <span>📏 Тактическая сетка</span>
-                </label>
+                <div style="display:flex; gap:10px; flex-wrap:wrap; font-size:0.76rem; color:#ccc;">
+                    <label style="display:flex; align-items:center; gap:4px; cursor:pointer;">
+                        <input type="checkbox" ${window._mbShowGrid ? 'checked' : ''} onchange="window._mbShowGrid=this.checked; DRAW_MB_CANVAS();">
+                        <span>📏 Сетка</span>
+                    </label>
+                    <label style="display:flex; align-items:center; gap:4px; cursor:pointer;" title="Динамические световые пятна, глубина воды и рельефный шум">
+                        <input type="checkbox" ${window._mbPostFx ? 'checked' : ''} onchange="window._mbPostFx=this.checked; DRAW_MB_CANVAS();">
+                        <span>✨ HD-Свет</span>
+                    </label>
+                </div>
             </div>
         </div>
 
         <!-- Инструменты + Покрытия + Объекты -->
-        <div style="background:#181715; border:1px solid #423c33; border-radius:9px; padding:9px 11px; margin-bottom:9px; display:flex; flex-direction:column; gap:7px;">
+        <div style="background:#181715; border:1px solid #423c33; border-radius:9px; padding:8px 11px; margin-bottom:8px; display:flex; flex-direction:column; gap:7px;">
             <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
                 <div style="display:flex; gap:5px; align-items:center; flex-wrap:wrap;">
                     ${tModeBtn('tile', '🖌️ Пол 1×1')}
                     ${tModeBtn('brush3', '⬛ Пол 3×3')}
-                    ${tModeBtn('stamp', '🌲 Ставить объект')}
+                    ${tModeBtn('stamp', '🌲 Объект')}
                     ${tModeBtn('eraser', '🧽 Удалить объект')}
                 </div>
-                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:0.8rem; color:#d8d4cc;">
+                <div style="display:flex; gap:9px; align-items:center; flex-wrap:wrap; font-size:0.79rem; color:#d8d4cc;">
                     <label style="display:flex; align-items:center; gap:5px;">
                         <span>🔍 Масштаб: <b id="mb-scale-lbl">${window._mbStampScale.toFixed(1)}×</b></span>
-                        <input type="range" min="0.5" max="3.0" step="0.1" value="${window._mbStampScale}" oninput="window._mbStampScale=parseFloat(this.value); document.getElementById('mb-scale-lbl').textContent=this.value+'×'; DRAW_MB_CANVAS();" style="width:76px;">
+                        <input type="range" min="0.5" max="3.0" step="0.1" value="${window._mbStampScale}" oninput="window._mbStampScale=parseFloat(this.value); document.getElementById('mb-scale-lbl').textContent=this.value+'×'; DRAW_MB_CANVAS();" style="width:74px;">
                     </label>
-                    <button class="btn-small" style="padding:3px 7px; font-size:0.76rem;" title="Повернуть объект на 45° (клавиша R)" onclick="window._mbStampRot=(window._mbStampRot+45)%360; document.getElementById('mb-rot-lbl').textContent=window._mbStampRot+'°'; DRAW_MB_CANVAS();">
+                    <button class="btn-small" style="padding:3px 7px; font-size:0.75rem;" title="Повернуть объект (клавиша R)" onclick="window._mbStampRot=(window._mbStampRot+45)%360; document.getElementById('mb-rot-lbl').textContent=window._mbStampRot+'°'; DRAW_MB_CANVAS();">
                         🔄 <span id="mb-rot-lbl">${window._mbStampRot}°</span>
                     </button>
-                    <label style="display:flex; align-items:center; gap:4px; cursor:pointer;" title="Случайный поворот при каждом клике (удобно для леса и камней)">
+                    <label style="display:flex; align-items:center; gap:4px; cursor:pointer;">
                         <input type="checkbox" ${window._mbRandRot ? 'checked' : ''} onchange="window._mbRandRot=this.checked;">
                         <span>🎲 Поворот</span>
                     </label>
@@ -491,13 +589,13 @@ function RENDER_GM_MAP_BUILDER_UI() {
                            oninput="window._mbStampSearch=this.value; MB_RENDER_STAMP_GRID_ONLY();"
                            style="width:170px; padding:3px 8px; font-size:0.78rem; text-align:left; margin-left:auto;">
                 </div>
-                <div id="mb-stamps-grid-wrap" style="display:flex; gap:5px; flex-wrap:wrap; max-height:112px; overflow-y:auto; padding:5px; background:#121110; border-radius:6px; border:1px solid #302c26;">
+                <div id="mb-stamps-grid-wrap" style="display:flex; gap:5px; flex-wrap:wrap; max-height:110px; overflow-y:auto; padding:5px; background:#121110; border-radius:6px; border:1px solid #302c26;">
                     ${MB_BUILD_STAMP_BUTTONS_HTML()}
                 </div>
             </div>
         </div>
 
-        <!-- Холст высокого разрешения -->
+        <!-- Холст HD -->
         <div style="display:flex; justify-content:center; align-items:flex-start; background:#0b0a09; padding:8px; border-radius:10px; border:2px solid #524a3d; overflow:auto; max-height:470px;">
             <canvas id="mb-editor-canvas" width="${canvasW}" height="${canvasH}"
                 style="cursor:crosshair; border-radius:6px; max-width:100%; height:auto; box-shadow:0 10px 34px rgba(0,0,0,0.95);">
@@ -509,9 +607,9 @@ function RENDER_GM_MAP_BUILDER_UI() {
                 <span style="color:#c9a96e; white-space:nowrap;">📍 Локация:</span>
                 <input type="text" id="mb-map-title-inp" value="${curTitleVal.replace(/"/g, '&quot;')}" style="flex:1; text-align:left;">
             </div>
-            <small style="color:#9e988e;">💡 ЛКМ — рисовать/ставить • ПКМ — удалить объект • Клавиша R — поворот</small>
+            <small style="color:#9e988e;">💡 ЛКМ — ставить • ПКМ — удалить • R — поворот • Ctrl+Z — отмена</small>
             <div style="display:flex; gap:8px;">
-                <button class="btn-save" style="padding:10px 18px; font-size:0.98rem;" onclick="MB_APPLY_TO_GAME_MAP()">
+                <button class="btn-save" style="padding:10px 18px; font-size:0.96rem;" onclick="MB_APPLY_TO_GAME_MAP()">
                     ✅ Выложить карту игрокам!
                 </button>
                 <button onclick="CM('gm-tool-modal')">Закрыть</button>
@@ -589,17 +687,16 @@ function MB_CLEAR_OBJECTS() {
 }
 
 // ================================================================
-// 🎲 УМНЫЙ РАНДОМНЫЙ ГЕНЕРАТОР (8 БИОМОВ + ПУЛЫ РЕАЛЬНЫХ ВАРИАНТОВ)
+// 🎲 СТРОГО ЛОГИЧНЫЙ РАНДОМНЫЙ ГЕНЕРАТОР (13 БИОМОВ + ЗАЩИТА ОТ НАЛОЖЕНИЙ)
 // ================================================================
 function MB_RAND_INT(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
 function MB_RAND_FLOAT(min, max) { return min + Math.random() * (max - min); }
 function MB_PICK(arr) { return (arr && arr.length) ? arr[Math.floor(Math.random() * arr.length)] : null; }
 
-// Подбирает пул уникальных подходящих PNG-спрайтов из assets.js с фильтром мусора
 function MB_GET_POOL(includeRx, excludeRx = null) {
     const list = GET_UNIQUE_MB_STAMPS();
     return list.filter(s => {
-        const txt = (s.id + ' ' + (s.label || '')).toLowerCase();
+        const txt = (s.id || '').toLowerCase();
         if (!includeRx.test(txt)) return false;
         if (excludeRx && excludeRx.test(txt)) return false;
         return true;
@@ -608,23 +705,29 @@ function MB_GET_POOL(includeRx, excludeRx = null) {
 
 function MB_GENERATE_RANDOM(biome) {
     MB_PUSH_UNDO();
-    const allBiomes = ['forest', 'tavern', 'dungeon', 'city', 'desert', 'fey', 'battlefield', 'snow'];
+    const allBiomes = ['forest', 'tavern', 'dungeon', 'city', 'mansion', 'dwarven', 'pirate', 'desert', 'fey', 'eastern', 'warcamp', 'battlefield', 'snow'];
     const picked = (biome === 'random' || !biome) ? MB_PICK(allBiomes) : biome;
 
     const cols = window._mbCols, rows = window._mbRows;
     const baseByBiome = {
         forest: 'grass', tavern: 'grass', dungeon: 'wall', city: 'grass',
-        desert: 'sand', fey: 'grass', battlefield: 'grass', snow: 'snow'
+        mansion: 'wall', dwarven: 'wall', pirate: 'sand', desert: 'sand',
+        fey: 'grass', eastern: 'grass', warcamp: 'grass', battlefield: 'grass', snow: 'snow'
     };
     const lightByBiome = {
-        forest: Math.random() < 0.35 ? 'sunset' : 'day',
+        forest: MB_PICK(['day', 'day', 'sunset']),
         tavern: 'tavern',
         dungeon: 'dungeon',
-        city: Math.random() < 0.3 ? 'sunset' : 'day',
+        city: MB_PICK(['day', 'day', 'sunset']),
+        mansion: 'tavern',
+        dwarven: 'dungeon',
+        pirate: MB_PICK(['day', 'sunset']),
         desert: 'day',
         fey: 'night',
+        eastern: MB_PICK(['day', 'sunset']),
+        warcamp: 'sunset',
         battlefield: 'sunset',
-        snow: Math.random() < 0.4 ? 'night' : 'day'
+        snow: MB_PICK(['day', 'night'])
     };
 
     window._mbLighting = lightByBiome[picked] || 'day';
@@ -634,142 +737,217 @@ function MB_GENERATE_RANDOM(biome) {
     const inBounds = (c, r) => c >= 0 && c < cols && r >= 0 && r < rows;
     const getTile = (c, r) => inBounds(c, r) ? data.cells[r * cols + c].t : null;
     const setTile = (c, r, t) => { if (inBounds(c, r)) data.cells[r * cols + c].t = t; };
-    const addObj = (poolOrId, x, y, scale = 1.0, rot = 0) => {
+
+    // Проверка дистанции, чтобы деревья, дома и мебель не склеивались в кашу!
+    const placedZones = [];
+    const canPlace = (x, y, minDist = 1.1) => !placedZones.some(z => Math.hypot(z.x - x, z.y - y) < Math.max(minDist, z.r));
+    const addObj = (poolOrId, x, y, scale = 1.0, rot = 0, reserveRadius = 0) => {
         const id = Array.isArray(poolOrId) ? MB_PICK(poolOrId) : poolOrId;
-        if (!id) return;
+        if (!id) return false;
         const stObj = MB_FIND_STAMP_OBJ(id);
         if (stObj && stObj.img) MB_GET_LOADED_IMG(stObj.img);
         data.objects.push({ id, x, y, scale, rot });
+        if (reserveRadius > 0) placedZones.push({ x, y, r: reserveRadius });
+        return true;
     };
 
-    // Живые пулы объектов из реального assets.js
+    // --- СТРОГО ОТФИЛЬТРОВАННЫЕ ТЕМАТИЧЕСКИЕ ПУЛЫ (БЕЗ «СИНИХ ДЕРЕВЬЕВ У ТАВЕРНЫ»!) ---
     const P = {
-        trees:      MB_GET_POOL(/nature_tree(_large|_small|_1|_2|_3|_big|2|3|4|e)/, /stump|fallen|branch|root|shade|desert|palm|christmas/),
-        bushes:     MB_GET_POOL(/(bush|foliage|fern|thicket|clover|leaf_litter)/, /desert|texture/),
-        flowers:    MB_GET_POOL(/(flower)/, /no_flowers|trumpet/),
-        rocks:      MB_GET_POOL(/(rock|boulder)/, /river|submerged|formation|slope/),
-        logs:       MB_GET_POOL(/(fallen_tree|stump|log_)/, /tree_big_tree|tree_bigger_tree/),
-        waterDec:   MB_GET_POOL(/(lily_pad|submerged_rocks|river_rock|current)/),
-        bridges:    MB_GET_POOL(/(wooden_bridge|stone_bridge|nature_bridge|floatingbridge)/),
-        campfires:  MB_GET_POOL(/(campfire_fire|campfire$|campfire_pot|campfire_3|desert_campfire)/, /ring|wood$/),
-        tents:      MB_GET_POOL(/(tent_round|tent_square|tent_narrow|tentsmallround|tentlarge|camp_tent$)/, /packed|tarp/),
-        bedrolls:   MB_GET_POOL(/(bedroll_|backpack_|firewood_pile|pelt)/, /packed/),
-        mushrooms:  MB_GET_POOL(/(mushroom|fungi|spore_cloud|giantleafpurple|roots|trumpetflower|flytrap)/),
-        crystals:   MB_GET_POOL(/(crystal)/, /ball/),
-        // Интерьер / Таверна
-        tables:     MB_GET_POOL(/(table_round|table_rectangle|table_long|tabledinning|tableround|furniture_table$)/, /broken|ruined|end|modular|billiards|casting|kotatsu|game/),
-        chairs:     MB_GET_POOL(/(chair_simple|chair_stool|chair_bench|chair_armchair|bench3|chair3|chair_2)/, /broken|ruined|latrine|sofa/),
-        rugs:       MB_GET_POOL(/(rug_6|rug_bear|rug_animal|carpet_1|carpet_2|carpet_3|carpet1|carpet2)/, /wrinkled|doormat/),
-        beds:       MB_GET_POOL(/(bed_pattern_1|bedframed|1bed|2bed|furniture_bed$)/, /discarded|cot/),
-        barrels:    MB_GET_POOL(/(barrel_|storage_barrel_|keg|barrels_)/, /broken|ruined|acid|pitch/),
-        crates:     MB_GET_POOL(/(crate_|storage_crate|sack|box_)/, /broken|ruined|lockbox/),
-        shelves:    MB_GET_POOL(/(bookshelf|dresser|cupboard|shelf)/, /modular/),
-        food:       MB_GET_POOL(/(food_|tankards_full|pie$|chicken|hamroast|apples|playing_cards|book_pile)/),
-        candles:    MB_GET_POOL(/(candle.*_lit|candles|lantern_lit|stand_lit)/, /unlit/),
-        fireplaces: MB_GET_POOL(/(oven_fireplace|cooking_stove|stovesmall)/),
-        // Подземелье
-        braziers:   MB_GET_POOL(/(light_brazier|stand_lit_iron)/, /unlit/),
-        chests:     MB_GET_POOL(/(chest_1|chest_2|chest2$|dungeon_chest$)/, /open|octopus/),
-        bones:      MB_GET_POOL(/(bones_|bonepile|skull|dungeon_bone$)/, /enormous|large_spine|pirate/),
-        webs:       MB_GET_POOL(/(clutter_webs_)/),
-        pillars:    MB_GET_POOL(/(pillar_round|pillar_square|stone_pillar|pillar_base)/),
-        altars:     MB_GET_POOL(/(feature_altar|tomb_1|tomb_open|shrine|metal_cage|feythrone)/),
-        doors:      MB_GET_POOL(/(door_narrow|door_1_base|door_2_base|double_door)/, /collapsed|shoji/),
-        rubble:     MB_GET_POOL(/(rubble_small|rubble_medium|ruin_|blood_)/, /planks|wood/),
-        // Город
-        roofs:      MB_GET_POOL(/(roof_tiled|roof_thatch|roof_premade|city_roof$)/, /hole/),
-        statues:    MB_GET_POOL(/(fountain|city_well$|statue1|statue2|statue3|feature_statue|large_statue)/, /platform/),
-        carts:      MB_GET_POOL(/(wagon|cart|horse)/),
-        lamps:      MB_GET_POOL(/(woodlamp|paperlamp|city_lamp$|lantern_lit)/),
-        gardens:    MB_GET_POOL(/(garden|flower1|flower2|flower3|plant)/),
+        // Обычный зелёный лес (ТОЛЬКО классические зелёные деревья, без фейских tree2/3/4 и пальм!)
+        greenTrees:   MB_GET_POOL(/^nature_tree_(large|small|big|bigger|[123])$|^nature_tree_(large|small)_[12]$/),
+        greenBushes:  MB_GET_POOL(/^nature_bush_(2|3|4|5|6|7|8)_green|^nature_bush_shrub_|^nature_bush_[12]$|^nature_thick_foliage_|^nature_foliage_|^other_fern_/),
+        autumnBushes: MB_GET_POOL(/^nature_bush_1_red$|^nature_bush_9_yellow$|^other_leaf_litter_/),
+        forestFlower: MB_GET_POOL(/^nature_flower_|^nature_flowers_|^other_clovers_/),
+        forestRocks:  MB_GET_POOL(/^nature_mossy_boulder_|^nature_rock(_small)?_[123]$|^nature_rocks_[1-8]$/),
+        forestLogs:   MB_GET_POOL(/^nature_fallen_tree_|^nature_stump_|^nature_tree_stump_[1-5]_cut$|^nature_log_/),
+        forestFungi:  MB_GET_POOL(/^nature_mushrooms_[123]$|^nature_fungi_(1|3|5|14)_brown$|^nature_mushroom_(6|7)_brown$|^nature_mushroom_11_red$/),
+        waterDec:     MB_GET_POOL(/^other_lily_pad|^nature_submerged_rocks_|^nature_river_rock_|^other_current_/),
+        bridges:      MB_GET_POOL(/^nature_wooden_bridge_|^nature_stone_bridge_/),
+        campfires:    MB_GET_POOL(/^camp_campfire(_fire|_pot_cooking)?$|^camp_campfire_3$/),
+        campTents:    MB_GET_POOL(/^camp_tent_(round_small|square_[123]|narrow_[12])$/),
+        campGear:     MB_GET_POOL(/^furniture_bedroll_[123]$|^camp_backpack_|^other_firewood_pile$/),
+
+        // Таверна / Интерьер (строго деревянный средневековый стиль)
+        tavTables:    MB_GET_POOL(/^furniture_table_(round|rectangle)_[1-4]_dark$|^furniture_table_long_1$|^furniture_tabledinning2$|^furniture_tableround(large|small)2$/),
+        tavChairs:    MB_GET_POOL(/^furniture_chair_(simple_[1-5]|stool_[12]|bench_[12])_dark$|^furniture_bench3$|^furniture_chair3$/),
+        tavRugs:      MB_GET_POOL(/^furniture_rug_(6_[a-g]|bear_1|animal_skin)$/),
+        tavBeds:      MB_GET_POOL(/^furniture_bed_pattern_1_[a-f]$|^furniture_bedframed(single|double)2$/),
+        tavBarrels:   MB_GET_POOL(/^furniture_storage_barrel_[1-5](_a)?_dark$|^other_keg(5tapped|6)$/),
+        tavCrates:    MB_GET_POOL(/^furniture_storage_crate_[1-4]_dark$|^other_clutter_sacks_[12]$|^furniture_crate_[12]$/),
+        tavShelves:   MB_GET_POOL(/^furniture_storage_(bookshelf_[1-3]|shelf_[12])|^other_storage_dresser_[12]_dark$|^other_cupboard2$/),
+        tavFood:      MB_GET_POOL(/^other_clutter_tankards_full$|^furniture_clutter_food_[12]$|^other_clutter_playing_cards$|^other_pie$|^other_hamroast$|^other_stewpot$/),
+        tavCandles:   MB_GET_POOL(/^other_light_candle_(small|cluster)_lit$|^other_light_lantern_lit$|^other_candles2?$/),
+        tavFireplace: MB_GET_POOL(/^other_cooking_oven_fireplace_[34]$|^other_cooking_stove$/),
+        tavTrophies:  MB_GET_POOL(/^other_trophy_(antlers|deer|wolf_1|bear_1)$/),
+        doors:        MB_GET_POOL(/^dungeon_door_(narrow|wide)_|^dungeon_door_[12]_base$/),
+
+        // Подземелье (строго мрачный камень, без пиратов и японщины)
+        dungBraziers: MB_GET_POOL(/^dungeon_light_brazier_|^other_light_stand_lit_iron$/),
+        dungChests:   MB_GET_POOL(/^dungeon_chest_[12]_(steel|gold)$|^dungeon_chest2$|^furniture_chest_lockbox_1_iron$/),
+        dungBones:    MB_GET_POOL(/^dungeon_bones_(adventurer|human_skull|misc)|^dungeon_bonepile$|^dungeon_clutter_skull_human$/),
+        dungWebs:     MB_GET_POOL(/^dungeon_clutter_webs_/),
+        dungPillars:  MB_GET_POOL(/^dungeon_pillar_(round|square)_1x1$|^dungeon_stone_pillar_[12]$|^dungeon_pillar_base$/),
+        dungAltars:   MB_GET_POOL(/^dungeon_feature_altar_gold$|^dungeon_tomb_(1|open)$|^dungeon_feature_metal_cage_gold$/),
+        dungRubble:   MB_GET_POOL(/^other_rubble_(small|medium|stone_pile)|^dungeon_blood_[1-5]$|^other_ruin_[1-6]$/),
+
+        // Город / Столица
+        cityRoofs:    MB_GET_POOL(/^city_roof_(tiled|thatch)_6x4_shaded$|^city_roof_premade_8x6$/),
+        cityCenter:   MB_GET_POOL(/^city_fountain$|^city_well$|^city_feature_statue_[1-3]_stone$|^city_statue[1-3]$/),
+        cityCarts:    MB_GET_POOL(/^city_cart_|^city_wagon$|^other_horse2?$/),
+        cityLamps:    MB_GET_POOL(/^city_woodlamp$|^other_light_stand_lit_iron$/),
+        cityMarket:   MB_GET_POOL(/^other_apples$|^other_baskets$|^other_clutter_sacks_[12]$|^furniture_storage_crate_[12]_dark$|^furniture_storage_barrel_[12]_dark$/),
+
+        // Богатый особняк
+        manChairs:    MB_GET_POOL(/^furniture_chair_(sofa_1_[abc]|armchair_1_[a-d]|throne_stone)$/),
+        manFeatures:  MB_GET_POOL(/^furniture_feature_(piano_|billiards_table)|^other_feature_(orrery_|armillary_|telescope_medium|suit_of_armor_)/),
+        manLights:    MB_GET_POOL(/^other_light_chandelier_[1-4]_lit_/),
+        manBooks:     MB_GET_POOL(/^furniture_storage_bookshelf_|^furniture_table_writing_desk_dark$|^other_clutter_globe$|^furniture_clutter_book_pile_/),
+        manCats:      MB_GET_POOL(/^other_cat_/),
+
+        // Дварфийская кузница
+        dwForge:      MB_GET_POOL(/^dungeon_forge$|^dungeon_forge_anvil$|^dungeon_anvil$|^dungeon_melting_pot/),
+        dwLoot:       MB_GET_POOL(/^dungeon_(gold|iron|bronze)_ingot$|^furniture_casting_table_axes$|^dungeon_axe_[12]$|^dungeon_hammer_1$|^dungeon_small_keg$/),
+        dwStatues:    MB_GET_POOL(/^city_large_statue$|^dungeon_gold_wall_decoration$|^dungeon_pillar$/),
+
+        // Пиратская бухта
+        palms:        MB_GET_POOL(/^nature_palmtree2?$|^nature_tree_(large|small)_palm_/),
+        pirateLoot:   MB_GET_POOL(/^dungeon_chestoctopus$|^other_coinbag$|^other_coinlarge4$|^camp_pirateflag$|^other_anchor2$|^city_shipswheel$|^furniture_messagebottle$|^other_largerope$/),
+        beachLife:    MB_GET_POOL(/^other_(crab|coconutcrab2?|shell|shell8|starfish4?|sharkjaw|parrot|seagull)$/),
+        boats:        MB_GET_POOL(/^other_canoe$/),
+
         // Пустыня
-        palms:      MB_GET_POOL(/(palm|tree_desert)/, /trunk/),
-        cacti:      MB_GET_POOL(/(cactus|desert_shrubs|desert_grass|aeonium|succulents)/, /mimic/),
-        pots:       MB_GET_POOL(/(pot$|pot5|vase_medium|vase_large|deadwood|oasis|magiccarpet)/),
+        desertCacti:  MB_GET_POOL(/^nature_cactus_(ball|flowering|large|saguaro|small)_|^nature_desert_(shrubs|grass)_|^other_aeonium_/),
+        desertRocks:  MB_GET_POOL(/^nature_rocks[678]$|^nature_rock_formation_[2-6]$/),
+        desertTents:  MB_GET_POOL(/^camp_tent_(large_9x5|small_5x4)$|^camp_tentlarge$/),
+        desertProps:  MB_GET_POOL(/^other_pot5?$|^other_deadwood3$|^furniture_carpet_[123]_3x2$|^dungeon_bones_cow_skull_1x1$|^other_snake3?$/),
+
+        // Фейский лес (ТОЛЬКО здесь сине-фиолетовые деревья и светящиеся грибы!)
+        feyTrees:     MB_GET_POOL(/^nature_tree[234]$|^other_giantleafpurple/),
+        feyFungi:     MB_GET_POOL(/^nature_fungi_(10_purple|2[678]_blue|[89]_orange|1[123]_yellow)$|^nature_mushroom_(5|2[123])_blue$|^other_spore_cloud_/),
+        feyDecor:     MB_GET_POOL(/^nature_rootsorb2$|^nature_roots[246]$|^nature_giantroots5$|^nature_trumpetflower$|^dungeon_flytrap2?$|^other_lily[23]?$/),
+        feyCrystals:  MB_GET_POOL(/^dungeon_crystal(blue|red)$|^dungeon_crystal_(horizontal|vertical)_/),
+
+        // Восточный храм / додзё
+        eastMats:     MB_GET_POOL(/^furniture_tatami_mat_(large|small|round_[12])$/),
+        eastTables:   MB_GET_POOL(/^furniture_table_(kotatsu|game|[1-6])$/),
+        eastDecor:    MB_GET_POOL(/^other_bonsai_|^other_paper_screen_|^other_shrine_|^other_samurai_armor_|^camp_weapons_(katanas|daisho|sword_rack)$|^other_taiko_drum$|^other_cushion_/),
+        eastLights:   MB_GET_POOL(/^city_paper_lamp$|^other_paper_lantern_/),
+        eastDoors:    MB_GET_POOL(/^dungeon_door_shoji_[12]$/),
+
+        // Лагерь охотников / орков
+        orcTents:     MB_GET_POOL(/^other_shelter$|^camp_tentsmallround$|^camp_tent_square_[123]$/),
+        orcProps:     MB_GET_POOL(/^camp_totemlarge$|^dungeon_giantskull$|^dungeon_skullstake$|^other_meatrack$|^other_tanningrack2$|^camp_weaponrack$|^other_warhorn$|^camp_(beaver|wolf|small)pelt$|^camp_campfire_hog$|^dungeon_campfire_cooking_spit$/),
+
         // Поле битвы
-        siege:      MB_GET_POOL(/(ballista|cannon$|catapult|batteringram|acidcauldron|pitchcauldron)/, /bolt|balls/),
-        barricades: MB_GET_POOL(/(barricade|woodenstakes|weaponrack|weapon_rack|largeflag)/),
-        weapons:    MB_GET_POOL(/(greatsword|longsword|weapon_sword|weapon_axe|weapon_shield)/),
-        fireFx:     MB_GET_POOL(/(embers|fiery_area|flaming_sphere)/),
+        siege:        MB_GET_POOL(/^camp_ballista$|^camp_cannon$|^other_catapult$|^camp_batteringrambroken$|^effects_acidcauldron$|^dungeon_pitchcauldron$/),
+        barricades:   MB_GET_POOL(/^furniture_barricade$|^other_woodenstakes$|^other_largeflag$/),
+        battleLoot:   MB_GET_POOL(/^camp_(greatsword|longsword|weapon_sword|weapon_axe|weapon_shield)|^camp_cannonballs2?$|^effects_ballistabolts$/),
+        battleFire:   MB_GET_POOL(/^other_embers_5x5$|^other_fiery_area_1_4x4$|^other_flaming_sphere_/),
+
         // Зима
-        snowProps:  MB_GET_POOL(/(christmas_tree|snowman|wolfpelt|peltwolf)/)
+        snowRocks:    MB_GET_POOL(/^nature_rock_[123]$|^nature_boulder$|^nature_rocks_[1-5]$/),
+        snowPelts:    MB_GET_POOL(/^camp_(wolf|beaver)pelt$|^camp_peltwolf$|^furniture_bedroll_[12]$/)
     };
 
     let genTitle = 'Случайная локация';
 
-    // 1. ДИКИЙ ЛЕС И РЕКА
+    // ============================================================
+    // 1. ДИКИЙ ЛЕС (3 разных сценария: Река и мост / Перекрёсток / Заросшие руины)
+    // ============================================================
     if (picked === 'forest') {
-        genTitle = MB_PICK(['Изумрудная чаща', 'Переправа у Древа', 'Тропа охотников', 'Лагерь в чаще']);
-        // Извилистая река
-        let rx = MB_RAND_INT(Math.floor(cols * 0.28), Math.floor(cols * 0.72));
-        const rWidth = cols >= 26 ? 3 : 2;
-        for (let r = 0; r < rows; r++) {
-            if (Math.random() < 0.5) rx = Math.max(2, Math.min(cols - rWidth - 2, rx + MB_RAND_INT(-1, 1)));
-            for (let w = 0; w < rWidth; w++) setTile(rx + w, r, 'water');
-            // Песчаный/земляной берег местами
-            if (Math.random() < 0.45) setTile(rx - 1, r, 'dirt');
-            if (Math.random() < 0.45) setTile(rx + rWidth, r, 'dirt');
-        }
+        const variant = MB_PICK(['river', 'crossroads', 'ruins']);
+        const isAutumn = Math.random() < 0.25;
+        const leafTile = isAutumn ? 'leaves_red' : 'leaves_green';
+        if (isAutumn) { window._mbLighting = 'sunset'; data.lighting = 'sunset'; }
 
-        // Извилистая дорога поперёк + мост через реку
-        let py = MB_RAND_INT(Math.floor(rows * 0.28), Math.floor(rows * 0.70));
-        let bridgeCenter = null;
-        for (let c = 0; c < cols; c++) {
-            if (Math.random() < 0.25) py = Math.max(2, Math.min(rows - 3, py + MB_RAND_INT(-1, 1)));
-            for (let dy = 0; dy <= 1; dy++) {
-                if (getTile(c, py + dy) === 'water') {
-                    if (!bridgeCenter) bridgeCenter = { x: c + rWidth * 0.5, y: py + 0.9 };
-                } else {
-                    setTile(c, py + dy, 'dirt');
-                }
+        // Пятна лесной листвы на траве для живописности
+        for (let i = 0; i < Math.floor((cols * rows) / 14); i++) {
+            const lx = MB_RAND_INT(1, cols - 2), ly = MB_RAND_INT(1, rows - 2);
+            for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+                if (Math.random() < 0.55) setTile(lx + dc, ly + dr, leafTile);
             }
         }
-        if (bridgeCenter) {
-            addObj(P.bridges, bridgeCenter.x, bridgeCenter.y, rWidth >= 3 ? 1.35 : 1.05, 0);
-        }
 
-        // Детали в воде (кувшинки, камни)
-        for (let r = 0; r < rows; r++) {
+        if (variant === 'river') {
+            genTitle = isAutumn ? 'Осенняя переправа' : MB_PICK(['Лесная переправа', 'Тропа через реку', 'Чаща у брода']);
+            let rx = MB_RAND_INT(Math.floor(cols * 0.32), Math.floor(cols * 0.68));
+            const rW = cols >= 26 ? 3 : 2;
+            for (let r = 0; r < rows; r++) {
+                if (Math.random() < 0.45) rx = Math.max(3, Math.min(cols - rW - 3, rx + MB_RAND_INT(-1, 1)));
+                for (let w = 0; w < rW; w++) setTile(rx + w, r, 'water');
+            }
+            let py = MB_RAND_INT(Math.floor(rows * 0.3), Math.floor(rows * 0.68));
+            let bridgePos = null;
             for (let c = 0; c < cols; c++) {
-                if (getTile(c, r) === 'water' && Math.random() < 0.14) {
-                    if (!bridgeCenter || Math.hypot(c - bridgeCenter.x, r - bridgeCenter.y) > 2.2) {
-                        addObj(P.waterDec, c + MB_RAND_FLOAT(0.2, 0.8), r + MB_RAND_FLOAT(0.2, 0.8), MB_RAND_FLOAT(0.7, 1.15), MB_RAND_INT(0, 359));
+                if (Math.random() < 0.22) py = Math.max(2, Math.min(rows - 3, py + MB_RAND_INT(-1, 1)));
+                for (let dy = 0; dy <= 1; dy++) {
+                    if (getTile(c, py + dy) === 'water') {
+                        if (!bridgePos) bridgePos = { x: c + rW * 0.5, y: py + 0.9 };
+                    } else {
+                        setTile(c, py + dy, 'dirt');
                     }
                 }
             }
+            if (bridgePos) addObj(P.bridges, bridgePos.x, bridgePos.y, rW >= 3 ? 1.25 : 1.0, 0, 2.2);
+
+            for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+                if (getTile(c, r) === 'water' && canPlace(c + 0.5, r + 0.5, 1.3) && Math.random() < 0.14) {
+                    addObj(P.waterDec, c + MB_RAND_FLOAT(0.25, 0.75), r + MB_RAND_FLOAT(0.25, 0.75), MB_RAND_FLOAT(0.75, 1.1), MB_RAND_INT(0, 359), 0.8);
+                }
+            }
+        } else if (variant === 'crossroads') {
+            genTitle = isAutumn ? 'Осенний тракт' : 'Лесной перекрёсток и привал';
+            const mx = Math.floor(cols / 2), my = Math.floor(rows / 2);
+            for (let c = 0; c < cols; c++) { setTile(c, my, 'dirt'); setTile(c, my - 1, 'dirt'); }
+            for (let r = 0; r < rows; r++) { setTile(mx, r, 'dirt'); setTile(mx - 1, r, 'dirt'); }
+            // Лагерь у перекрёстка
+            const cx = mx + 3.2, cy = my - 3.2;
+            if (inBounds(Math.floor(cx), Math.floor(cy))) {
+                for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) setTile(Math.floor(cx) + dc, Math.floor(cy) + dr, 'dirt');
+                addObj(P.campfires, cx, cy, 1.0, 0, 1.5);
+                addObj(P.campTents, cx + 1.8, cy - 0.8, 0.95, -20, 1.8);
+                addObj(P.campGear, cx - 1.3, cy + 0.9, 0.85, 45, 1.0);
+                addObj(P.forestLogs, cx + 0.3, cy + 1.5, 0.85, 10, 1.0);
+            }
+        } else {
+            genTitle = 'Заросшие руины в чаще';
+            const cx = Math.floor(cols / 2), cy = Math.floor(rows / 2);
+            for (let r = cy - 2; r <= cy + 2; r++) for (let c = cx - 3; c <= cx + 3; c++) {
+                if (Math.random() < 0.75) setTile(c, r, 'stone');
+            }
+            addObj(P.dungRubble, cx - 2.2, cy - 1.5, 1.1, 0, 1.3);
+            addObj(P.dungRubble, cx + 2.2, cy + 1.5, 1.1, 90, 1.3);
+            addObj(P.dungPillars, cx - 2.0, cy + 1.5, 0.95, 0, 1.0);
+            addObj(P.dungPillars, cx + 2.0, cy - 1.5, 0.95, 0, 1.0);
+            addObj(P.campfires, cx + 0.5, cy + 0.5, 1.0, 0, 1.4);
+            addObj(P.dungChests, cx + 1.6, cy + 0.2, 0.85, 0, 1.0);
         }
 
-        // Поляна-лагерь на берегу
-        const campX = rx > cols / 2 ? MB_RAND_INT(3, Math.max(4, rx - 3)) : MB_RAND_INT(Math.min(cols - 4, rx + rWidth + 2), cols - 3);
-        const campY = py > rows / 2 ? MB_RAND_INT(2, Math.max(3, py - 3)) : MB_RAND_INT(Math.min(rows - 3, py + 3), rows - 3);
-        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (getTile(campX + dx, campY + dy) === 'grass') setTile(campX + dx, campY + dy, 'dirt');
-        addObj(P.campfires, campX + 0.5, campY + 0.5, 1.0, 0);
-        addObj(P.tents, campX - 1.3, campY - 0.6, 0.95, MB_RAND_INT(-25, 25));
-        addObj(P.bedrolls, campX + 1.4, campY + 0.3, 0.9, MB_RAND_INT(0, 359));
-        addObj(P.crates, campX + 0.6, campY + 1.4, 0.85, MB_RAND_INT(0, 359));
-        if (Math.random() < 0.7) addObj(P.logs, campX - 0.8, campY + 1.3, 0.9, MB_RAND_INT(0, 180));
-
-        // Многослойный лес (цветы/кусты/грибы -> камни/пни -> кроны деревьев разных размеров)
+        // Расставляем естественный лес без перекрытий и без заезда на дорогу/воду
         for (let r = 0; r < rows; r++) {
             for (let c = 0; c < cols; c++) {
-                if (getTile(c, r) !== 'grass') continue;
-                if (Math.hypot(c - campX, r - campY) < 2.6) continue;
+                const t = getTile(c, r);
+                if (t !== 'grass' && t !== leafTile) continue;
+                const ox = c + MB_RAND_FLOAT(0.2, 0.8), oy = r + MB_RAND_FLOAT(0.2, 0.8);
+                if (!canPlace(ox, oy, 1.35)) continue;
                 const rnd = Math.random();
-                const ox = c + MB_RAND_FLOAT(0.15, 0.85), oy = r + MB_RAND_FLOAT(0.15, 0.85);
-                if (rnd < 0.14) addObj(P.trees, ox, oy, MB_RAND_FLOAT(0.85, 1.35), MB_RAND_INT(0, 359));
-                else if (rnd < 0.25) addObj(P.bushes, ox, oy, MB_RAND_FLOAT(0.7, 1.2), MB_RAND_INT(0, 359));
-                else if (rnd < 0.31) addObj(P.flowers, ox, oy, MB_RAND_FLOAT(0.7, 1.1), MB_RAND_INT(0, 359));
-                else if (rnd < 0.35) addObj(P.rocks, ox, oy, MB_RAND_FLOAT(0.7, 1.15), MB_RAND_INT(0, 359));
-                else if (rnd < 0.37) addObj(P.logs, ox, oy, MB_RAND_FLOAT(0.8, 1.1), MB_RAND_INT(0, 359));
+                if (rnd < 0.14) addObj(P.greenTrees, ox, oy, MB_RAND_FLOAT(0.85, 1.28), MB_RAND_INT(0, 359), 1.6);
+                else if (rnd < 0.24) addObj(isAutumn && Math.random() < 0.5 ? P.autumnBushes : P.greenBushes, ox, oy, MB_RAND_FLOAT(0.75, 1.15), MB_RAND_INT(0, 359), 0.95);
+                else if (rnd < 0.29) addObj(P.forestFlower, ox, oy, MB_RAND_FLOAT(0.7, 1.05), MB_RAND_INT(0, 359), 0.7);
+                else if (rnd < 0.33) addObj(P.forestRocks, ox, oy, MB_RAND_FLOAT(0.75, 1.1), MB_RAND_INT(0, 359), 1.0);
+                else if (rnd < 0.355) addObj(P.forestLogs, ox, oy, MB_RAND_FLOAT(0.8, 1.05), MB_RAND_INT(0, 359), 1.1);
+                else if (rnd < 0.37) addObj(P.forestFungi, ox, oy, MB_RAND_FLOAT(0.65, 0.9), MB_RAND_INT(0, 359), 0.6);
             }
         }
     }
 
-    // 2. УЮТНАЯ ТАВЕРНА / ПОСТОЯЛЫЙ ДВОР
+    // ============================================================
+    // 2. УЮТНАЯ ТАВЕРНА (строго зелёный двор снаружи + логичный интерьер)
+    // ============================================================
     else if (picked === 'tavern') {
         genTitle = MB_PICK(['Таверна «Золотой Гоблин»', 'Постоялый двор «У Древа»', 'Трактир «Старый Очаг»']);
-        const mX = Math.max(1, Math.floor(cols * 0.1));
-        const mY = Math.max(1, Math.floor(rows * 0.1));
+        const mX = Math.max(1, Math.floor(cols * 0.12));
+        const mY = Math.max(1, Math.floor(rows * 0.12));
         const x1 = mX, x2 = cols - 1 - mX, y1 = mY, y2 = rows - 1 - mY;
 
         for (let r = y1; r <= y2; r++) {
@@ -779,78 +957,85 @@ function MB_GENERATE_RANDOM(biome) {
             }
         }
 
-        // Разделительная перегородка для задней спальни/кладовой, если таверна просторная
+        // Отдельная комната/кладовая, если есть место
         const splitX = (x2 - x1 >= 10) ? (x2 - 4) : -1;
+        const midY = Math.floor((y1 + y2) / 2);
         if (splitX > 0) {
-            for (let r = y1 + 1; r < y2; r++) {
-                if (r !== Math.floor((y1 + y2) / 2)) setTile(splitX, r, 'wall');
-            }
-            addObj(P.doors, splitX + 0.5, Math.floor((y1 + y2) / 2) + 0.5, 0.8, 90);
+            for (let r = y1 + 1; r < y2; r++) if (r !== midY) setTile(splitX, r, 'wall');
+            addObj(P.doors, splitX + 0.5, midY + 0.5, 0.78, 90, 1.1);
         }
 
-        // Входная дверь и тропинка снаружи
-        const doorY = Math.floor((y1 + y2) / 2);
-        setTile(x1, doorY, 'wood');
-        addObj(P.doors, x1 + 0.5, doorY + 0.5, 0.85, 90);
-        for (let c = 0; c < x1; c++) { setTile(c, doorY, 'dirt'); setTile(c, Math.max(0, doorY - 1), 'dirt'); }
+        // Главный вход + мощёная/земляная дорожка снаружи
+        setTile(x1, midY, 'wood');
+        addObj(P.doors, x1 + 0.5, midY + 0.5, 0.82, 90, 1.2);
+        for (let c = 0; c < x1; c++) { setTile(c, midY, 'dirt'); if (midY + 1 < rows) setTile(c, midY + 1, 'dirt'); }
 
         const hallRight = splitX > 0 ? splitX - 1 : x2 - 1;
-        // Камин у северной стены
+        // Камин + ковёр у северной стены
         const hearthX = Math.floor((x1 + hallRight) / 2);
         setTile(hearthX, y1 + 1, 'stone');
-        addObj(P.fireplaces.length ? P.fireplaces : P.campfires, hearthX + 0.5, y1 + 1.35, 1.15, 0);
-        addObj(P.rugs, hearthX + 0.5, y1 + 2.9, 1.15, 0);
+        addObj(P.tavFireplace, hearthX + 0.5, y1 + 1.3, 1.05, 0, 1.4);
+        addObj(P.tavRugs, hearthX + 0.5, y1 + 2.8, 1.1, 0, 0);
 
-        // Барная стойка с бочками
-        const barX = hallRight - 1;
-        for (let r = y1 + 2; r <= Math.min(y2 - 2, y1 + 5); r++) {
-            addObj(P.barrels, barX + 0.6, r + 0.3, 0.85, MB_RAND_INT(0, 359));
+        // Барная зона вдоль восточной стены зала
+        const barX = hallRight - 0.6;
+        for (let r = y1 + 2; r <= Math.min(y2 - 2, y1 + 5); r += 1.2) {
+            addObj(P.tavBarrels, barX, r, 0.82, MB_RAND_INT(0, 359), 0.75);
         }
-        addObj(P.candles, barX - 0.3, y1 + 2.5, 0.9, 0);
+        addObj(P.tavCandles, barX - 0.8, y1 + 2.2, 0.8, 0, 0.4);
 
-        // Столы со стульями, едой и свечами в зале
-        for (let r = y1 + 2; r <= y2 - 2; r += 3) {
-            for (let c = x1 + 2; c <= barX - 2; c += 3) {
-                if (Math.hypot(c - hearthX, r - (y1 + 1)) < 2.2) continue;
-                addObj(P.tables, c + 0.5, r + 0.5, MB_RAND_FLOAT(0.85, 1.05), MB_PICK([0, 90]));
-                addObj(P.chairs, c + 0.5, r - 0.3, 0.8, 180);
-                addObj(P.chairs, c + 0.5, r + 1.3, 0.8, 0);
-                if (Math.random() < 0.7) addObj(P.food, c + 0.45, r + 0.45, 0.65, MB_RAND_INT(0, 359));
-                if (Math.random() < 0.65) addObj(P.candles, c + 0.75, r + 0.45, 0.65, 0);
+        // Аккуратные столики со стульями, едой и свечами (без наложения на стены!)
+        for (let r = y1 + 2.5; r <= y2 - 1.8; r += 2.8) {
+            for (let c = x1 + 2.2; c <= hallRight - 2.3; c += 3.0) {
+                if (!canPlace(c, r, 1.9)) continue;
+                addObj(P.tavTables, c, r, MB_RAND_FLOAT(0.85, 1.0), MB_PICK([0, 90]), 1.6);
+                addObj(P.tavChairs, c, r - 0.78, 0.78, 180, 0);
+                addObj(P.tavChairs, c, r + 0.78, 0.78, 0, 0);
+                if (Math.random() < 0.75) addObj(P.tavFood, c - 0.15, r, 0.62, MB_RAND_INT(0, 359), 0);
+                if (Math.random() < 0.65) addObj(P.tavCandles, c + 0.28, r - 0.1, 0.62, 0, 0);
             }
         }
 
-        // Задняя комната: кровати, шкафы, ковёр, ящики
+        // Спальня / подсобка за перегородкой
         if (splitX > 0) {
-            addObj(P.beds, x2 - 1.4, y1 + 1.8, 1.0, 0);
-            if (y2 - y1 >= 7) addObj(P.beds, x2 - 1.4, y2 - 1.8, 1.0, 0);
-            addObj(P.shelves, splitX + 1.3, y1 + 1.3, 0.95, 0);
-            addObj(P.crates, splitX + 1.3, y2 - 1.3, 0.9, 15);
-            addObj(P.candles, x2 - 2.3, y1 + 1.8, 0.7, 0);
+            addObj(P.tavBeds, x2 - 1.3, y1 + 1.9, 0.95, 0, 1.3);
+            if (y2 - y1 >= 7) addObj(P.tavBeds, x2 - 1.3, y2 - 1.7, 0.95, 0, 1.3);
+            addObj(P.tavShelves, splitX + 1.2, y1 + 1.35, 0.9, 0, 1.0);
+            addObj(P.tavCrates, splitX + 1.2, y2 - 1.35, 0.85, 15, 0.9);
+            addObj(P.tavCandles, x2 - 2.2, y1 + 1.8, 0.65, 0, 0);
         }
 
-        // Деревья и кусты снаружи здания
+        // Двор снаружи таверны: ТОЛЬКО нормальные зелёные деревья/кусты и тележка/дрова!
         for (let r = 0; r < rows; r++) {
             for (let c = 0; c < cols; c++) {
-                if (getTile(c, r) === 'grass' && Math.random() < 0.25) {
-                    addObj(Math.random() < 0.6 ? P.trees : P.bushes, c + 0.5, r + 0.5, MB_RAND_FLOAT(0.8, 1.25), MB_RAND_INT(0, 359));
+                if (getTile(c, r) !== 'grass') continue;
+                // Не ставим деревья прямо впритык к стене здания
+                if (c >= x1 - 1 && c <= x2 + 1 && r >= y1 - 1 && r <= y2 + 1) {
+                    if (Math.random() < 0.12 && canPlace(c + 0.5, r + 0.5, 1.4)) {
+                        addObj(P.greenBushes, c + 0.5, r + 0.5, 0.8, MB_RAND_INT(0, 359), 1.0);
+                    }
+                    continue;
+                }
+                if (canPlace(c + 0.5, r + 0.5, 1.8) && Math.random() < 0.35) {
+                    addObj(Math.random() < 0.65 ? P.greenTrees : P.greenBushes, c + 0.5, r + 0.5, MB_RAND_FLOAT(0.8, 1.15), MB_RAND_INT(0, 359), 1.6);
                 }
             }
         }
     }
 
+    // ============================================================
     // 3. ПОДЗЕМЕЛЬЕ / КАТАКОМБЫ
+    // ============================================================
     else if (picked === 'dungeon') {
-        genTitle = MB_PICK(['Забытые катакомбы', 'Подземелье Ошибки', 'Гробница Древних', 'Казематы Империи']);
+        genTitle = MB_PICK(['Забытые катакомбы', 'Подземелье Ошибки', 'Гробница Древних', 'Сырые казематы']);
         const floorType = Math.random() < 0.5 ? 'stone' : 'flagstone';
         const rooms = [];
-        const attempts = Math.max(8, Math.floor((cols * rows) / 22));
+        const attempts = Math.max(8, Math.floor((cols * rows) / 20));
         for (let a = 0; a < attempts; a++) {
-            const rw = MB_RAND_INT(4, Math.min(9, Math.max(5, Math.floor(cols / 2.8))));
-            const rh = MB_RAND_INT(4, Math.min(8, Math.max(5, Math.floor(rows / 2.6))));
+            const rw = MB_RAND_INT(4, Math.min(9, Math.max(5, Math.floor(cols / 2.7))));
+            const rh = MB_RAND_INT(4, Math.min(8, Math.max(5, Math.floor(rows / 2.5))));
             const rx = MB_RAND_INT(1, Math.max(1, cols - rw - 2));
             const ry = MB_RAND_INT(1, Math.max(1, rows - rh - 2));
-
             const overlaps = rooms.some(rm => rx <= rm.x + rm.w + 1 && rx + rw + 1 >= rm.x && ry <= rm.y + rm.h + 1 && ry + rh + 1 >= rm.y);
             if (!overlaps) {
                 rooms.push({ x: rx, y: ry, w: rw, h: rh, cx: rx + rw / 2, cy: ry + rh / 2 });
@@ -858,254 +1043,361 @@ function MB_GENERATE_RANDOM(biome) {
             }
         }
 
-        // Соединяем комнаты широкими коридорами (2 клетки для больших карт)
         const corrW = cols >= 26 ? 2 : 1;
         for (let i = 1; i < rooms.length; i++) {
             const p = rooms[i - 1], n = rooms[i];
             let x = Math.floor(p.cx), y = Math.floor(p.cy);
             const tx = Math.floor(n.cx), ty = Math.floor(n.cy);
-            while (x !== tx) {
-                for (let d = 0; d < corrW; d++) setTile(x, y + d, floorType);
-                x += (tx > x ? 1 : -1);
-            }
-            while (y !== ty) {
-                for (let d = 0; d < corrW; d++) setTile(x + d, y, floorType);
-                y += (ty > y ? 1 : -1);
-            }
+            while (x !== tx) { for (let d = 0; d < corrW; d++) setTile(x, y + d, floorType); x += (tx > x ? 1 : -1); }
+            while (y !== ty) { for (let d = 0; d < corrW; d++) setTile(x + d, y, floorType); y += (ty > y ? 1 : -1); }
         }
 
         const hazard = MB_PICK(['lava', 'water', 'abyss']);
         rooms.forEach((rm, idx) => {
-            // Светящиеся жаровни в углах
-            addObj(P.braziers, rm.x + 0.7, rm.y + 0.7, 0.85, 0);
-            if (rm.w >= 5) addObj(P.braziers, rm.x + rm.w - 0.7, rm.y + rm.h - 0.7, 0.85, 0);
-            // Паутина и завалы по углам
-            if (Math.random() < 0.75) addObj(P.webs, rm.x + rm.w - 0.6, rm.y + 0.6, 0.9, MB_RAND_INT(0, 359));
-            if (Math.random() < 0.6) addObj(P.rubble, rm.x + 0.8, rm.y + rm.h - 0.8, 0.85, MB_RAND_INT(0, 359));
+            addObj(P.dungBraziers, rm.x + 0.75, rm.y + 0.75, 0.85, 0, 0.9);
+            if (rm.w >= 5) addObj(P.dungBraziers, rm.x + rm.w - 0.75, rm.y + rm.h - 0.75, 0.85, 0, 0.9);
+            if (Math.random() < 0.75) addObj(P.dungWebs, rm.x + rm.w - 0.55, rm.y + 0.55, 0.9, MB_RAND_INT(0, 359), 0);
+            if (Math.random() < 0.55) addObj(P.dungRubble, rm.x + 0.85, rm.y + rm.h - 0.85, 0.85, MB_RAND_INT(0, 359), 0.8);
 
             if (idx === rooms.length - 1) {
-                // Зал босса / алтаря
-                addObj(P.rugs, rm.cx, rm.cy, 1.3, 0);
-                addObj(P.altars, rm.cx, rm.cy, 1.15, 0);
-                addObj(P.chests, rm.cx + 1.4, rm.cy - 0.4, 0.95, 0);
-                addObj(P.crystals, rm.x + 1.0, rm.cy, 0.9, 0);
+                addObj(P.tavRugs, rm.cx, rm.cy, 1.25, 0, 0);
+                addObj(P.dungAltars, rm.cx, rm.cy, 1.15, 0, 1.4);
+                addObj(P.dungChests, rm.cx + 1.5, rm.cy - 0.4, 0.9, 0, 0.9);
             } else {
                 const theme = Math.random();
                 if (theme < 0.32 && rm.w >= 5 && rm.h >= 5) {
-                    // Яма с лавой/водой + колонны
                     for (let r = Math.floor(rm.cy) - 1; r <= Math.floor(rm.cy); r++) {
                         for (let c = Math.floor(rm.cx) - 1; c <= Math.floor(rm.cx); c++) setTile(c, r, hazard);
                     }
-                    addObj(P.pillars, rm.x + 1.2, rm.y + 1.2, 0.9, 0);
-                    addObj(P.pillars, rm.x + rm.w - 1.2, rm.y + 1.2, 0.9, 0);
+                    addObj(P.dungPillars, rm.x + 1.2, rm.y + 1.2, 0.9, 0, 0.8);
+                    addObj(P.dungPillars, rm.x + rm.w - 1.2, rm.y + 1.2, 0.9, 0, 0.8);
                 } else if (theme < 0.65) {
-                    addObj(P.bones, rm.cx + MB_RAND_FLOAT(-0.7, 0.7), rm.cy + MB_RAND_FLOAT(-0.7, 0.7), 1.0, MB_RAND_INT(0, 359));
-                    addObj(P.chests, rm.x + rm.w - 1.1, rm.cy, 0.9, MB_PICK([0, 90, 180]));
+                    addObj(P.dungBones, rm.cx, rm.cy, 0.95, MB_RAND_INT(0, 359), 0.9);
+                    addObj(P.dungChests, rm.x + rm.w - 1.1, rm.cy, 0.85, MB_PICK([0, 90, 180]), 0.9);
                 } else {
-                    addObj(P.crates, rm.cx - 0.8, rm.cy, 0.9, MB_RAND_INT(0, 359));
-                    addObj(P.barrels, rm.cx + 0.7, rm.cy + 0.4, 0.9, MB_RAND_INT(0, 359));
-                    addObj(P.crystals, rm.cx, rm.cy - 0.8, 0.85, MB_RAND_INT(0, 359));
+                    addObj(P.tavCrates, rm.cx - 0.8, rm.cy, 0.85, MB_RAND_INT(0, 359), 0.8);
+                    addObj(P.tavBarrels, rm.cx + 0.7, rm.cy + 0.4, 0.85, MB_RAND_INT(0, 359), 0.8);
                 }
             }
         });
     }
 
+    // ============================================================
     // 4. ГОРОД / СТОЛИЦА / РЫНОК
+    // ============================================================
     else if (picked === 'city') {
-        genTitle = cols >= 28 ? MB_PICK(['Столица Империи', 'Центральная площадь', 'Торговый квартал']) : MB_PICK(['Деревня Притишье', 'Ярмарочная слобода', 'Городская застава']);
         const isCapital = cols >= 26;
+        genTitle = isCapital ? MB_PICK(['Столица Империи', 'Центральная площадь', 'Торговый квартал']) : MB_PICK(['Деревня Притишье', 'Ярмарочная площадь', 'Городская застава']);
         const street = isCapital ? 'cobble' : 'dirt';
         const midX = Math.floor(cols / 2), midY = Math.floor(rows / 2);
-
-        // Проспекты и улочки
         const roadW = isCapital ? 3 : 2;
+
         for (let c = 0; c < cols; c++) for (let d = 0; d < roadW; d++) setTile(c, Math.min(rows - 1, midY - 1 + d), street);
         for (let r = 0; r < rows; r++) for (let d = 0; d < roadW; d++) setTile(Math.min(cols - 1, midX - 1 + d), r, street);
 
-        // Центральная мощёная площадь
         const pRad = isCapital ? 3 : 2;
-        for (let r = midY - pRad; r <= midY + pRad; r++) {
-            for (let c = midX - pRad; c <= midX + pRad; c++) setTile(c, r, 'cobble');
-        }
-        addObj(P.statues, midX + 0.5, midY + 0.5, 1.25, 0);
-        // Фонари вокруг площади
+        for (let r = midY - pRad; r <= midY + pRad; r++) for (let c = midX - pRad; c <= midX + pRad; c++) setTile(c, r, 'cobble');
+        addObj(P.cityCenter, midX + 0.5, midY + 0.5, 1.2, 0, 1.8);
         [[midX - pRad, midY - pRad], [midX + pRad, midY - pRad], [midX - pRad, midY + pRad], [midX + pRad, midY + pRad]].forEach(([lx, ly]) => {
-            addObj(P.lamps, lx + 0.5, ly + 0.5, 0.9, 0);
+            addObj(P.cityLamps, lx + 0.5, ly + 0.5, 0.85, 0, 0.8);
         });
+        addObj(P.cityCarts, midX - pRad - 1.8, midY + 0.5, 0.95, 0, 1.5);
+        addObj(P.cityCarts, midX + pRad + 2.0, midY + 0.4, 0.95, 180, 1.5);
 
-        // Повозки и рыночные ящики вдоль улиц
-        addObj(P.carts, midX - pRad - 1.8, midY + 0.5, 1.0, 0);
-        addObj(P.carts, midX + pRad + 2.0, midY + 0.4, 1.0, 180);
-
-        // Крепостные стены для крупного города
         if (isCapital) {
             for (let c = 0; c < cols; c++) if (Math.abs(c - midX) > 1) { setTile(c, 0, 'wall'); setTile(c, rows - 1, 'wall'); }
             for (let r = 0; r < rows; r++) if (Math.abs(r - midY) > 1) { setTile(0, r, 'wall'); setTile(cols - 1, r, 'wall'); }
         }
 
-        // Расставляем крупные крыши зданий по кварталам (не наезжая на дороги!)
-        const stepX = 5, stepY = 4;
-        for (let r = 2; r < rows - 2; r += stepY) {
-            for (let c = 2; c < cols - 2; c += stepX) {
-                if (Math.abs(c - midX) <= pRad + 1 || Math.abs(r - midY) <= pRad + 1) continue;
-                if (getTile(c, r) === 'grass') {
-                    if (Math.random() < 0.72) {
-                        for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) if (getTile(c + dc, r + dr) === 'grass') setTile(c + dc, r + dr, 'cobble');
-                        addObj(P.roofs, c + 0.5, r + 0.5, MB_RAND_FLOAT(0.85, 1.15), MB_PICK([0, 90, 180, 270]));
-                        addObj(P.crates, c + 2.0, r + 1.2, 0.8, MB_RAND_INT(0, 90));
-                    } else {
-                        // Зелёный скверик
-                        addObj(P.trees, c + 0.5, r + 0.5, 1.05, MB_RAND_INT(0, 359));
-                        addObj(P.gardens, c + 1.4, r + 0.8, 0.9, MB_RAND_INT(0, 359));
-                        addObj(P.flowers, c - 0.6, r + 0.9, 0.9, MB_RAND_INT(0, 359));
-                    }
+        for (let r = 2.5; r < rows - 2; r += 4.2) {
+            for (let c = 2.5; c < cols - 2; c += 5.2) {
+                if (Math.abs(c - midX) <= pRad + 1.8 || Math.abs(r - midY) <= pRad + 1.6) continue;
+                if (!canPlace(c, r, 3.2)) continue;
+                if (Math.random() < 0.72) {
+                    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) if (getTile(Math.floor(c) + dc, Math.floor(r) + dr) === 'grass') setTile(Math.floor(c) + dc, Math.floor(r) + dr, 'cobble');
+                    addObj(P.cityRoofs, c, r, MB_RAND_FLOAT(0.88, 1.08), MB_PICK([0, 90, 180, 270]), 2.8);
+                    addObj(P.cityMarket, c + 1.9, r + 1.3, 0.78, MB_RAND_INT(0, 90), 0.7);
+                } else {
+                    addObj(P.greenTrees, c, r, 1.05, MB_RAND_INT(0, 359), 1.6);
+                    addObj(P.forestFlower, c + 1.2, r + 0.8, 0.85, MB_RAND_INT(0, 359), 0.7);
                 }
             }
         }
     }
 
-    // 5. ПУСТЫННЫЙ ОАЗИС И КАРАВАН
-    else if (picked === 'desert') {
-        genTitle = MB_PICK(['Оазис Забытых Песков', 'Стоянка каравана', 'Руины в дюнах']);
-        const ox = MB_RAND_INT(Math.floor(cols * 0.35), Math.floor(cols * 0.65));
-        const oy = MB_RAND_INT(Math.floor(rows * 0.35), Math.floor(rows * 0.65));
-        const rad = Math.max(2.2, Math.min(cols, rows) * 0.22);
+    // ============================================================
+    // 5. БОГАТЫЙ ОСОБНЯК / ТРОННЫЙ ЗАЛ
+    // ============================================================
+    else if (picked === 'mansion') {
+        genTitle = MB_PICK(['Тронный зал Министра', 'Особняк аристократа', 'Библиотека и галерея']);
+        for (let r = 1; r < rows - 1; r++) for (let c = 1; c < cols - 1; c++) {
+            setTile(c, r, (r >= 3 && r <= rows - 4 && c >= 3 && c <= cols - 4) ? 'wood' : 'flagstone');
+        }
+        const midY = Math.floor(rows / 2);
+        setTile(0, midY, 'flagstone');
+        addObj(P.doors, 0.5, midY + 0.5, 0.9, 90, 1.2);
 
-        for (let r = 0; r < rows; r++) {
-            for (let c = 0; c < cols; c++) {
-                const dist = Math.hypot(c - ox, r - oy);
-                if (dist < rad) setTile(c, r, 'water');
-                else if (dist < rad + 1.6) setTile(c, r, 'grass');
-            }
+        // Ковровая дорожка к трону / роялю
+        for (let c = 3; c <= cols - 4; c += 2.6) addObj(P.tavRugs, c, midY + 0.5, 1.15, 0, 0);
+        // Трон или парадный стол в восточной части
+        addObj('furniture_chair_throne_stone', cols - 2.4, midY + 0.5, 1.15, 270, 1.6);
+        // Люстры по центру зала (дают мягкий золотой свет!)
+        for (let c = 4; c < cols - 3; c += 5) addObj(P.manLights, c, midY + 0.5, 1.05, 0, 0);
+        // Шкафы, камины, рояль, телескоп, доспехи вдоль стен
+        for (let c = 2.5; c <= cols - 3; c += 3.2) {
+            addObj(Math.random() < 0.5 ? P.manBooks : P.manFeatures, c, 1.7, 0.92, 0, 1.3);
+            addObj(Math.random() < 0.5 ? P.manChairs : P.manFeatures, c, rows - 1.7, 0.92, 180, 1.3);
         }
-        // Пальмы вокруг оазиса
-        for (let a = 0; a < 8; a++) {
-            const ang = (a / 8) * Math.PI * 2 + MB_RAND_FLOAT(-0.2, 0.2);
-            const px = ox + Math.cos(ang) * (rad + 1.2);
-            const py = oy + Math.sin(ang) * (rad + 1.2);
-            if (inBounds(Math.floor(px), Math.floor(py))) addObj(P.palms, px, py, MB_RAND_FLOAT(0.85, 1.2), MB_RAND_INT(0, 359));
+        if (Math.random() < 0.7) addObj(P.manCats, cols / 2, midY + 1.8, 0.8, MB_RAND_INT(0, 359), 0);
+    }
+
+    // ============================================================
+    // 6. КУЗНИЦА И ЗАЛЫ ДВАРФОВ
+    // ============================================================
+    else if (picked === 'dwarven') {
+        genTitle = MB_PICK(['Великая Кузница Дварфов', 'Плавильный зал', 'Подгорный бастион']);
+        for (let r = 1; r < rows - 1; r++) for (let c = 1; c < cols - 1; c++) setTile(c, r, 'flagstone');
+        // Каналы с расплавленной лавой вдоль северной и южной стен
+        for (let c = 2; c < cols - 2; c++) {
+            setTile(c, 1, 'lava'); setTile(c, rows - 2, 'lava');
         }
-        // Лагерь каравана
-        const tx = ox > cols / 2 ? 3.5 : cols - 3.5;
-        const ty = oy > rows / 2 ? 3.5 : rows - 3.5;
-        addObj(P.tents, tx, ty, 1.0, MB_RAND_INT(-30, 30));
-        addObj(P.campfires, tx + (ox > tx ? 2.0 : -2.0), ty + 0.5, 1.0, 0);
-        addObj(P.pots, tx, ty + 1.8, 0.9, MB_RAND_INT(0, 359));
-        // Кактусы, скалы, черепа по пустыне
+        const midY = Math.floor(rows / 2);
+        // Центральные горны, чаны с металлом, наковальни
+        for (let c = 4; c < cols - 3; c += 4.5) {
+            addObj(P.dwForge, c, midY - 1.2, 1.1, 0, 1.5);
+            addObj(P.dwLoot, c + 1.2, midY + 1.2, 0.95, MB_RAND_INT(0, 359), 1.1);
+            addObj(P.dungPillars, c, 2.8, 0.95, 0, 1.0);
+            addObj(P.dungPillars, c, rows - 2.8, 0.95, 0, 1.0);
+        }
+        addObj(P.dwStatues, cols - 2.4, midY + 0.5, 1.25, 270, 1.6);
+        addObj(P.dungBraziers, 2.2, midY - 1.2, 0.9, 0, 0.8);
+        addObj(P.dungBraziers, 2.2, midY + 1.8, 0.9, 0, 0.8);
+        addObj(P.dungChests, cols - 3.6, midY + 1.5, 0.9, 0, 0.9);
+    }
+
+    // ============================================================
+    // 7. ПИРАТСКАЯ БУХТА И ПОБЕРЕЖЬЕ
+    // ============================================================
+    else if (picked === 'pirate') {
+        genTitle = MB_PICK(['Бухта Контрабандистов', 'Пиратский берег', 'Остров Сокровищ']);
+        // Вода с одной стороны (береговая линия)
+        let shore = Math.floor(cols * 0.48);
         for (let r = 0; r < rows; r++) {
-            for (let c = 0; c < cols; c++) {
-                if (getTile(c, r) !== 'sand') continue;
-                if (Math.hypot(c - tx, r - ty) < 2.8) continue;
-                const rnd = Math.random();
-                if (rnd < 0.08) addObj(P.cacti, c + 0.5, r + 0.5, MB_RAND_FLOAT(0.8, 1.15), MB_RAND_INT(0, 359));
-                else if (rnd < 0.13) addObj(P.rocks, c + 0.5, r + 0.5, MB_RAND_FLOAT(0.8, 1.2), MB_RAND_INT(0, 359));
-                else if (rnd < 0.15) addObj(P.bones, c + 0.5, r + 0.5, 1.0, MB_RAND_INT(0, 359));
-            }
+            if (Math.random() < 0.5) shore = Math.max(4, Math.min(cols - 5, shore + MB_RAND_INT(-1, 1)));
+            for (let c = 0; c < shore; c++) setTile(c, r, 'water');
+            for (let c = shore + 4; c < cols; c++) if (Math.random() < 0.65) setTile(c, r, 'grass');
+        }
+        // Пирс и лодка на воде
+        const pierY = Math.floor(rows / 2);
+        addObj(P.bridges, shore - 0.5, pierY + 0.5, 1.1, 0, 2.0);
+        addObj(P.boats, Math.max(2, shore - 3.2), pierY + 2.2, 1.15, MB_RAND_INT(-30, 30), 1.6);
+        // Пиратский лагерь с сокровищами на пляже
+        const cx = Math.min(cols - 3, shore + 2.5), cy = Math.max(2.5, pierY - 1.5);
+        addObj(P.campfires, cx, cy, 1.0, 0, 1.4);
+        addObj(P.pirateLoot, cx + 1.6, cy + 0.8, 1.0, MB_RAND_INT(0, 359), 1.0);
+        addObj(P.pirateLoot, cx - 0.4, cy + 1.8, 0.9, MB_RAND_INT(0, 359), 1.0);
+        addObj(P.tavBarrels, cx + 1.5, cy - 1.1, 0.85, 0, 0.8);
+
+        for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+            const t = getTile(c, r);
+            if (!canPlace(c + 0.5, r + 0.5, 1.4)) continue;
+            if (t === 'grass' && Math.random() < 0.22) addObj(P.palms, c + 0.5, r + 0.5, MB_RAND_FLOAT(0.85, 1.2), MB_RAND_INT(0, 359), 1.8);
+            else if (t === 'sand' && Math.random() < 0.14) addObj(Math.random() < 0.7 ? P.beachLife : P.pirateLoot, c + 0.5, r + 0.5, MB_RAND_FLOAT(0.75, 1.05), MB_RAND_INT(0, 359), 1.0);
         }
     }
 
-    // 6. ВОЛШЕБНЫЙ ФЕЙСКИЙ ЛЕС / ГРИБНАЯ РОЩА
+    // ============================================================
+    // 8. ПУСТЫННЫЙ ОАЗИС И КАРАВАН
+    // ============================================================
+    else if (picked === 'desert') {
+        genTitle = MB_PICK(['Оазис Забытых Песков', 'Стоянка каравана', 'Дюны у источника']);
+        const ox = MB_RAND_INT(Math.floor(cols * 0.38), Math.floor(cols * 0.62));
+        const oy = MB_RAND_INT(Math.floor(rows * 0.35), Math.floor(rows * 0.65));
+        const rad = Math.max(2.0, Math.min(cols, rows) * 0.21);
+
+        for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+            const dist = Math.hypot(c - ox, r - oy);
+            if (dist < rad) setTile(c, r, 'water');
+            else if (dist < rad + 1.5) setTile(c, r, 'grass');
+        }
+        for (let a = 0; a < 7; a++) {
+            const ang = (a / 7) * Math.PI * 2 + MB_RAND_FLOAT(-0.2, 0.2);
+            const px = ox + Math.cos(ang) * (rad + 1.25), py = oy + Math.sin(ang) * (rad + 1.25);
+            if (inBounds(Math.floor(px), Math.floor(py)) && canPlace(px, py, 1.6)) addObj(P.palms, px, py, MB_RAND_FLOAT(0.85, 1.15), MB_RAND_INT(0, 359), 1.5);
+        }
+        const tx = ox > cols / 2 ? 3.5 : cols - 3.5, ty = oy > rows / 2 ? 3.5 : rows - 3.5;
+        addObj(P.desertTents, tx, ty, 0.9, MB_RAND_INT(-25, 25), 2.4);
+        addObj('camp_desert_campfire_1x1', tx + (ox > tx ? 2.4 : -2.4), ty + 0.6, 1.0, 0, 1.3);
+        addObj(P.desertProps, tx, ty + 2.0, 0.9, MB_RAND_INT(0, 359), 1.0);
+
+        for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+            if (getTile(c, r) !== 'sand' || !canPlace(c + 0.5, r + 0.5, 1.5)) continue;
+            const rnd = Math.random();
+            if (rnd < 0.09) addObj(P.desertCacti, c + 0.5, r + 0.5, MB_RAND_FLOAT(0.8, 1.1), MB_RAND_INT(0, 359), 1.2);
+            else if (rnd < 0.14) addObj(P.desertRocks, c + 0.5, r + 0.5, MB_RAND_FLOAT(0.8, 1.15), MB_RAND_INT(0, 359), 1.3);
+            else if (rnd < 0.16) addObj(P.desertProps, c + 0.5, r + 0.5, 0.9, MB_RAND_INT(0, 359), 1.0);
+        }
+    }
+
+    // ============================================================
+    // 9. ФЕЙСКИЙ ЛЕС (МАГИЧЕСКАЯ РОЩА — ТОЛЬКО ЗДЕСЬ СИНЕ-ФИОЛЕТОВАЯ ФЛОРА!)
+    // ============================================================
     else if (picked === 'fey') {
         genTitle = MB_PICK(['Фейская роща', 'Светящийся лес Древа', 'Грибное святилище']);
         const cx = cols / 2, cy = rows / 2;
-        // Магический пруд или ручей
-        for (let r = 0; r < rows; r++) {
-            for (let c = 0; c < cols; c++) {
-                const d = Math.hypot((c - cx) * 0.8, r - cy);
-                if (d < 2.2) setTile(c, r, 'water');
-                else if (d < 4.0 && Math.random() < 0.3) setTile(c, r, 'dirt');
-            }
+        for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+            const d = Math.hypot((c - cx) * 0.85, r - cy);
+            if (d < 2.2) setTile(c, r, 'water');
+            else if (d < 4.5 && Math.random() < 0.45) setTile(c, r, 'leaves_green');
         }
-        addObj(P.altars, cx, cy - 2.6, 1.15, 0);
-        addObj(P.crystals, cx - 2.3, cy - 1.5, 1.05, 0);
-        addObj(P.crystals, cx + 2.3, cy - 1.5, 1.05, 0);
-        addObj(P.crystals, cx, cy + 2.7, 1.0, 0);
+        addObj('furniture_feythrone', cx, cy - 2.6, 1.15, 0, 1.6);
+        addObj(P.feyCrystals, cx - 2.4, cy - 1.3, 1.0, 0, 1.1);
+        addObj(P.feyCrystals, cx + 2.4, cy - 1.3, 1.0, 0, 1.1);
+        addObj(P.feyCrystals, cx, cy + 2.7, 1.0, 0, 1.1);
 
-        for (let r = 0; r < rows; r++) {
-            for (let c = 0; c < cols; c++) {
-                const t = getTile(c, r);
-                if (t === 'water') {
-                    if (Math.random() < 0.25) addObj(P.waterDec, c + 0.5, r + 0.5, 0.9, MB_RAND_INT(0, 359));
-                    continue;
-                }
-                const rnd = Math.random();
-                const ox = c + MB_RAND_FLOAT(0.15, 0.85), oy = r + MB_RAND_FLOAT(0.15, 0.85);
-                if (rnd < 0.20) addObj(P.mushrooms, ox, oy, MB_RAND_FLOAT(0.8, 1.35), MB_RAND_INT(0, 359));
-                else if (rnd < 0.28) addObj(P.trees, ox, oy, MB_RAND_FLOAT(0.85, 1.2), MB_RAND_INT(0, 359));
-                else if (rnd < 0.34) addObj(P.flowers, ox, oy, MB_RAND_FLOAT(0.8, 1.15), MB_RAND_INT(0, 359));
-                else if (rnd < 0.37) addObj(P.crystals, ox, oy, MB_RAND_FLOAT(0.75, 1.05), MB_RAND_INT(0, 359));
+        for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+            const t = getTile(c, r);
+            if (t === 'water') {
+                if (Math.random() < 0.25 && canPlace(c + 0.5, r + 0.5, 1.0)) addObj(P.waterDec, c + 0.5, r + 0.5, 0.9, MB_RAND_INT(0, 359), 0.8);
+                continue;
+            }
+            const ox = c + MB_RAND_FLOAT(0.2, 0.8), oy = r + MB_RAND_FLOAT(0.2, 0.8);
+            if (!canPlace(ox, oy, 1.4)) continue;
+            const rnd = Math.random();
+            if (rnd < 0.16) addObj(P.feyTrees, ox, oy, MB_RAND_FLOAT(0.85, 1.25), MB_RAND_INT(0, 359), 1.7);
+            else if (rnd < 0.30) addObj(P.feyFungi, ox, oy, MB_RAND_FLOAT(0.75, 1.25), MB_RAND_INT(0, 359), 0.95);
+            else if (rnd < 0.37) addObj(P.feyDecor, ox, oy, MB_RAND_FLOAT(0.8, 1.15), MB_RAND_INT(0, 359), 1.0);
+            else if (rnd < 0.40) addObj(P.feyCrystals, ox, oy, MB_RAND_FLOAT(0.75, 1.0), MB_RAND_INT(0, 359), 1.0);
+        }
+    }
+
+    // ============================================================
+    // 10. ВОСТОЧНЫЙ ХРАМ / ДОДЗЁ
+    // ============================================================
+    else if (picked === 'eastern') {
+        genTitle = MB_PICK(['Восточное додзё', 'Храм Тихого Лотоса', 'Чайный дом']);
+        const x1 = 2, x2 = cols - 3, y1 = 2, y2 = rows - 3;
+        for (let r = y1; r <= y2; r++) for (let c = x1; c <= x2; c++) {
+            const isW = (r === y1 || r === y2 || c === x1 || c === x2);
+            setTile(c, r, isW ? 'wall' : 'wood');
+        }
+        const midX = Math.floor(cols / 2), midY = Math.floor(rows / 2);
+        setTile(x1, midY, 'wood');
+        addObj(P.eastDoors, x1 + 0.5, midY + 0.5, 0.85, 90, 1.2);
+        // Татами по центру зала
+        for (let c = x1 + 3; c <= x2 - 3; c += 2.6) addObj(P.eastMats, c, midY + 0.5, 1.05, 0, 0);
+        // Алтарь и доспехи у восточной стены
+        addObj('other_shrine_1', x2 - 1.4, midY + 0.5, 1.1, 270, 1.4);
+        addObj(P.eastLights, x2 - 1.4, y1 + 1.5, 0.85, 0, 0.8);
+        addObj(P.eastLights, x2 - 1.4, y2 - 1.5, 0.85, 0, 0.8);
+        addObj(P.eastLights, x1 + 1.5, midY - 1.5, 0.85, 0, 0.8);
+        addObj(P.eastLights, x1 + 1.5, midY + 2.2, 0.85, 0, 0.8);
+        // Столики котацу, стойки с катанами, бонсай
+        for (let c = x1 + 2.5; c <= x2 - 3; c += 3.5) {
+            addObj(P.eastTables, c, y1 + 1.8, 0.9, 0, 1.3);
+            addObj(P.eastDecor, c, y2 - 1.6, 0.9, 180, 1.3);
+        }
+        // Сад с прудом снаружи
+        for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+            if (getTile(c, r) === 'grass' && canPlace(c + 0.5, r + 0.5, 1.5) && Math.random() < 0.25) {
+                addObj(Math.random() < 0.6 ? P.greenTrees : P.forestRocks, c + 0.5, r + 0.5, 0.85, MB_RAND_INT(0, 359), 1.4);
             }
         }
     }
 
-    // 7. ПОЛЕ БИТВЫ / ОСАДНЫЙ ЛАГЕРЬ
-    else if (picked === 'battlefield') {
-        genTitle = MB_PICK(['Осадный рубеж', 'Поле битвы Псов Империи', 'Укреплённый лагерь']);
-        // Изрытая землёй центральная полоса боя
-        for (let r = 0; r < rows; r++) {
-            for (let c = 0; c < cols; c++) {
-                if (Math.abs(c - cols / 2) < cols * 0.28 + (Math.random() - 0.5) * 3) setTile(c, r, 'dirt');
+    // ============================================================
+    // 11. ЛАГЕРЬ ОХОТНИКОВ / ОРКОВ
+    // ============================================================
+    else if (picked === 'warcamp') {
+        genTitle = MB_PICK(['Стойбище охотников', 'Военный лагерь орков', 'Разбойничья застава']);
+        const cx = Math.floor(cols / 2), cy = Math.floor(rows / 2);
+        const radX = cols * 0.34, radY = rows * 0.34;
+        for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+            const d = Math.hypot((c - cx) / radX, (r - cy) / radY);
+            if (d < 1.0) setTile(c, r, 'dirt');
+        }
+        // Центральный костёр с кабаном + тотем
+        addObj(P.campfires, cx + 0.5, cy + 0.5, 1.15, 0, 1.6);
+        addObj('camp_totemlarge', cx - 1.8, cy - 1.2, 1.05, 0, 1.3);
+        // Шатры по кругу
+        for (let a = 0; a < 5; a++) {
+            const ang = (a / 5) * Math.PI * 2 + 0.3;
+            const tx = cx + Math.cos(ang) * (radX * 0.72), ty = cy + Math.sin(ang) * (radY * 0.72);
+            if (inBounds(Math.floor(tx), Math.floor(ty)) && canPlace(tx, ty, 2.2)) {
+                addObj(P.orcTents, tx, ty, 0.95, Math.round((ang * 180) / Math.PI) + 90, 2.0);
             }
         }
-        // Линии баррикад и осадных орудий
-        const leftLine = Math.floor(cols * 0.3);
-        const rightLine = Math.floor(cols * 0.7);
-        for (let r = 2; r < rows - 2; r += 3) {
-            addObj(P.barricades, leftLine + 0.5, r + 0.5, 1.05, 90);
-            addObj(P.barricades, rightLine + 0.5, r + 0.5, 1.05, 270);
+        // Племенной декор, стойки оружия, колья по периметру
+        for (let i = 0; i < Math.floor((cols * rows) / 20); i++) {
+            const rx = MB_RAND_FLOAT(2, cols - 2), ry = MB_RAND_FLOAT(2, rows - 2);
+            if (!canPlace(rx, ry, 1.35)) continue;
+            if (getTile(Math.floor(rx), Math.floor(ry)) === 'dirt') {
+                addObj(P.orcProps, rx, ry, MB_RAND_FLOAT(0.82, 1.05), MB_RAND_INT(0, 359), 1.15);
+            } else {
+                addObj(Math.random() < 0.65 ? P.greenTrees : P.barricades, rx, ry, MB_RAND_FLOAT(0.85, 1.15), MB_RAND_INT(0, 359), 1.5);
+            }
         }
-        addObj(P.siege, leftLine - 2.2, rows * 0.33, 1.1, 0);
-        addObj(P.siege, leftLine - 2.2, rows * 0.67, 1.1, 0);
-        addObj(P.siege, rightLine + 2.2, rows * 0.5, 1.1, 180);
-        // Шатры в тылу
-        addObj(P.tents, 2.5, rows * 0.25, 1.0, 0);
-        addObj(P.tents, cols - 2.5, rows * 0.75, 1.0, 180);
-        // Очаги огня, камни, оружие на поле
+    }
+
+    // ============================================================
+    // 12. ПОЛЕ БИТВЫ / ОСАДА
+    // ============================================================
+    else if (picked === 'battlefield') {
+        genTitle = MB_PICK(['Осадный рубеж', 'Поле битвы Псов Империи', 'Штурм укреплений']);
+        for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+            if (Math.abs(c - cols / 2) < cols * 0.30 + (Math.random() - 0.5) * 3) setTile(c, r, 'dirt');
+        }
+        const leftL = Math.floor(cols * 0.3), rightL = Math.floor(cols * 0.7);
+        for (let r = 2; r < rows - 2; r += 2.8) {
+            addObj(P.barricades, leftL + 0.5, r + 0.5, 1.0, 90, 1.4);
+            addObj(P.barricades, rightL + 0.5, r + 0.5, 1.0, 270, 1.4);
+        }
+        addObj(P.siege, leftL - 2.3, rows * 0.32, 1.05, 0, 2.0);
+        addObj(P.siege, leftL - 2.3, rows * 0.68, 1.05, 0, 2.0);
+        addObj(P.siege, rightL + 2.3, rows * 0.5, 1.05, 180, 2.0);
+        addObj(P.campTents, 2.4, rows * 0.25, 1.0, 0, 2.0);
+        addObj(P.campTents, cols - 2.4, rows * 0.75, 1.0, 180, 2.0);
+
         for (let i = 0; i < Math.floor((cols * rows) / 18); i++) {
             const fx = MB_RAND_FLOAT(2, cols - 2), fy = MB_RAND_FLOAT(1.5, rows - 1.5);
+            if (!canPlace(fx, fy, 1.4)) continue;
             const r = Math.random();
-            if (r < 0.28) addObj(P.fireFx.length ? P.fireFx : P.campfires, fx, fy, MB_RAND_FLOAT(0.7, 1.1), MB_RAND_INT(0, 359));
-            else if (r < 0.55) addObj(P.weapons, fx, fy, 0.85, MB_RAND_INT(0, 359));
-            else if (r < 0.8) addObj(P.rubble, fx, fy, 0.9, MB_RAND_INT(0, 359));
-            else addObj(P.rocks, fx, fy, 0.9, MB_RAND_INT(0, 359));
+            if (r < 0.25) addObj(P.battleFire, fx, fy, MB_RAND_FLOAT(0.6, 0.95), MB_RAND_INT(0, 359), 1.3);
+            else if (r < 0.55) addObj(P.battleLoot, fx, fy, 0.85, MB_RAND_INT(0, 359), 0.9);
+            else if (r < 0.8) addObj(P.dungRubble, fx, fy, 0.9, MB_RAND_INT(0, 359), 1.0);
+            else addObj(P.forestRocks, fx, fy, 0.9, MB_RAND_INT(0, 359), 1.1);
         }
     }
 
-    // 8. СНЕЖНЫЙ ПЕРЕВАЛ
+    // ============================================================
+    // 13. СНЕЖНЫЙ ПЕРЕВАЛ И ПРИВАЛ
+    // ============================================================
     else if (picked === 'snow') {
-        genTitle = MB_PICK(['Ледяной перевал', 'Замёрзшее озеро', 'Привал в метели']);
-        const pit = Math.random() < 0.55 ? 'water' : 'abyss';
-        const px = cols * MB_RAND_FLOAT(0.35, 0.65), py = rows * MB_RAND_FLOAT(0.35, 0.65);
+        genTitle = MB_PICK(['Ледяной перевал', 'Замёрзшее озеро', 'Привал в горах']);
+        const pit = Math.random() < 0.6 ? 'water' : 'abyss';
+        const px = cols * MB_RAND_FLOAT(0.38, 0.62), py = rows * MB_RAND_FLOAT(0.35, 0.65);
         const rad = Math.max(2.2, Math.min(cols, rows) * 0.22);
-        for (let r = 0; r < rows; r++) {
-            for (let c = 0; c < cols; c++) {
-                if (Math.hypot(c - px, r - py) < rad + (Math.random() - 0.5) * 0.9) setTile(c, r, pit);
-            }
+        for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+            if (Math.hypot(c - px, r - py) < rad + (Math.random() - 0.5) * 0.8) setTile(c, r, pit);
         }
-        // Каменная тропа через перевал + мост
-        let ty = Math.floor(rows / 2);
-        let br = null;
+        let ty = Math.floor(rows / 2), br = null;
         for (let c = 0; c < cols; c++) {
-            if (Math.random() < 0.3) ty = Math.max(1, Math.min(rows - 2, ty + MB_RAND_INT(-1, 1)));
+            if (Math.random() < 0.28) ty = Math.max(2, Math.min(rows - 3, ty + MB_RAND_INT(-1, 1)));
             if (getTile(c, ty) === pit) { if (!br) br = { x: c + 1.5, y: ty + 0.5 }; }
             else setTile(c, ty, 'stone');
         }
-        if (br) addObj(P.bridges, br.x, br.y, 1.15, 0);
+        if (br) addObj(P.bridges, br.x, br.y, 1.15, 0, 2.0);
 
-        // Тёплый лагерь со шкурами
-        const cx = Math.max(2.5, cols * 0.2), cy = Math.max(2.5, rows * 0.26);
-        addObj(P.campfires, cx, cy, 1.1, 0);
-        addObj(P.tents, cx - 1.2, cy + 1.0, 0.95, 25);
-        addObj(P.bedrolls, cx + 1.2, cy + 0.3, 0.95, 90);
+        const cx = Math.max(2.6, cols * 0.2), cy = Math.max(2.6, rows * 0.26);
+        addObj(P.campfires, cx, cy, 1.1, 0, 1.5);
+        addObj(P.campTents, cx - 1.3, cy + 1.2, 0.95, 20, 1.8);
+        addObj(P.snowPelts, cx + 1.3, cy + 0.4, 0.95, 90, 1.0);
 
-        for (let r = 0; r < rows; r++) {
-            for (let c = 0; c < cols; c++) {
-                if (getTile(c, r) !== 'snow') continue;
-                if (Math.hypot(c - cx, r - cy) < 2.6) continue;
-                const rnd = Math.random();
-                if (rnd < 0.14) addObj(P.snowProps.length && Math.random() < 0.35 ? P.snowProps : P.trees, c + 0.5, r + 0.5, MB_RAND_FLOAT(0.8, 1.2), MB_RAND_INT(0, 359));
-                else if (rnd < 0.22) addObj(P.rocks, c + 0.5, r + 0.5, MB_RAND_FLOAT(0.8, 1.2), MB_RAND_INT(0, 359));
-            }
+        for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+            if (getTile(c, r) !== 'snow' || !canPlace(c + 0.5, r + 0.5, 1.55)) continue;
+            const rnd = Math.random();
+            if (rnd < 0.13) addObj(P.greenTrees, c + 0.5, r + 0.5, MB_RAND_FLOAT(0.8, 1.15), MB_RAND_INT(0, 359), 1.6);
+            else if (rnd < 0.22) addObj(P.snowRocks, c + 0.5, r + 0.5, MB_RAND_FLOAT(0.8, 1.18), MB_RAND_INT(0, 359), 1.2);
         }
     }
 
@@ -1120,7 +1412,7 @@ function MB_GENERATE_RANDOM(biome) {
 function MB_LOAD_TEMPLATE(type) { MB_GENERATE_RANDOM(type); }
 
 // ================================================================
-// 🖌️ СОБЫТИЯ ХОЛСТА (СВОБОДНАЯ РАССТАНОВКА + ПРЕДПРОСМОТР + ЛАСТИК)
+// 🖌️ СОБЫТИЯ ХОЛСТА
 // ================================================================
 function INIT_MB_CANVAS_EVENTS() {
     const canvas = document.getElementById('mb-editor-canvas');
@@ -1159,12 +1451,10 @@ function INIT_MB_CANVAS_EVENTS() {
         if (window._mbTool === 'tile') {
             data.cells[row * data.cols + col].t = window._mbSelectedTile;
         } else if (window._mbTool === 'brush3') {
-            for (let dr = -1; dr <= 1; dr++) {
-                for (let dc = -1; dc <= 1; dc++) {
-                    const nr = row + dr, nc = col + dc;
-                    if (nr >= 0 && nr < data.rows && nc >= 0 && nc < data.cols) {
-                        data.cells[nr * data.cols + nc].t = window._mbSelectedTile;
-                    }
+            for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+                const nr = row + dr, nc = col + dc;
+                if (nr >= 0 && nr < data.rows && nc >= 0 && nc < data.cols) {
+                    data.cells[nr * data.cols + nc].t = window._mbSelectedTile;
                 }
             }
         }
@@ -1229,7 +1519,7 @@ function INIT_MB_CANVAS_EVENTS() {
 }
 
 // ================================================================
-// ✨ HD-РЕНДЕР КАРТЫ: БЕСШОВНЫЕ ТЕКСТУРЫ, МЯГКИЕ БЕРЕГА, 3D-СТЕНЫ И СВЕТ
+// ✨ HD-РЕНДЕР V3: ГЛУБИНА ВОДЫ, ОРГАНИЧЕСКИЙ РЕЛЬЕФ, 3D-СТЕНЫ И LIGHTMAP
 // ================================================================
 function DRAW_ROUNDED_RECT(ctx, x, y, w, h, r) {
     const rad = Math.min(r, w / 2, h / 2);
@@ -1246,6 +1536,9 @@ function DRAW_MB_CANVAS(isExport = false) {
     const canvas = document.getElementById('mb-editor-canvas');
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
     const data = window._mbData || GET_MB_DATA();
     const tiles = GET_MB_TILES();
     const cols = data.cols, rows = data.rows;
@@ -1255,7 +1548,7 @@ function DRAW_MB_CANVAS(isExport = false) {
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Определяем базовый (самый частый) тип покрытия для подложки
+    // Определяем базовое покрытие (самое частое кроме стен)
     const counts = {};
     for (const cell of data.cells) counts[cell.t] = (counts[cell.t] || 0) + 1;
     let baseTileKey = 'grass', maxC = -1;
@@ -1266,73 +1559,95 @@ function DRAW_MB_CANVAS(isExport = false) {
     const fillStyleForTile = (tileKey) => {
         const cfg = tiles[tileKey] || tiles.grass;
         const img = cfg.img ? MB_GET_LOADED_IMG(cfg.img) : null;
-        if (img) return MB_GET_TILE_PATTERN(ctx, tileKey, img, cellW);
-        return cfg.bg;
+        if (img) return MB_GET_TILE_PATTERN(ctx, tileKey, img, cfg.img, cellW);
+        return MB_BUILD_PROCEDURAL_PATTERN(ctx, tileKey, cfg, cellW);
     };
 
     // СЛОЙ 1: Непрерывная подложка основного биома
     ctx.fillStyle = fillStyleForTile(baseTileKey);
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // СЛОЙ 2: Органические скруглённые слои остальных покрытий (мягкие берега и переходы!)
+    // СЛОЙ 2: Все остальные покрытия (включая любые кастомные из assets.js!) с мягкими берегами и переходами
     const presentTiles = new Set(data.cells.map(c => c.t));
-    for (const tKey of MB_TILE_ORDER) {
+    const renderOrder = [...MB_BASE_TILE_ORDER];
+    for (const k of presentTiles) if (k !== 'wall' && !renderOrder.includes(k)) renderOrder.push(k);
+
+    for (const tKey of renderOrder) {
         if (tKey === baseTileKey || tKey === 'wall' || !presentTiles.has(tKey)) continue;
         const style = fillStyleForTile(tKey);
-        const isOrganic = ['water', 'lava', 'dirt', 'sand', 'grass', 'snow', 'abyss'].includes(tKey);
-        const bleed = isOrganic ? cellW * 0.14 : 0.6;
-        const cornerR = isOrganic ? cellW * 0.36 : cellW * 0.06;
+        const isOrganic = !['cobble', 'flagstone', 'stone', 'wood'].includes(tKey);
+        const bleed = isOrganic ? cellW * 0.16 : 0.6;
+        const cornerR = isOrganic ? cellW * 0.42 : cellW * 0.05;
 
-        // Для воды и лавы рисуем мягкий влажный/тёмный берег
+        // 1. Внешний мягкий кант / влажный берег / обгорелая корка
         if (tKey === 'water' || tKey === 'lava' || tKey === 'abyss') {
             ctx.save();
-            ctx.fillStyle = tKey === 'lava' ? 'rgba(42, 16, 8, 0.72)' : (tKey === 'water' ? 'rgba(34, 28, 18, 0.34)' : 'rgba(0,0,0,0.65)');
-            for (let r = 0; r < rows; r++) {
-                for (let c = 0; c < cols; c++) {
-                    if (data.cells[r * cols + c].t !== tKey) continue;
-                    DRAW_ROUNDED_RECT(ctx, c * cellW - bleed * 1.45, r * cellH - bleed * 1.45, cellW + bleed * 2.9, cellH + bleed * 2.9, cornerR * 1.25);
-                    ctx.fill();
-                }
+            ctx.fillStyle = tKey === 'lava' ? 'rgba(34, 14, 8, 0.78)' : (tKey === 'water' ? 'rgba(30, 26, 18, 0.38)' : 'rgba(0,0,0,0.72)');
+            for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+                if (data.cells[r * cols + c].t !== tKey) continue;
+                DRAW_ROUNDED_RECT(ctx, c * cellW - bleed * 1.55, r * cellH - bleed * 1.55, cellW + bleed * 3.1, cellH + bleed * 3.1, cornerR * 1.2);
+                ctx.fill();
+            }
+            ctx.restore();
+        } else if (isOrganic) {
+            // Мягкое растушёвывание краёв земли/травы/снега/песка
+            ctx.save();
+            ctx.globalAlpha = 0.42;
+            ctx.fillStyle = style;
+            for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+                if (data.cells[r * cols + c].t !== tKey) continue;
+                DRAW_ROUNDED_RECT(ctx, c * cellW - bleed * 1.35, r * cellH - bleed * 1.35, cellW + bleed * 2.7, cellH + bleed * 2.7, cornerR * 1.25);
+                ctx.fill();
             }
             ctx.restore();
         }
 
-        // Само покрытие из бесшовного паттерна
+        // 2. Основной слой текстуры
         ctx.save();
         ctx.fillStyle = style;
-        for (let r = 0; r < rows; r++) {
-            for (let c = 0; c < cols; c++) {
-                if (data.cells[r * cols + c].t !== tKey) continue;
-                if (isOrganic) {
-                    DRAW_ROUNDED_RECT(ctx, c * cellW - bleed, r * cellH - bleed, cellW + bleed * 2, cellH + bleed * 2, cornerR);
-                    ctx.fill();
-                } else {
-                    ctx.fillRect(c * cellW - 0.5, r * cellH - 0.5, cellW + 1, cellH + 1);
-                }
+        for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+            if (data.cells[r * cols + c].t !== tKey) continue;
+            if (isOrganic) {
+                DRAW_ROUNDED_RECT(ctx, c * cellW - bleed, r * cellH - bleed, cellW + bleed * 2, cellH + bleed * 2, cornerR);
+                ctx.fill();
+            } else {
+                ctx.fillRect(c * cellW - 0.5, r * cellH - 0.5, cellW + 1, cellH + 1);
             }
         }
         ctx.restore();
 
-        // Подсветка мелководья/пены у кромки воды
-        if (tKey === 'water') {
+        // 3. Глубина воды и мелководный блик у берега
+        if (tKey === 'water' && window._mbPostFx) {
             ctx.save();
-            ctx.strokeStyle = 'rgba(210, 240, 255, 0.26)';
-            ctx.lineWidth = Math.max(2, cellW * 0.08);
-            for (let r = 0; r < rows; r++) {
-                for (let c = 0; c < cols; c++) {
-                    if (data.cells[r * cols + c].t !== 'water') continue;
-                    const x = c * cellW, y = r * cellH;
-                    if (r > 0 && data.cells[(r - 1) * cols + c].t !== 'water') { ctx.beginPath(); ctx.moveTo(x, y + 2); ctx.lineTo(x + cellW, y + 2); ctx.stroke(); }
-                    if (r < rows - 1 && data.cells[(r + 1) * cols + c].t !== 'water') { ctx.beginPath(); ctx.moveTo(x, y + cellH - 2); ctx.lineTo(x + cellW, y + cellH - 2); ctx.stroke(); }
-                    if (c > 0 && data.cells[r * cols + c - 1].t !== 'water') { ctx.beginPath(); ctx.moveTo(x + 2, y); ctx.lineTo(x + 2, y + cellH); ctx.stroke(); }
-                    if (c < cols - 1 && data.cells[r * cols + c + 1].t !== 'water') { ctx.beginPath(); ctx.moveTo(x + cellW - 2, y); ctx.lineTo(x + cellW - 2, y + cellH); ctx.stroke(); }
+            for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+                if (data.cells[r * cols + c].t !== 'water') continue;
+                const x = c * cellW, y = r * cellH;
+                const allW = (r > 0 && data.cells[(r - 1) * cols + c].t === 'water') &&
+                             (r < rows - 1 && data.cells[(r + 1) * cols + c].t === 'water') &&
+                             (c > 0 && data.cells[r * cols + c - 1].t === 'water') &&
+                             (c < cols - 1 && data.cells[r * cols + c + 1].t === 'water');
+                if (allW) {
+                    ctx.fillStyle = 'rgba(6, 28, 54, 0.28)';
+                    DRAW_ROUNDED_RECT(ctx, x - 3, y - 3, cellW + 6, cellH + 6, cellW * 0.35);
+                    ctx.fill();
+                } else {
+                    ctx.fillStyle = 'rgba(180, 236, 255, 0.14)';
+                    ctx.fillRect(x, y, cellW, cellH);
                 }
             }
             ctx.restore();
         }
     }
 
-    // СЛОЙ 3: Мягкие 3D-тени, отбрасываемые стенами на пол (Ambient Occlusion)
+    // СЛОЙ 2.5: Органический светотеневой шум поверх ландшафта (убирает искусственную повторяемость тайлов)
+    if (window._mbPostFx) {
+        ctx.save();
+        ctx.fillStyle = MB_GET_ORGANIC_NOISE_PATTERN(ctx);
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.restore();
+    }
+
+    // СЛОЙ 3: Мягкие 3D-тени от стен на пол (Ambient Occlusion + направленная тень)
     ctx.save();
     for (let r = 0; r < rows; r++) {
         for (let c = 0; c < cols; c++) {
@@ -1344,52 +1659,40 @@ function DRAW_MB_CANVAS(isExport = false) {
             const rightW = c < cols - 1 && data.cells[r * cols + c + 1].t === 'wall';
 
             if (topW) {
-                const g = ctx.createLinearGradient(x, y, x, y + cellH * 0.52);
-                g.addColorStop(0, 'rgba(0,0,0,0.52)');
-                g.addColorStop(1, 'rgba(0,0,0,0)');
-                ctx.fillStyle = g;
-                ctx.fillRect(x, y, cellW, cellH * 0.52);
+                const g = ctx.createLinearGradient(x, y, x, y + cellH * 0.58);
+                g.addColorStop(0, 'rgba(0,0,0,0.58)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+                ctx.fillStyle = g; ctx.fillRect(x, y, cellW, cellH * 0.58);
             }
             if (leftW) {
-                const g = ctx.createLinearGradient(x, y, x + cellW * 0.44, y);
-                g.addColorStop(0, 'rgba(0,0,0,0.44)');
-                g.addColorStop(1, 'rgba(0,0,0,0)');
-                ctx.fillStyle = g;
-                ctx.fillRect(x, y, cellW * 0.44, cellH);
+                const g = ctx.createLinearGradient(x, y, x + cellW * 0.48, y);
+                g.addColorStop(0, 'rgba(0,0,0,0.48)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+                ctx.fillStyle = g; ctx.fillRect(x, y, cellW * 0.48, cellH);
             }
             if (botW) {
                 const g = ctx.createLinearGradient(x, y + cellH, x, y + cellH * 0.72);
-                g.addColorStop(0, 'rgba(0,0,0,0.28)');
-                g.addColorStop(1, 'rgba(0,0,0,0)');
-                ctx.fillStyle = g;
-                ctx.fillRect(x, y + cellH * 0.72, cellW, cellH * 0.28);
+                g.addColorStop(0, 'rgba(0,0,0,0.30)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+                ctx.fillStyle = g; ctx.fillRect(x, y + cellH * 0.72, cellW, cellH * 0.28);
             }
             if (rightW) {
-                const g = ctx.createLinearGradient(x + cellW, y, x + cellW * 0.76, y);
-                g.addColorStop(0, 'rgba(0,0,0,0.24)');
-                g.addColorStop(1, 'rgba(0,0,0,0)');
-                ctx.fillStyle = g;
-                ctx.fillRect(x + cellW * 0.76, y, cellW * 0.24, cellH);
+                const g = ctx.createLinearGradient(x + cellW, y, x + cellW * 0.74, y);
+                g.addColorStop(0, 'rgba(0,0,0,0.26)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+                ctx.fillStyle = g; ctx.fillRect(x + cellW * 0.74, y, cellW * 0.26, cellH);
             }
         }
     }
     ctx.restore();
 
-    // СЛОЙ 4: Тактическая сетка (аккуратная, не перебивает текстуру)
+    // СЛОЙ 4: Аккуратная тактическая сетка
     if (window._mbShowGrid) {
         ctx.save();
-        ctx.strokeStyle = 'rgba(230, 200, 140, 0.14)';
+        ctx.strokeStyle = 'rgba(235, 205, 145, 0.13)';
         ctx.lineWidth = 1;
-        for (let c = 0; c <= cols; c++) {
-            ctx.beginPath(); ctx.moveTo(c * cellW + 0.5, 0); ctx.lineTo(c * cellW + 0.5, canvas.height); ctx.stroke();
-        }
-        for (let r = 0; r <= rows; r++) {
-            ctx.beginPath(); ctx.moveTo(0, r * cellH + 0.5); ctx.lineTo(canvas.width, r * cellH + 0.5); ctx.stroke();
-        }
+        for (let c = 0; c <= cols; c++) { ctx.beginPath(); ctx.moveTo(c * cellW + 0.5, 0); ctx.lineTo(c * cellW + 0.5, canvas.height); ctx.stroke(); }
+        for (let r = 0; r <= rows; r++) { ctx.beginPath(); ctx.moveTo(0, r * cellH + 0.5); ctx.lineTo(canvas.width, r * cellH + 0.5); ctx.stroke(); }
         ctx.restore();
     }
 
-    // СЛОЙ 5: Сортировка объектов по 3 Z-слоям и отрисовка слоёв 0 (подложка) и 1 (мебель/декор)
+    // СЛОЙ 5: Отрисовка объектов в 3 Z-слоях + сбор источников света
     const lightSources = [];
     const objs = (data.objects || []).map(o => {
         const stObj = MB_FIND_STAMP_OBJ(o.id);
@@ -1399,13 +1702,29 @@ function DRAW_MB_CANVAS(isExport = false) {
 
     const drawObjItem = (item, ghostAlpha = 1.0) => {
         const { o, stObj, meta } = item;
-        const cx = o.x * cellW;
-        const cy = o.y * cellH;
+        const cx = o.x * cellW, cy = o.y * cellH;
         const img = stObj && stObj.img ? MB_GET_LOADED_IMG(stObj.img) : null;
         const targetMaxPx = cellW * meta.baseCells * (o.scale || 1.0);
 
         if (meta.glow && ghostAlpha === 1.0) {
-            lightSources.push({ x: cx, y: cy, color: meta.glow.color, r: cellW * meta.glow.radius * (o.scale || 1.0), intensity: meta.glow.intensity });
+            lightSources.push({
+                x: cx, y: cy,
+                color: meta.glow.color,
+                r: cellW * meta.glow.radius * (o.scale || 1.0),
+                intensity: meta.glow.intensity
+            });
+        }
+
+        // Контактная мягкая тень под основанием (убирает эффект «наклейки»)
+        if (window._mbPostFx && ghostAlpha === 1.0 && meta.layer >= 1) {
+            const sr = targetMaxPx * (meta.layer === 2 ? 0.44 : 0.36);
+            const sx = cx + (meta.layer === 2 ? cellW * 0.16 : cellW * 0.06);
+            const sy = cy + (meta.layer === 2 ? cellH * 0.18 : cellH * 0.07);
+            const g = ctx.createRadialGradient(sx, sy, sr * 0.15, sx, sy, sr);
+            g.addColorStop(0, meta.layer === 2 ? 'rgba(0,0,0,0.42)' : 'rgba(0,0,0,0.34)');
+            g.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = g;
+            ctx.beginPath(); ctx.arc(sx, sy, sr, 0, Math.PI * 2); ctx.fill();
         }
 
         ctx.save();
@@ -1413,21 +1732,19 @@ function DRAW_MB_CANVAS(isExport = false) {
         ctx.translate(cx, cy);
         if (o.rot) ctx.rotate((o.rot * Math.PI) / 180);
 
-        // Тени зависят от высоты слоя (ковры без тени, мебель с плотной тенью, крыши/деревья с широкой мягкой тенью)
         if (meta.layer === 1) {
-            ctx.shadowColor = 'rgba(0, 0, 0, 0.58)';
-            ctx.shadowBlur = Math.max(5, cellW * 0.16);
-            ctx.shadowOffsetX = cellW * 0.08;
-            ctx.shadowOffsetY = cellH * 0.10;
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.50)';
+            ctx.shadowBlur = Math.max(4, cellW * 0.14);
+            ctx.shadowOffsetX = cellW * 0.06;
+            ctx.shadowOffsetY = cellH * 0.08;
         } else if (meta.layer === 2) {
-            ctx.shadowColor = 'rgba(0, 0, 0, 0.62)';
-            ctx.shadowBlur = Math.max(10, cellW * 0.34);
-            ctx.shadowOffsetX = cellW * 0.18;
-            ctx.shadowOffsetY = cellH * 0.22;
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.54)';
+            ctx.shadowBlur = Math.max(10, cellW * 0.30);
+            ctx.shadowOffsetX = cellW * 0.16;
+            ctx.shadowOffsetY = cellH * 0.20;
         }
 
         if (img && img.naturalWidth > 0) {
-            // СТРОГО СОХРАНЯЕМ ПРОПОРЦИИ СПРАЙТА!
             const aspect = img.naturalWidth / img.naturalHeight;
             let drawW = targetMaxPx, drawH = targetMaxPx;
             if (aspect >= 1) drawH = targetMaxPx / aspect;
@@ -1444,89 +1761,105 @@ function DRAW_MB_CANVAS(isExport = false) {
 
     objs.filter(i => i.meta.layer === 0).forEach(i => drawObjItem(i));
 
-    // СЛОЙ 6: 3D-стены с текстурой и объёмной кромкой
+    // СЛОЙ 6: Объёмные 3D-стены
     if (presentTiles.has('wall')) {
         const wallStyle = fillStyleForTile('wall');
         ctx.save();
-        for (let r = 0; r < rows; r++) {
-            for (let c = 0; c < cols; c++) {
-                if (data.cells[r * cols + c].t !== 'wall') continue;
-                const x = c * cellW, y = r * cellH;
-                ctx.fillStyle = wallStyle;
-                ctx.fillRect(x, y, cellW + 0.5, cellH + 0.5);
-                // Слегка затемняем верх стен для глубины + светлая грань там, где стена граничит с полом
-                ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
-                ctx.fillRect(x, y, cellW, cellH);
+        for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+            if (data.cells[r * cols + c].t !== 'wall') continue;
+            const x = c * cellW, y = r * cellH;
+            ctx.fillStyle = wallStyle;
+            ctx.fillRect(x, y, cellW + 0.5, cellH + 0.5);
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.26)';
+            ctx.fillRect(x, y, cellW, cellH);
 
-                ctx.strokeStyle = 'rgba(220, 200, 170, 0.28)';
-                ctx.lineWidth = 2;
-                if (r > 0 && data.cells[(r - 1) * cols + c].t !== 'wall') { ctx.beginPath(); ctx.moveTo(x, y + 1); ctx.lineTo(x + cellW, y + 1); ctx.stroke(); }
-                if (c > 0 && data.cells[r * cols + c - 1].t !== 'wall') { ctx.beginPath(); ctx.moveTo(x + 1, y); ctx.lineTo(x + 1, y + cellH); ctx.stroke(); }
+            ctx.strokeStyle = 'rgba(230, 212, 184, 0.34)';
+            ctx.lineWidth = 2;
+            if (r > 0 && data.cells[(r - 1) * cols + c].t !== 'wall') { ctx.beginPath(); ctx.moveTo(x, y + 1); ctx.lineTo(x + cellW, y + 1); ctx.stroke(); }
+            if (c > 0 && data.cells[r * cols + c - 1].t !== 'wall') { ctx.beginPath(); ctx.moveTo(x + 1, y); ctx.lineTo(x + 1, y + cellH); ctx.stroke(); }
 
-                ctx.strokeStyle = 'rgba(0, 0, 0, 0.72)';
-                ctx.lineWidth = 2.5;
-                if (r < rows - 1 && data.cells[(r + 1) * cols + c].t !== 'wall') { ctx.beginPath(); ctx.moveTo(x, y + cellH - 1); ctx.lineTo(x + cellW, y + cellH - 1); ctx.stroke(); }
-                if (c < cols - 1 && data.cells[r * cols + c + 1].t !== 'wall') { ctx.beginPath(); ctx.moveTo(x + cellW - 1, y); ctx.lineTo(x + cellW - 1, y + cellH); ctx.stroke(); }
-            }
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.78)';
+            ctx.lineWidth = 2.5;
+            if (r < rows - 1 && data.cells[(r + 1) * cols + c].t !== 'wall') { ctx.beginPath(); ctx.moveTo(x, y + cellH - 1); ctx.lineTo(x + cellW, y + cellH - 1); ctx.stroke(); }
+            if (c < cols - 1 && data.cells[r * cols + c + 1].t !== 'wall') { ctx.beginPath(); ctx.moveTo(x + cellW - 1, y); ctx.lineTo(x + cellW - 1, y + cellH); ctx.stroke(); }
         }
         ctx.restore();
     }
 
-    // СЛОЙ 7: Мебель/декор (слой 1) и высокие кроны/крыши (слой 2)
     objs.filter(i => i.meta.layer === 1).forEach(i => drawObjItem(i));
     objs.filter(i => i.meta.layer === 2).forEach(i => drawObjItem(i));
 
-    // Добавляем лаву в список источников свечения
     if (presentTiles.has('lava')) {
-        for (let r = 0; r < rows; r++) {
-            for (let c = 0; c < cols; c++) {
-                if (data.cells[r * cols + c].t === 'lava' && (r + c) % 2 === 0) {
-                    lightSources.push({ x: (c + 0.5) * cellW, y: (r + 0.5) * cellH, color: '255, 110, 32', r: cellW * 2.2, intensity: 0.42 });
-                }
+        for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+            if (data.cells[r * cols + c].t === 'lava' && (r + c) % 2 === 0) {
+                lightSources.push({ x: (c + 0.5) * cellW, y: (r + 0.5) * cellH, color: [255, 118, 36], r: cellW * 2.6, intensity: 0.72 });
             }
         }
     }
 
-    // СЛОЙ 8: Атмосферная цветокоррекция, виньетка и динамическое свечение огней/кристаллов!
-    ctx.save();
-    if (lightCfg.ambientDark > 0) {
-        ctx.fillStyle = `rgba(8, 10, 18, ${lightCfg.ambientDark})`;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-    }
-    if (lightCfg.tint) {
-        ctx.fillStyle = lightCfg.tint;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-    }
+    // СЛОЙ 7: НАСТОЯЩИЙ ДВИЖОК ОСВЕЩЕНИЯ (MULTIPLY LIGHTMAP + BLOOM + ВИНЬЕТКА)
+    if (window._mbPostFx) {
+        const lw = Math.max(120, Math.round(canvas.width / 2));
+        const lh = Math.max(80, Math.round(canvas.height / 2));
+        if (!window._mbLightCanvas) window._mbLightCanvas = document.createElement('canvas');
+        const lc = window._mbLightCanvas;
+        if (lc.width !== lw || lc.height !== lh) { lc.width = lw; lc.height = lh; }
+        const lctx = lc.getContext('2d');
 
-    // Мягкие ореолы света поверх затемнения
-    if (lightSources.length > 0) {
-        ctx.globalCompositeOperation = 'lighter';
-        for (const ls of lightSources) {
-            const p = Math.min(0.85, ls.intensity * lightCfg.glowPower);
-            const grad = ctx.createRadialGradient(ls.x, ls.y, ls.r * 0.06, ls.x, ls.y, ls.r);
-            grad.addColorStop(0, `rgba(${ls.color}, ${p})`);
-            grad.addColorStop(0.45, `rgba(${ls.color}, ${p * 0.42})`);
-            grad.addColorStop(1, `rgba(${ls.color}, 0)`);
-            ctx.fillStyle = grad;
-            ctx.beginPath();
-            ctx.arc(ls.x, ls.y, ls.r, 0, Math.PI * 2);
-            ctx.fill();
+        // 1. Базовая освещённость сцены (умножается на карту — в темноте сохраняется глубина теней)
+        const [ar, ag, ab] = lightCfg.ambient;
+        lctx.globalCompositeOperation = 'source-over';
+        lctx.fillStyle = `rgb(${ar}, ${ag}, ${ab})`;
+        lctx.fillRect(0, 0, lw, lh);
+
+        // 2. Пробиваем яркие пятна света вокруг костров, свечей, фонарей, лавы и кристаллов
+        if (lightSources.length > 0) {
+            lctx.globalCompositeOperation = 'lighter';
+            for (const ls of lightSources) {
+                const lx = ls.x * 0.5, ly = ls.y * 0.5, lr = ls.r * 0.5;
+                const [cr, cg, cb] = ls.color;
+                const g = lctx.createRadialGradient(lx, ly, lr * 0.05, lx, ly, lr);
+                g.addColorStop(0, `rgba(${cr}, ${cg}, ${cb}, ${Math.min(1, ls.intensity)})`);
+                g.addColorStop(0.45, `rgba(${cr}, ${cg}, ${cb}, ${ls.intensity * 0.45})`);
+                g.addColorStop(1, 'rgba(0,0,0,0)');
+                lctx.fillStyle = g;
+                lctx.beginPath(); lctx.arc(lx, ly, lr, 0, Math.PI * 2); lctx.fill();
+            }
         }
+
+        // 3. Накладываем карту света в режиме MULTIPLY
+        ctx.save();
+        ctx.globalCompositeOperation = 'multiply';
+        ctx.drawImage(lc, 0, 0, canvas.width, canvas.height);
+
+        // 4. Деликатный мягкий ореол (Bloom) в самом центре огней и кристаллов
+        if (lightSources.length > 0 && lightCfg.bloom > 0) {
+            ctx.globalCompositeOperation = 'screen';
+            for (const ls of lightSources) {
+                const [cr, cg, cb] = ls.color;
+                const br = ls.r * 0.65;
+                const g = ctx.createRadialGradient(ls.x, ls.y, br * 0.04, ls.x, ls.y, br);
+                g.addColorStop(0, `rgba(${cr}, ${cg}, ${cb}, ${lightCfg.bloom * ls.intensity})`);
+                g.addColorStop(1, 'rgba(0,0,0,0)');
+                ctx.fillStyle = g;
+                ctx.beginPath(); ctx.arc(ls.x, ls.y, br, 0, Math.PI * 2); ctx.fill();
+            }
+        }
+
+        // 5. Художественная виньетка по краям
         ctx.globalCompositeOperation = 'source-over';
+        const vig = ctx.createRadialGradient(
+            canvas.width / 2, canvas.height / 2, Math.min(canvas.width, canvas.height) * 0.35,
+            canvas.width / 2, canvas.height / 2, Math.hypot(canvas.width, canvas.height) * 0.56
+        );
+        vig.addColorStop(0, 'rgba(0,0,0,0)');
+        vig.addColorStop(1, `rgba(0,0,0,${lightCfg.vignette})`);
+        ctx.fillStyle = vig;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.restore();
     }
 
-    // Художественная виньетка по краям карты (даёт глубину как в Inkarnate)
-    const vig = ctx.createRadialGradient(
-        canvas.width / 2, canvas.height / 2, Math.min(canvas.width, canvas.height) * 0.34,
-        canvas.width / 2, canvas.height / 2, Math.hypot(canvas.width, canvas.height) * 0.56
-    );
-    vig.addColorStop(0, 'rgba(0,0,0,0)');
-    vig.addColorStop(1, `rgba(0,0,0,${lightCfg.vignette})`);
-    ctx.fillStyle = vig;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.restore();
-
-    // Полупрозрачный предпросмотр объекта под курсором (только при редактировании, не при экспорте!)
+    // Полупрозрачный предпросмотр объекта под курсором (при редактировании)
     if (!isExport && window._mbTool === 'stamp' && window._mbHoverPos && window._mbSelectedStamp) {
         const stObj = MB_FIND_STAMP_OBJ(window._mbSelectedStamp);
         const meta = MB_ANALYZE_STAMP_META(stObj);
@@ -1539,12 +1872,11 @@ function DRAW_MB_CANVAS(isExport = false) {
 function MB_APPLY_TO_GAME_MAP() {
     const canvas = document.getElementById('mb-editor-canvas');
     if (!canvas) return;
-    // Перерисовываем начисто без предпросмотра курсора
     DRAW_MB_CANVAS(true);
 
     let dataUrl = '';
     try {
-        dataUrl = canvas.toDataURL('image/jpeg', 0.87);
+        dataUrl = canvas.toDataURL('image/jpeg', 0.89);
     } catch (err) {
         showMessage('⚠️ Ошибка локального запуска (CORS)',
             'Браузер заблокировал сохранение холста с локальными PNG-картинками, потому что сайт открыт напрямую как файл (<code>file://</code>).<br><br>' +
