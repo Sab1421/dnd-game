@@ -863,6 +863,22 @@ function ADD_TO_NPC_LOG(speaker, text) {
 // ================================================================
 // 4. КАРТА, ПОГОДНЫЕ ЭФФЕКТЫ, ФИШКИ И ЖИВАЯ НОВЕЛЛА
 // ================================================================
+function GENERATE_WEATHER_OVERLAY_HTML(weather) {
+    if (!weather || weather === 'none') return '';
+    if (weather === 'night') {
+        return `<div style="position:absolute; inset:0; background:radial-gradient(circle, rgba(10,15,40,0.35) 0%, rgba(4,6,20,0.75) 100%); pointer-events:none; z-index:4;"></div>`;
+    }
+    if (weather === 'rain') {
+        return `<div style="position:absolute; inset:0; pointer-events:none; z-index:4; background:repeating-linear-gradient(105deg, transparent 0px, transparent 18px, rgba(120,180,255,0.18) 18px, rgba(120,180,255,0.18) 20px); box-shadow:inset 0 0 60px rgba(10,25,50,0.6);"></div>`;
+    }
+    if (weather === 'snow') {
+        return `<div style="position:absolute; inset:0; pointer-events:none; z-index:4; background:radial-gradient(circle, rgba(255,255,255,0.12) 1px, transparent 2px); background-size:28px 28px; box-shadow:inset 0 0 70px rgba(200,230,255,0.28);"></div>`;
+    }
+    if (weather === 'ash') {
+        return `<div style="position:absolute; inset:0; pointer-events:none; z-index:4; background:radial-gradient(circle, rgba(255,110,40,0.22) 1.5px, transparent 2.5px); background-size:34px 34px; box-shadow:inset 0 0 80px rgba(120,25,0,0.45);"></div>`;
+    }
+    return '';
+}
 // Параметры камеры карты, масштаба фишек и режима перетаскивания по двойному клику
 window._mapCam = window._mapCam || {
     zoom: 1, panX: 0, panY: 0, tokenScale: 0.85,
@@ -1200,7 +1216,7 @@ function RENDER_MAP_AREA() {
 
     let baseMapHTML = '';
     if (st.img) {
-        baseMapHTML = `<img id="main-map-image" src="${st.img}" alt="Карта" style="width:100%; height:auto; min-height:100%; display:block; pointer-events:none;">`;
+        baseMapHTML = `<img id="main-map-image" src="${st.img}" alt="Карта" onload="if(GET_MAP_STATE().fogMode==='dynamic') DRAW_DYNAMIC_FOG(GET_MAP_STATE().revealedAreas, GET_SESSION()?.role==='gm');" style="width:100%; height:auto; min-height:100%; display:block; pointer-events:none;">`;
     } else {
         baseMapHTML = `
             <div style="width:100%; min-height:410px; background:rgba(24,23,21,0.82); display:flex; flex-direction:column; align-items:center; justify-content:center; padding:25px; text-align:center; pointer-events:none;">
