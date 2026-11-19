@@ -2796,6 +2796,8 @@ function APPLY_ROLE_VIEW() {
         topStatusBar.style.display = 'none';
         h1.style.display = 'none';
         RENDER_LOBBY_HTML();
+        if (typeof PLACE_CLOUD_SYNC_BADGE === 'function') PLACE_CLOUD_SYNC_BADGE();
+        if (typeof window.UPDATE_ONLINE_PRESENCE === 'function') window.UPDATE_ONLINE_PRESENCE();
         return;
     }
 
@@ -2828,9 +2830,14 @@ function APPLY_ROLE_VIEW() {
                     <span>🤝 Авто-подтверждение правок Мастера</span>
                 </label>
             </div>
-            <button class="btn-small" onclick="SHOW_LOBBY_SCREEN()">🚪 Сменить роль / Выйти в Лобби</button>
+            <div style="display:flex; flex-direction:column; align-items:flex-end; gap:5px;">
+                <button class="btn-small" onclick="SHOW_LOBBY_SCREEN()">🚪 Сменить роль / Выйти в Лобби</button>
+                <div id="cloud-sync-slot"></div>
+            </div>
         `;
 
+        if (typeof PLACE_CLOUD_SYNC_BADGE === 'function') PLACE_CLOUD_SYNC_BADGE();
+        if (typeof window.UPDATE_ONLINE_PRESENCE === 'function') window.UPDATE_ONLINE_PRESENCE();
         RMC(); LDT(); RCH(); RENDER_MAP_AREA(); RENDER_CUSTOM_LORE();
         CHECK_AND_RENDER_REST_POPUP();
         CHECK_AND_RENDER_PERMISSION_POPUP();
@@ -2847,14 +2854,19 @@ function APPLY_ROLE_VIEW() {
                 <span style="background:#7c3aed; color:#fff; padding:4px 12px; border-radius:6px; font-weight:bold; font-size:0.9rem;">👑 Режим Гейм-Мастера</span>
                 <div style="display:flex; align-items:center; gap:6px; background:#25221e; padding:3px 10px; border-radius:6px; border:1px solid #423c33;">
                     <small style="color:#aba498;">Ваш ник:</small>
-                    <input type="text" value="${GET_GM_NAME().replace(/"/g, '&quot;')}" onchange="SAVE_GM_NAME(this.value)" placeholder="Ник Мастера..." style="width:140px; padding:3px 6px; background:#141312; color:#c084fc; font-weight:bold; border:1px solid #524a3d; border-radius:4px; text-align:left; font-size:0.88rem;">
+                    <input type="text" value="${GET_GM_NAME().replace(/"/g, '&quot;')}" onchange="SAVE_GM_NAME(this.value); if(window.UPDATE_ONLINE_PRESENCE) window.UPDATE_ONLINE_PRESENCE();" placeholder="Ник Мастера..." style="width:140px; padding:3px 6px; background:#141312; color:#c084fc; font-weight:bold; border:1px solid #524a3d; border-radius:4px; text-align:left; font-size:0.88rem;">
                 </div>
                 <span>Комната: <b style="color:#e6c88c;">#${curRoom.code} — ${curRoom.name}</b></span>
                 <span style="color:#aaa; font-size:0.88rem;">(Игроков в отряде: <b>${GC().length}</b>)</span>
             </div>
-            <button class="btn-small" onclick="SHOW_LOBBY_SCREEN()">🚪 Выйти в Лобби</button>
+            <div style="display:flex; flex-direction:column; align-items:flex-end; gap:5px;">
+                <button class="btn-small" onclick="SHOW_LOBBY_SCREEN()">🚪 Выйти в Лобби</button>
+                <div id="cloud-sync-slot"></div>
+            </div>
         `;
 
+        if (typeof PLACE_CLOUD_SYNC_BADGE === 'function') PLACE_CLOUD_SYNC_BADGE();
+        if (typeof window.UPDATE_ONLINE_PRESENCE === 'function') window.UPDATE_ONLINE_PRESENCE();
         RENDER_GM_LEFT_COLUMN();
         RPL();
         LDT(); RCH(); RENDER_MAP_AREA(); RENDER_CUSTOM_LORE();
@@ -3974,9 +3986,43 @@ function RENDER_LOBBY_HTML() {
 
     const statusBadge = document.createElement('div');
     statusBadge.id = 'cloud-sync-badge';
-    statusBadge.style.cssText = 'position:fixed; bottom:8px; left:8px; background:#1a1a1a; border:1px solid #444; color:#aaa; padding:4px 10px; border-radius:12px; font-size:0.75em; z-index:99999; pointer-events:none;';
     statusBadge.textContent = '⏳ Подключение к серверу...';
     document.body.appendChild(statusBadge);
+
+    let _isCloudOnline = false;
+    let _onlineUsersList = [];
+
+    window.PLACE_CLOUD_SYNC_BADGE = function() {
+        const badge = document.getElementById('cloud-sync-badge');
+        if (!badge) return;
+        const slot = document.getElementById('cloud-sync-slot');
+        const topBar = document.getElementById('role-status-bar');
+        const borderCol = _isCloudOnline ? '#4caf50' : '#c97e2e';
+
+        if (slot && topBar && topBar.style.display !== 'none') {
+            if (badge.parentElement !== slot) slot.appendChild(badge);
+            badge.style.cssText = `background:#141312; border:1px solid ${borderCol}; color:#d8d4cc; padding:3px 10px; border-radius:12px; font-size:0.78rem; cursor:help; white-space:nowrap;`;
+        } else {
+            if (badge.parentElement !== document.body) document.body.appendChild(badge);
+            badge.style.cssText = `position:fixed; top:10px; right:14px; background:#141312; border:1px solid ${borderCol}; color:#d8d4cc; padding:4px 11px; border-radius:12px; font-size:0.78rem; z-index:99999; cursor:help; white-space:nowrap; box-shadow:0 4px 12px rgba(0,0,0,0.7);`;
+        }
+    };
+
+    function UPDATE_CLOUD_BADGE_UI() {
+        if (_isCloudOnline) {
+            const cnt = Math.max(1, _onlineUsersList.length);
+            statusBadge.innerHTML = `⚡ Онлайн: Мгновенная связь &nbsp;|&nbsp; <b style="color:#86efac;">👥 На сайте: ${cnt}</b>`;
+            statusBadge.title = _onlineUsersList.length > 0
+                ? 'Сейчас на сайте:\n• ' + _onlineUsersList.join('\n• ')
+                : 'Сейчас на сайте: 1';
+        } else {
+            statusBadge.textContent = '🟠 Переподключение...';
+            statusBadge.title = 'Нет связи с сервером';
+        }
+        window.PLACE_CLOUD_SYNC_BADGE();
+    }
+
+    window.PLACE_CLOUD_SYNC_BADGE();
 
     window.addEventListener('mouseup', function() {
         if (window._draggingMapObj) {
@@ -4107,14 +4153,56 @@ function RENDER_LOBBY_HTML() {
             }
         });
 
+        const dbPresenceRef = dbRoot.child('presence');
+        const myPresenceRef = dbPresenceRef.child(MY_CLIENT_ID);
+
+        function GET_MY_PRESENCE_LABEL() {
+            const sess = GET_SESSION();
+            const authUser = (typeof GET_CURRENT_USER === 'function') ? GET_CURRENT_USER() : null;
+            if (sess && sess.role === 'gm') {
+                return `👑 ${GET_GM_NAME()} (Мастер)`;
+            }
+            if (sess && sess.role === 'player') {
+                const cs = GC();
+                const ch = cs[sess.playerIdx || PI];
+                const heroName = (ch && ch.name) ? ch.name : (authUser?.displayName || 'Игрок');
+                return `⚔️ ${heroName} (Комната #${sess.roomCode || '1001'})`;
+            }
+            if (authUser && authUser.displayName) {
+                return `👤 ${authUser.displayName} (в Лобби)`;
+            }
+            return '👤 Гость (экран входа)';
+        }
+
+        window.UPDATE_ONLINE_PRESENCE = function() {
+            if (!_isCloudOnline) return;
+            myPresenceRef.update({
+                label: GET_MY_PRESENCE_LABEL(),
+                ts: firebase.database.ServerValue.TIMESTAMP
+            }).catch(() => {});
+        };
+
         firebase.database().ref('.info/connected').on('value', (snap) => {
             if (snap.val() === true) {
-                statusBadge.textContent = '⚡ Онлайн: Мгновенная связь';
-                statusBadge.style.borderColor = '#4caf50';
+                _isCloudOnline = true;
+                // При закрытии вкладки или потере сети Firebase сам удалит запись игрока
+                myPresenceRef.onDisconnect().remove().then(() => {
+                    myPresenceRef.set({
+                        label: GET_MY_PRESENCE_LABEL(),
+                        ts: firebase.database.ServerValue.TIMESTAMP
+                    });
+                });
             } else {
-                statusBadge.textContent = '🟠 Переподключение...';
-                statusBadge.style.borderColor = '#c97e2e';
+                _isCloudOnline = false;
             }
+            UPDATE_CLOUD_BADGE_UI();
+        });
+
+        dbPresenceRef.on('value', (snap) => {
+            const val = snap.val() || {};
+            _onlineUsersList = Object.values(val)
+                .map(entry => (entry && entry.label) ? entry.label : '👤 Участник');
+            UPDATE_CLOUD_BADGE_UI();
         });
 
         dbMediaRef.on('value', (snap) => {
