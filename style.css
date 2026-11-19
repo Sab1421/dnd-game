@@ -759,16 +759,15 @@ button:disabled {
     opacity: 1;
 }
 
-/* --- БЕСШОВНЫЕ СВЕТЛО-СЕРЫЕ ОБЛАКА (ТУМАН ВОЙНЫ И КРАЯ КАРТЫ) --- */
+/* --- БЕСШОВНЫЕ СВЕТЛО-СЕРЫЕ ОБЛАКА (БЕРУТСЯ ИЗ assets.js) --- */
 @keyframes driftFogClouds {
     0% { background-position: 0px 0px; }
     100% { background-position: 512px 256px; }
 }
 
 #map-area {
-    background-color: #d4dae0 !important;
-    background-image:
-        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512' viewBox='0 0 512 512'%3E%3Cdefs%3E%3Cfilter id='c' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.008 0.011' numOctaves='3' seed='7' stitchTiles='stitch' result='n'/%3E%3CfeColorMatrix type='matrix' values='0.82 0 0 0 0.42 0.82 0 0 0 0.44 0.82 0 0 0 0.46 0 0 0 0 1' in='n'/%3E%3C/filter%3E%3C/defs%3E%3Crect width='512' height='512' fill='%23d4dae0'/%3E%3Crect width='512' height='512' filter='url(%23c)'/%3E%3C/svg%3E");
+    background-color: var(--fog-base-color, #d4dae0) !important;
+    background-image: var(--fog-clouds-bg, none);
     background-size: 512px 512px;
     background-repeat: repeat;
 }
@@ -786,9 +785,8 @@ button:disabled {
     inset: -2px;
     pointer-events: none;
     z-index: 8;
-    background-color: #d4dae0;
-    background-image:
-        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512' viewBox='0 0 512 512'%3E%3Cdefs%3E%3Cfilter id='c1' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.008 0.011' numOctaves='3' seed='7' stitchTiles='stitch' result='n'/%3E%3CfeColorMatrix type='matrix' values='0.86 0 0 0 0.41 0.86 0 0 0 0.43 0.86 0 0 0 0.45 0 0 0 0 1' in='n'/%3E%3C/filter%3E%3C/defs%3E%3Crect width='512' height='512' fill='%23d4dae0'/%3E%3Crect width='512' height='512' filter='url(%23c1)'/%3E%3C/svg%3E");
+    background-color: var(--fog-base-color, #d4dae0);
+    background-image: var(--fog-clouds-bg, none);
     background-size: 512px 512px;
     background-repeat: repeat;
     animation: driftFogClouds 55s linear infinite;

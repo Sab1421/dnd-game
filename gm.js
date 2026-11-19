@@ -890,26 +890,13 @@ window._gmFogBrushRadius = window._gmFogBrushRadius || 9;       // Размер 
 window._isErasingFog = false;
 
 // Бесшовная 100% непрозрачная текстура мягких облаков (без размытия краёв, поэтому швов нет!)
-const CLOUD_FOG_SVG_URL = "data:image/svg+xml," + encodeURIComponent(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
-        <defs>
-            <filter id="c" x="0" y="0" width="100%" height="100%">
-                <feTurbulence type="fractalNoise" baseFrequency="0.008 0.011" numOctaves="3" seed="7" stitchTiles="stitch" result="n"/>
-                <feColorMatrix type="matrix" values="0.86 0 0 0 0.41  0.86 0 0 0 0.43  0.86 0 0 0 0.45  0 0 0 0 1" in="n"/>
-            </filter>
-        </defs>
-        <rect width="512" height="512" fill="#d4dae0"/>
-        <rect width="512" height="512" filter="url(#c)"/>
-    </svg>`
-);
-
 window._cloudFogImg = window._cloudFogImg || null;
 function ENSURE_CLOUD_FOG_IMG(onReady) {
     if (window._cloudFogImg && window._cloudFogImg.complete && window._cloudFogImg.naturalWidth > 0) {
         if (onReady) onReady(window._cloudFogImg);
         return window._cloudFogImg;
     }
-    if (!window._cloudFogImg) {
+    if (!window._cloudFogImg && window.SITE_ASSETS && window.SITE_ASSETS.fogClouds) {
         const img = new Image();
         img.onload = function() {
             const st = GET_MAP_STATE();
@@ -918,7 +905,7 @@ function ENSURE_CLOUD_FOG_IMG(onReady) {
                 DRAW_DYNAMIC_FOG(st.revealedAreas, sess && sess.role === 'gm');
             }
         };
-        img.src = CLOUD_FOG_SVG_URL;
+        img.src = window.SITE_ASSETS.fogClouds;
         window._cloudFogImg = img;
     }
     return null;
@@ -1554,7 +1541,7 @@ function DRAW_DYNAMIC_FOG(revealedAreas, isGM) {
     ctx.globalCompositeOperation = 'source-over';
 
     // 1. Плотная непрозрачная подложка (исключает любые щели и просвечивание карты)
-    ctx.fillStyle = '#d4dae0';
+    ctx.fillStyle = (window.SITE_ASSETS && window.SITE_ASSETS.fogBaseColor) || '#d4dae0';
     ctx.fillRect(0, 0, w, h);
 
     // 2. Бесшовная текстура мягких светло-серых облаков
@@ -3268,12 +3255,14 @@ function OPEN_GM_MAP_MODAL() {
                 </div>
 
                 <div style="background:#181715; border:1px solid #423c33; padding:18px; border-radius:10px;">
-                    <h3 style="margin-top:0;">3. Быстрые сцены кампании</h3>
+                    <h3 style="margin-top:0;">3. Встроенные сцены и карты</h3>
                     <div style="display:flex; flex-direction:column; gap:8px;">
-                        <button class="btn-small" style="text-align:left; padding:10px;" onclick="GM_SET_PRESET_SCENE('Деревня Притишье', 'Маленькая деревня на границе цивилизации. Старый Смотритель встречает отряд.')">🏘️ Деревня Притишье</button>
-                        <button class="btn-small" style="text-align:left; padding:10px;" onclick="GM_SET_PRESET_SCENE('Тёмная чаща у Древа', 'Искажённый лес, где бродят порождения Ошибки.')">🌲 Тёмная чаща у Древа</button>
-                        <button class="btn-small" style="text-align:left; padding:10px;" onclick="GM_SET_PRESET_SCENE('Застава Псов Империи', 'Укреплённый гарнизон Генерала Псов.')">🏰 Застава Псов Империи</button>
-                        <button class="btn-small" style="text-align:left; padding:10px;" onclick="GM_SET_PRESET_SCENE('Лагерь у костра', 'Безопасная поляна для ночного привала.')">🔥 Лагерь у костра</button>
+                        ${((window.SITE_ASSETS && window.SITE_ASSETS.mapScenes) || []).map((sc, sIdx) => `
+                            <button class="btn-small" style="text-align:left; padding:10px; display:flex; justify-content:space-between; align-items:center;" onclick="GM_SET_PRESET_SCENE(${sIdx})">
+                                <span>${sc.icon || '🗺️'} ${sc.title}</span>
+                                ${sc.img ? '<small style="color:#4cd964;">🖼️ с картой</small>' : ''}
+                            </button>
+                        `).join('')}
                     </div>
                 </div>
             </div>
@@ -3728,15 +3717,24 @@ function GM_SAVE_MAP() {
     LOG_COMBAT_TO_CHAT(`🗺️ Гейм-Мастер обновил настройки карты.`);
 }
 
-function GM_SET_PRESET_SCENE(title, desc) {
+function GM_SET_PRESET_SCENE(sceneIdxOrTitle, desc, imgUrl) {
     const st = GET_MAP_STATE();
-    st.title = title;
-    st.desc = desc;
+    if (typeof sceneIdxOrTitle === 'number' && window.SITE_ASSETS && window.SITE_ASSETS.mapScenes[sceneIdxOrTitle]) {
+        const sc = window.SITE_ASSETS.mapScenes[sceneIdxOrTitle];
+        st.title = sc.title;
+        st.desc = sc.desc || '';
+        if (sc.img) st.img = sc.img;
+    } else {
+        st.title = sceneIdxOrTitle;
+        st.desc = desc || '';
+        if (imgUrl) st.img = imgUrl;
+    }
     st.fog = false;
+    st.fogMode = 'none';
     SAVE_MAP_STATE(st);
     RENDER_MAP_AREA();
     CM('gm-tool-modal');
-    LOG_COMBAT_TO_CHAT(`🗺️ Отряд переместился в локацию: «${title}».`);
+    LOG_COMBAT_TO_CHAT(`🗺️ Отряд переместился в локацию: «${st.title}».`);
 }
 
 function GM_UPDATE_TASKS() {
@@ -3993,7 +3991,7 @@ function RENDER_LOBBY_HTML() {
     let _onlineUsersList = [];
 
     window.PLACE_CLOUD_SYNC_BADGE = function() {
-        const badge = document.getElementById('cloud-sync-badge');
+        const badge = statusBadge;
         if (!badge) return;
         const slot = document.getElementById('cloud-sync-slot');
         const topBar = document.getElementById('role-status-bar');

@@ -1317,6 +1317,7 @@ APPLY_ROLE_VIEW = function() {
     const user = GET_CURRENT_USER();
     if (!user) {
         RENDER_AUTH_SCREEN();
+        if (typeof PLACE_CLOUD_SYNC_BADGE === 'function') PLACE_CLOUD_SYNC_BADGE();
         return;
     }
     RENDER_AUTH_SCREEN();
