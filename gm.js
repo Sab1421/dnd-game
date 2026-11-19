@@ -863,26 +863,51 @@ function ADD_TO_NPC_LOG(speaker, text) {
 // ================================================================
 // 4. КАРТА, ПОГОДНЫЕ ЭФФЕКТЫ, ФИШКИ И ЖИВАЯ НОВЕЛЛА
 // ================================================================
-function GENERATE_WEATHER_OVERLAY_HTML(weather) {
-    if (!weather || weather === 'none') return '';
-    if (weather === 'night') {
-        return `<div style="position:absolute; inset:0; background:radial-gradient(circle, rgba(10,15,40,0.35) 0%, rgba(4,6,20,0.75) 100%); pointer-events:none; z-index:4;"></div>`;
-    }
-    if (weather === 'rain') {
-        return `<div style="position:absolute; inset:0; pointer-events:none; z-index:4; background:repeating-linear-gradient(105deg, transparent 0px, transparent 18px, rgba(120,180,255,0.18) 18px, rgba(120,180,255,0.18) 20px); box-shadow:inset 0 0 60px rgba(10,25,50,0.6);"></div>`;
-    }
-    if (weather === 'snow') {
-        return `<div style="position:absolute; inset:0; pointer-events:none; z-index:4; background:radial-gradient(circle, rgba(255,255,255,0.12) 1px, transparent 2px); background-size:28px 28px; box-shadow:inset 0 0 70px rgba(200,230,255,0.28);"></div>`;
-    }
-    if (weather === 'ash') {
-        return `<div style="position:absolute; inset:0; pointer-events:none; z-index:4; background:radial-gradient(circle, rgba(255,110,40,0.22) 1.5px, transparent 2.5px); background-size:34px 34px; box-shadow:inset 0 0 80px rgba(120,25,0,0.45);"></div>`;
-    }
-    return '';
-}
+// Параметры камеры карты, масштаба фишек и режима перетаскивания по двойному клику
+window._mapCam = window._mapCam || {
+    zoom: 1, panX: 0, panY: 0, tokenScale: 0.85,
+    panMode: false, lastX: 0, lastY: 0
+};
+window._gmFogEraserMode = window._gmFogEraserMode || false;
+window._gmFogBrushAction = window._gmFogBrushAction || 'erase'; // 'erase' (открыть) | 'paint' (вернуть туман)
+window._gmFogBrushRadius = window._gmFogBrushRadius || 9;       // Размер кисти в % (5 | 9 | 15)
+window._isErasingFog = false;
 
-// Параметры камеры карты (Масштаб и сдвиг по X / Y)
-// Параметры камеры карты и масштаба фишек
-window._mapCam = window._mapCam || { zoom: 1, panX: 0, panY: 0, tokenScale: 0.85, isPanning: false, startX: 0, startY: 0 };
+// Кэшируем бесшовную текстуру пушистых светло-серых облаков для Canvas-тумана
+const CLOUD_FOG_SVG_URL = "data:image/svg+xml," + encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+        <defs>
+            <filter id="c" x="0" y="0" width="100%" height="100%">
+                <feTurbulence type="fractalNoise" baseFrequency="0.011 0.016" numOctaves="5" seed="7" stitchTiles="stitch" result="n"/>
+                <feColorMatrix type="matrix" values="0.82 0 0 0 0.39  0.82 0 0 0 0.41  0.82 0 0 0 0.42  0 0 0 0 1" in="n" result="cl"/>
+                <feGaussianBlur stdDeviation="2.5" in="cl"/>
+            </filter>
+        </defs>
+        <rect width="512" height="512" filter="url(#c)"/>
+    </svg>`
+);
+
+window._cloudFogImg = window._cloudFogImg || null;
+function ENSURE_CLOUD_FOG_IMG(onReady) {
+    if (window._cloudFogImg && window._cloudFogImg.complete && window._cloudFogImg.naturalWidth > 0) {
+        if (onReady) onReady(window._cloudFogImg);
+        return window._cloudFogImg;
+    }
+    if (!window._cloudFogImg) {
+        const img = new Image();
+        img.onload = function() {
+            const st = GET_MAP_STATE();
+            const sess = GET_SESSION();
+            if (st.fogMode === 'dynamic') {
+                DRAW_DYNAMIC_FOG(st.revealedAreas, sess && sess.role === 'gm');
+            }
+        };
+        img.src = CLOUD_FOG_SVG_URL;
+        window._cloudFogImg = img;
+    }
+    return null;
+}
+ENSURE_CLOUD_FOG_IMG();
 
 function MOVE_MAP_CAMERA(dx, dy) {
     window._mapCam.panX += dx;
@@ -905,7 +930,17 @@ function RESET_MAP_CAMERA() {
     window._mapCam.zoom = 1;
     window._mapCam.panX = 0;
     window._mapCam.panY = 0;
+    STOP_MAP_PAN_MODE();
     APPLY_MAP_CAMERA_TRANSFORM();
+}
+
+function STOP_MAP_PAN_MODE() {
+    if (!window._mapCam.panMode) return;
+    window._mapCam.panMode = false;
+    const mapArea = document.getElementById('map-area');
+    if (mapArea) mapArea.style.cursor = (window._gmPinPlacementMode || window._gmFogEraserMode) ? 'crosshair' : 'default';
+    const banner = document.getElementById('map-pan-mode-banner');
+    if (banner) banner.style.display = 'none';
 }
 
 function APPLY_MAP_CAMERA_TRANSFORM() {
@@ -917,17 +952,21 @@ function APPLY_MAP_CAMERA_TRANSFORM() {
     if (zoomLbl) {
         zoomLbl.textContent = Math.round(window._mapCam.zoom * 100) + '%';
     }
-    // Автоматически компенсируем размер фишек и значков при зуме карты, чтобы они НЕ раздувались на пол-экрана!
     const invScale = ((window._mapCam.tokenScale || 0.85) / (window._mapCam.zoom || 1)).toFixed(3);
     document.querySelectorAll('.map-scalable-entity').forEach(el => {
         el.style.transform = `translate(-50%, -50%) scale(${invScale})`;
     });
 }
 
-// Управление камерой карты с клавиатуры (Стрелки Вверх/Вниз/Влево/Вправо и +/-)
+// Управление камерой с клавиатуры + гарантированный сброс залипания мыши (Esc и mouseup по окну)
 if (!window._mapKeyboardBound) {
     window._mapKeyboardBound = true;
     window.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            STOP_MAP_PAN_MODE();
+            window._isErasingFog = false;
+            return;
+        }
         const tag = document.activeElement ? document.activeElement.tagName : '';
         if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
         if (document.querySelector('.modal.active')) return;
@@ -941,6 +980,22 @@ if (!window._mapKeyboardBound) {
         else if (e.key === '-' || e.key === '_') { ZOOM_MAP_CAMERA(-0.15); }
         else if (e.key === '0') { RESET_MAP_CAMERA(); }
     });
+
+    // Глобальный сброс ластика, чтобы мышка никогда не залипала при выходе за пределы карты
+    window.addEventListener('mouseup', function() {
+        if (window._isErasingFog) {
+            window._isErasingFog = false;
+            const st = GET_MAP_STATE();
+            SAVE_MAP_STATE(st);
+        }
+    });
+    // Клик вне карты автоматически отцепляет карту, если она была захвачена двойным кликом
+    window.addEventListener('mousedown', function(e) {
+        const mapArea = document.getElementById('map-area');
+        if (window._mapCam.panMode && mapArea && !mapArea.contains(e.target)) {
+            STOP_MAP_PAN_MODE();
+        }
+    });
 }
 
 function RENDER_MAP_AREA() {
@@ -953,20 +1008,23 @@ function RENDER_MAP_AREA() {
     const isGM = sess && sess.role === 'gm';
     const myPlayerIdx = (sess && sess.role === 'player') ? (sess.playerIdx || 0) : -1;
     const cs = GC();
+    const isFullFogForPlayer = (st.fogMode === 'full' && !isGM);
 
     const mapPanel = mapArea.parentElement;
     if (mapPanel) {
         const h2 = mapPanel.querySelector('h2');
         if (h2) {
-            const locTitle = (st.fog && !isGM) ? '🌫️ Неизвестная область (Туман войны)' : `📍 ${st.title || 'Окрестности Притишья'}`;
-            const fogTag = (st.fog && isGM) ? ' <small style="color:#c084fc;">(Скрыто туманом)</small>' : '';
+            const locTitle = isFullFogForPlayer ? '☁️ Неизвестная область (Туман войны)' : `📍 ${st.title || 'Окрестности Притишья'}`;
+            const fogTag = (st.fogMode !== 'none' && isGM)
+                ? ` <small style="color:#c084fc;">(${st.fogMode === 'dynamic' ? 'Динамический туман' : 'Сплошной туман'})</small>`
+                : '';
 
             h2.style.cssText = 'display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;';
             h2.innerHTML = `
                 <span>🗺️ Карта</span>
                 <span style="color:#c9a96e; font-size:1.05rem; font-weight:bold; text-align:center; flex:1;">
                     ${locTitle}${fogTag}
-                    ${st.desc && (!st.fog || isGM) ? `<div style="color:#9e988e; font-size:0.85rem; font-weight:normal; margin-top:2px;">${st.desc}</div>` : ''}
+                    ${st.desc && !isFullFogForPlayer ? `<div style="color:#9e988e; font-size:0.85rem; font-weight:normal; margin-top:2px;">${st.desc}</div>` : ''}
                 </span>
             `;
         }
@@ -999,16 +1057,16 @@ function RENDER_MAP_AREA() {
     mapArea.style.overflow = 'hidden';
     mapArea.style.padding = '0';
     mapArea.style.userSelect = 'none';
-    mapArea.style.background = '#121110';
     mapArea.style.display = 'flex';
     mapArea.style.alignItems = 'center';
     mapArea.style.justifyContent = 'center';
-    mapArea.style.cursor = (isGM && window._gmPinPlacementMode) ? 'crosshair' : 'grab';
+    mapArea.style.cursor = window._mapCam.panMode
+        ? 'grabbing'
+        : ((isGM && (window._gmPinPlacementMode || window._gmFogEraserMode)) ? 'crosshair' : 'default');
 
     mapArea.onwheel = function(e) {
         if (showVN) return;
         e.preventDefault();
-        // Если крутим колёсико мыши с зажатым Shift — зумим, а без Shift — плавно двигаем вертикальную карту вверх-вниз!
         if (e.shiftKey || e.ctrlKey) {
             ZOOM_MAP_CAMERA(e.deltaY < 0 ? 0.15 : -0.15);
         } else {
@@ -1016,12 +1074,64 @@ function RENDER_MAP_AREA() {
         }
     };
 
+    // ДВОЙНОЙ КЛИК по карте включает режим перемещения карты (одиночный клик больше НЕ приклеивает карту!)
+    mapArea.ondblclick = function(e) {
+        if (showVN || window._draggingMapObj || (isGM && (window._gmPinPlacementMode || window._gmFogEraserMode))) return;
+        e.preventDefault();
+        window._mapCam.panMode = !window._mapCam.panMode;
+        window._mapCam.lastX = e.clientX;
+        window._mapCam.lastY = e.clientY;
+        mapArea.style.cursor = window._mapCam.panMode ? 'grabbing' : 'default';
+        const banner = document.getElementById('map-pan-mode-banner');
+        if (banner) banner.style.display = window._mapCam.panMode ? 'block' : 'none';
+    };
+
+    const handleFogStroke = (e) => {
+        const vp = document.getElementById('map-viewport');
+        if (!vp) return;
+        const rect = vp.getBoundingClientRect();
+        const xPct = Math.round(((e.clientX - rect.left) / rect.width) * 1000) / 10;
+        const yPct = Math.round(((e.clientY - rect.top) / rect.height) * 1000) / 10;
+        const curSt = GET_MAP_STATE();
+        if (!curSt.revealedAreas) curSt.revealedAreas = [];
+
+        const brushR = window._gmFogBrushRadius || 9;
+        if (window._gmFogBrushAction === 'paint') {
+            // «Вернуть туман»: удаляем открытые круги в зоне кисти
+            curSt.revealedAreas = curSt.revealedAreas.filter(a => {
+                const dist = Math.hypot((a.x - xPct), (a.y - yPct));
+                return dist > brushR * 0.9;
+            });
+        } else {
+            // Избегаем лишних дубликатов точек, если мышка почти не сдвинулась
+            const last = curSt.revealedAreas[curSt.revealedAreas.length - 1];
+            if (!last || Math.hypot(last.x - xPct, last.y - yPct) >= 1.8 || last.r !== brushR) {
+                curSt.revealedAreas.push({ x: xPct, y: yPct, r: brushR });
+            }
+        }
+        DRAW_DYNAMIC_FOG(curSt.revealedAreas, true);
+
+        if (!window._eraseThrottle) {
+            window._eraseThrottle = setTimeout(() => {
+                SAVE_MAP_STATE(curSt);
+                window._eraseThrottle = null;
+            }, 180);
+        }
+    };
+
     mapArea.onmousedown = function(e) {
-        if (e.button !== 0 || window._draggingMapObj || window._gmPinPlacementMode || showVN) return;
-        window._mapCam.isPanning = true;
-        window._mapCam.startX = e.clientX - window._mapCam.panX;
-        window._mapCam.startY = e.clientY - window._mapCam.panY;
-        mapArea.style.cursor = 'grabbing';
+        if (showVN) return;
+        // Если карта сейчас захвачена двойным кликом — одиночный клик мгновенно отцепляет её!
+        if (window._mapCam.panMode) {
+            STOP_MAP_PAN_MODE();
+            return;
+        }
+        if (isGM && window._gmFogEraserMode && st.fogMode === 'dynamic') {
+            if (e.button !== 0) return;
+            window._isErasingFog = true;
+            handleFogStroke(e);
+            return;
+        }
     };
 
     mapArea.onclick = function(e) {
@@ -1050,17 +1160,26 @@ function RENDER_MAP_AREA() {
             window._draggingMapObj.moved = true;
             return;
         }
-        if (window._mapCam.isPanning) {
-            window._mapCam.panX = e.clientX - window._mapCam.startX;
-            window._mapCam.panY = e.clientY - window._mapCam.startY;
+        if (isGM && window._gmFogEraserMode && window._isErasingFog) {
+            handleFogStroke(e);
+            return;
+        }
+        if (window._mapCam.panMode) {
+            const dx = e.clientX - window._mapCam.lastX;
+            const dy = e.clientY - window._mapCam.lastY;
+            window._mapCam.lastX = e.clientX;
+            window._mapCam.lastY = e.clientY;
+            window._mapCam.panX += dx;
+            window._mapCam.panY += dy;
             APPLY_MAP_CAMERA_TRANSFORM();
         }
     };
 
     mapArea.onmouseup = function() {
-        if (window._mapCam.isPanning) {
-            window._mapCam.isPanning = false;
-            mapArea.style.cursor = (isGM && window._gmPinPlacementMode) ? 'crosshair' : 'grab';
+        if (window._isErasingFog) {
+            window._isErasingFog = false;
+            const curSt = GET_MAP_STATE();
+            SAVE_MAP_STATE(curSt);
         }
         if (!window._draggingMapObj) return;
         const drag = window._draggingMapObj;
@@ -1080,56 +1199,39 @@ function RENDER_MAP_AREA() {
     };
 
     let baseMapHTML = '';
-    
-    // SVG фильтр для облачного эффекта (вставляется невидимо)
-    const svgFilterHTML = `
-        <svg width="0" height="0" style="position:absolute; z-index:-1;">
-            <defs>
-                <filter id="cloud-turbulence">
-                    <feTurbulence type="fractalNoise" baseFrequency="0.015" numOctaves="4" result="noise" />
-                    <feColorMatrix type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0" in="noise" result="coloredNoise" />
-                    <feDisplacementMap in="SourceGraphic" in2="coloredNoise" scale="30" xChannelSelector="R" yChannelSelector="G" />
-                </filter>
-            </defs>
-        </svg>
-    `;
-
-    // 1. Отрисовка самой картинки карты (ОНА ВСЕГДА ЕСТЬ ПОД ТУМАНОМ)
     if (st.img) {
-        baseMapHTML = `<img id="main-map-image" src="${st.img}" alt="Карта" style="width:100%; height:auto; min-height:100%; display:block; pointer-events:none; ${st.fogMode !== 'none' && isGM ? 'opacity:0.6;' : ''}">`;
+        baseMapHTML = `<img id="main-map-image" src="${st.img}" alt="Карта" style="width:100%; height:auto; min-height:100%; display:block; pointer-events:none;">`;
     } else {
         baseMapHTML = `
-            <div style="width:100%; min-height:410px; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:25px; text-align:center; pointer-events:none;">
+            <div style="width:100%; min-height:410px; background:rgba(24,23,21,0.82); display:flex; flex-direction:column; align-items:center; justify-content:center; padding:25px; text-align:center; pointer-events:none;">
                 <div style="font-size:2.4rem; margin-bottom:8px;">🗺️</div>
                 <div style="font-size:1.25rem; color:#e6c88c; font-weight:bold;">📍 ${st.title || 'Карта кампании'}</div>
             </div>`;
     }
 
-    // 2. Отрисовка Динамического Тумана (Canvas) или Сплошного тумана
-    let fogOverlayHTML = '';
-    if (st.fogMode === 'full' && !isGM) {
-        // Сплошной туман для игроков
-        fogOverlayHTML = `
+    // Слой облачного Тумана Войны (для сплошного — поверх всего окна, для динамического — Canvas поверх карты, фишек и значков!)
+    let fullFogOverlayHTML = '';
+    let dynamicFogCanvasHTML = '';
+    if (isFullFogForPlayer) {
+        fullFogOverlayHTML = `
             <div class="fog-of-war-clouds"></div>
-            <div style="position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:30px; color:#c9a96e; z-index:10; pointer-events:none; text-shadow:0 2px 4px #000;">
-                <div style="font-size:3rem; margin-bottom:10px;">🌫️</div>
-                <div style="font-size:1.2rem; font-weight:bold;">Скрыто туманом войны</div>
+            <div style="position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:30px; color:#2b2e33; z-index:9; pointer-events:none; text-shadow:0 1px 10px rgba(255,255,255,0.9);">
+                <div style="font-size:3rem; margin-bottom:8px;">☁️</div>
+                <div style="font-size:1.25rem; font-weight:bold; background:rgba(255,255,255,0.65); padding:6px 16px; border-radius:20px; border:1px solid rgba(100,110,120,0.35);">
+                    Скрыто туманом войны
+                </div>
             </div>
         `;
     } else if (st.fogMode === 'dynamic') {
-        // Динамический туман (Canvas с дырками)
-        // Для мастера он полупрозрачный, чтобы видеть карту под ним и стирать
-        const fogOpacity = isGM ? '0.7' : '1';
-        fogOverlayHTML = `
-            <canvas id="fog-canvas" style="position:absolute; top:0; left:0; width:100%; height:100%; z-index:4; pointer-events:none; opacity:${fogOpacity}; filter: url(#cloud-turbulence) blur(6px);"></canvas>
+        const fogOpacity = isGM ? '0.62' : '1';
+        dynamicFogCanvasHTML = `
+            <canvas id="fog-canvas" style="position:absolute; top:0; left:0; width:100%; height:100%; z-index:7; pointer-events:none; opacity:${fogOpacity};"></canvas>
         `;
-        
-        // Запускаем функцию отрисовки тумана после рендеринга DOM
-        setTimeout(() => DRAW_DYNAMIC_FOG(st.revealedAreas, isGM), 50);
+        setTimeout(() => DRAW_DYNAMIC_FOG(st.revealedAreas, isGM), 30);
     }
 
     let gridOverlayHTML = '';
-    if (st.grid && (!st.fog || isGM)) {
+    if (st.grid && !isFullFogForPlayer) {
         const gs = st.gridSize || 48;
         const gc = st.gridColor || 'rgba(201, 169, 110, 0.22)';
         gridOverlayHTML = `
@@ -1138,7 +1240,7 @@ function RENDER_MAP_AREA() {
                 background-image: linear-gradient(to right, ${gc} 1px, transparent 1px), linear-gradient(to bottom, ${gc} 1px, transparent 1px);">
             </div>`;
     }
-    const weatherOverlayHTML = (!st.fog || isGM) ? GENERATE_WEATHER_OVERLAY_HTML(st.weather) : '';
+    const weatherOverlayHTML = !isFullFogForPlayer ? GENERATE_WEATHER_OVERLAY_HTML(st.weather) : '';
 
     let topFloatingButtonsHTML = '';
     if (playerLeftVN && vn && vn.active && !showVN) {
@@ -1151,7 +1253,7 @@ function RENDER_MAP_AREA() {
     }
 
     let turnBarHTML = '';
-    if ((!st.fog || isGM) && st.tokens && st.tokens.length > 0 && st.turnOrder && st.turnOrder.active && !showVN) {
+    if (!isFullFogForPlayer && st.tokens && st.tokens.length > 0 && st.turnOrder && st.turnOrder.active && !showVN) {
         const curTurnIdx = (st.turnOrder.currentIdx || 0) % st.tokens.length;
         const activeTok = st.tokens[curTurnIdx];
         turnBarHTML = `
@@ -1168,11 +1270,10 @@ function RENDER_MAP_AREA() {
             </div>`;
     }
 
-    // Масштаб фишек и значков с компенсацией зума камеры
     const invScale = ((window._mapCam.tokenScale || 0.85) / (window._mapCam.zoom || 1)).toFixed(3);
 
     let pinsOverlayHTML = '';
-    if ((!st.fog || isGM) && st.pins && st.pins.length > 0 && !showVN) {
+    if (!isFullFogForPlayer && st.pins && st.pins.length > 0 && !showVN) {
         st.pins.forEach((pin, pIdx) => {
             if (pin.hidden && !isGM) return;
             pinsOverlayHTML += `
@@ -1193,7 +1294,7 @@ function RENDER_MAP_AREA() {
     }
 
     let tokensOverlayHTML = '';
-    if ((!st.fog || isGM) && st.tokens && st.tokens.length > 0 && !showVN) {
+    if (!isFullFogForPlayer && st.tokens && st.tokens.length > 0 && !showVN) {
         const curTurnIdx = (st.turnOrder && st.turnOrder.active) ? ((st.turnOrder.currentIdx || 0) % st.tokens.length) : -1;
         st.tokens.forEach((tok, tIdx) => {
             let hp = tok.hp ?? 10, maxHp = tok.maxHp || 10, avatar = tok.avatar || '', name = tok.name;
@@ -1238,30 +1339,48 @@ function RENDER_MAP_AREA() {
             </div>`;
     }
 
-    // Пульт управления камерой + кнопки размера фишек (♟️- / ♟️+)
+    // Плашка-индикатор режима перемещения по двойному клику
+    const panBannerHTML = `
+        <div id="map-pan-mode-banner" style="display:${window._mapCam.panMode ? 'block' : 'none'}; position:absolute; top:10px; left:50%; transform:translateX(-50%); background:rgba(20,18,16,0.92); color:#e6c88c; border:1px solid #c9a96e; font-size:0.82rem; font-weight:bold; padding:5px 14px; border-radius:20px; z-index:15; pointer-events:none; box-shadow:0 4px 14px rgba(0,0,0,0.75); white-space:nowrap;">
+            ✋ Карта захвачена — двигайте мышкой • Кликните 1 раз (или Esc), чтобы отцепить
+        </div>
+    `;
+
     let cameraControlsHTML = '';
-    if ((st.fogMode === 'none' || isGM) && !showVN) {
+    if (!isFullFogForPlayer && !showVN) {
         const camBtnStyle = 'width:28px; height:28px; padding:0; display:flex; align-items:center; justify-content:center; background:rgba(24,23,21,0.92); color:#e6c88c; border:1px solid #524a3d; border-radius:6px; font-size:0.82rem; box-shadow:none;';
-        
-        // Инструмент Ластика Тумана (только для ГМ при включенном динамическом тумане)
-        let fogEraserBtn = '';
+
+        let fogEraserControls = '';
         if (isGM && st.fogMode === 'dynamic') {
-            const isEraserActive = window._gmFogEraserMode;
-            fogEraserBtn = `
-                <div style="display:flex; justify-content:center; margin-bottom:6px; width:100%;">
-                    <button style="${camBtnStyle} width:100%; border-color:${isEraserActive ? '#52b758' : '#e06060'}; background:${isEraserActive ? '#1e2e1e' : 'rgba(24,23,21,0.92)'};" 
-                            title="Ластик Тумана: зажмите ЛКМ на карте, чтобы открыть зону игрокам" 
+            const isActive = window._gmFogEraserMode;
+            const act = window._gmFogBrushAction || 'erase';
+            const rad = window._gmFogBrushRadius || 9;
+            fogEraserControls = `
+                <div style="display:flex; flex-direction:column; gap:3px; margin-bottom:4px; width:100%; border-bottom:1px dashed #38332c; padding-bottom:4px;">
+                    <button style="${camBtnStyle} width:100%; font-size:0.75rem; border-color:${isActive ? '#52b758' : '#78716c'}; background:${isActive ? '#1e3521' : 'rgba(24,23,21,0.92)'};"
+                            title="Включить/выключить кисть тумана войны"
                             onclick="TOGGLE_FOG_ERASER()">
-                        ${isEraserActive ? '🔦 Ластик Вкл' : '🌫️ Ластик Выкл'}
+                        ${isActive ? '🔦 Кисть Вкл' : '☁️ Кисть Выкл'}
                     </button>
+                    ${isActive ? `
+                        <div style="display:flex; gap:3px;">
+                            <button style="${camBtnStyle} flex:1; font-size:0.72rem; background:${act==='erase'?'#2e5a2e':'#181715'};" title="Открыть область (стереть облака)" onclick="window._gmFogBrushAction='erase'; RENDER_MAP_AREA();">Открыть</button>
+                            <button style="${camBtnStyle} flex:1; font-size:0.72rem; background:${act==='paint'?'#5c3a21':'#181715'};" title="Вернуть облака обратно" onclick="window._gmFogBrushAction='paint'; RENDER_MAP_AREA();">Скрыть</button>
+                        </div>
+                        <div style="display:flex; gap:3px;">
+                            <button style="${camBtnStyle} flex:1; font-size:0.7rem; background:${rad===5?'#c9a96e':'#181715'}; color:${rad===5?'#141210':'#ccc'};" onclick="window._gmFogBrushRadius=5; RENDER_MAP_AREA();">S</button>
+                            <button style="${camBtnStyle} flex:1; font-size:0.7rem; background:${rad===9?'#c9a96e':'#181715'}; color:${rad===9?'#141210':'#ccc'};" onclick="window._gmFogBrushRadius=9; RENDER_MAP_AREA();">M</button>
+                            <button style="${camBtnStyle} flex:1; font-size:0.7rem; background:${rad===15?'#c9a96e':'#181715'}; color:${rad===15?'#141210':'#ccc'};" onclick="window._gmFogBrushRadius=15; RENDER_MAP_AREA();">L</button>
+                        </div>
+                    ` : ''}
                 </div>
             `;
         }
 
         cameraControlsHTML = `
-            <div onmousedown="event.stopPropagation();" onclick="event.stopPropagation();"
+            <div onmousedown="event.stopPropagation();" onclick="event.stopPropagation();" ondblclick="event.stopPropagation();"
                  style="position:absolute; bottom:8px; right:8px; z-index:12; background:rgba(15,14,13,0.9); border:1px solid #423c33; border-radius:10px; padding:6px; display:flex; flex-direction:column; align-items:center; gap:4px; box-shadow:0 4px 14px rgba(0,0,0,0.85);">
-                ${fogEraserBtn}
+                ${fogEraserControls}
                 <div style="display:grid; grid-template-columns:28px 28px 28px; gap:3px; justify-items:center;">
                     <div></div>
                     <button style="${camBtnStyle}" title="Сдвинуть карту вверх (Стрелка Вверх / Колёсико)" onclick="MOVE_MAP_CAMERA(0, 65)">⬆️</button>
@@ -1282,6 +1401,7 @@ function RENDER_MAP_AREA() {
                     <button style="${camBtnStyle}; width:41px;" title="Уменьшить размер фишек под клетки карты" onclick="CHANGE_TOKEN_SCALE(-0.1)">♟️−</button>
                     <button style="${camBtnStyle}; width:41px;" title="Увеличить размер фишек" onclick="CHANGE_TOKEN_SCALE(0.1)">♟️+</button>
                 </div>
+                <small style="font-size:0.65rem !important; color:#9e988e; text-align:center; line-height:1.1; max-width:90px;">2× клик: двигать карту</small>
             </div>
         `;
     }
@@ -1347,7 +1467,7 @@ function RENDER_MAP_AREA() {
         }
 
         vnOverlayHTML = `
-            <div style="position:absolute; inset:0; background:rgba(0,0,0,0.4); display:flex; flex-direction:column; justify-content:flex-end; z-index:14;" onclick="event.stopPropagation();">
+            <div style="position:absolute; inset:0; background:rgba(0,0,0,0.4); display:flex; flex-direction:column; justify-content:flex-end; z-index:14;" onclick="event.stopPropagation();" ondblclick="event.stopPropagation();">
                 <div style="flex:1; display:flex; align-items:flex-end; justify-content:center; padding-bottom:4px; overflow:hidden; pointer-events:none;">
                     ${portraitHTML}
                 </div>
@@ -1374,138 +1494,79 @@ function RENDER_MAP_AREA() {
     }
 
     mapArea.innerHTML = `
-        ${svgFilterHTML}
-        <div id="map-viewport" style="width:100%; position:relative; transform-origin:center center; transform:translate(${window._mapCam.panX}px, ${window._mapCam.panY}px) scale(${window._mapCam.zoom}); transition:transform 0.06s ease-out;">
+        <div id="map-viewport" style="width:100%; position:relative; transform-origin:center center; transform:translate(${window._mapCam.panX}px, ${window._mapCam.panY}px) scale(${window._mapCam.zoom}); transition:transform 0.05s ease-out;">
             ${baseMapHTML}
-            ${fogOverlayHTML}
             ${gridOverlayHTML}
             ${pinsOverlayHTML}
             ${tokensOverlayHTML}
+            ${dynamicFogCanvasHTML}
         </div>
+        ${fullFogOverlayHTML}
         ${weatherOverlayHTML}
         ${topFloatingButtonsHTML}
         ${turnBarHTML}
         ${placementBanner}
+        ${panBannerHTML}
         ${cameraControlsHTML}
         ${vnOverlayHTML}
     `;
-    
-    // ОБНОВЛЯЕМ ЛОГИКУ КЛИКОВ ПО КАРТЕ ДЛЯ ЛАСТИКА
-    if (isGM) {
-        if (window._gmFogEraserMode) {
-            mapArea.style.cursor = 'crosshair';
-            
-            let isErasing = false;
-            
-            const handleErase = (e) => {
-                if (!isErasing) return;
-                const vp = document.getElementById('map-viewport');
-                const img = document.getElementById('main-map-image');
-                if (!vp || !img) return;
-                
-                const rect = vp.getBoundingClientRect();
-                
-                // Координаты в % относительно размеров картинки
-                const xPct = Math.round(((e.clientX - rect.left) / rect.width) * 1000) / 10;
-                const yPct = Math.round(((e.clientY - rect.top) / rect.height) * 1000) / 10;
-                
-                const st = GET_MAP_STATE();
-                if (!st.revealedAreas) st.revealedAreas = [];
-                
-                // Размер "кисти" ластика (в %)
-                const radiusPct = 8; // Можно потом сделать настраиваемым
-                
-                st.revealedAreas.push({ x: xPct, y: yPct, r: radiusPct });
-                
-                // Отрисовываем дырку локально сразу же для отзывчивости
-                DRAW_DYNAMIC_FOG(st.revealedAreas, true);
-                
-                // Сохраняем в Firebase с throttle (не чаще раза в 200мс), чтобы не спамить
-                if (!window._eraseThrottle) {
-                    window._eraseThrottle = setTimeout(() => {
-                        SAVE_MAP_STATE(st);
-                        window._eraseThrottle = null;
-                    }, 200);
-                }
-            };
-            
-            mapArea.onmousedown = (e) => {
-                if (e.button !== 0) return;
-                isErasing = true;
-                handleErase(e);
-            };
-            mapArea.onmousemove = (e) => {
-                if (isErasing) handleErase(e);
-            };
-            mapArea.onmouseup = () => {
-                isErasing = false;
-                // Принудительно сохраняем финальный мазок
-                const st = GET_MAP_STATE();
-                SAVE_MAP_STATE(st);
-            };
-        } else if (!window._gmPinPlacementMode && !window._draggingMapObj) {
-             // Возвращаем логику панорамирования (перетаскивания) карты
-             mapArea.onmousedown = function(e) {
-                if (e.button !== 0 || window._draggingMapObj || window._gmPinPlacementMode || showVN) return;
-                window._mapCam.isPanning = true;
-                window._mapCam.startX = e.clientX - window._mapCam.panX;
-                window._mapCam.startY = e.clientY - window._mapCam.panY;
-                mapArea.style.cursor = 'grabbing';
-            };
-        }
-    }
 }
-
-window._gmFogEraserMode = false;
 
 function TOGGLE_FOG_ERASER() {
     window._gmFogEraserMode = !window._gmFogEraserMode;
-    // Отключаем другие режимы
     if (window._gmFogEraserMode) {
         window._gmPinPlacementMode = false;
+        STOP_MAP_PAN_MODE();
     }
     RENDER_MAP_AREA();
 }
 
 function DRAW_DYNAMIC_FOG(revealedAreas, isGM) {
     const canvas = document.getElementById('fog-canvas');
-    const img = document.getElementById('main-map-image');
-    if (!canvas || !img) return;
+    const vp = document.getElementById('map-viewport');
+    if (!canvas || !vp) return;
 
-    // Устанавливаем физический размер canvas равным размеру картинки
-    canvas.width = img.clientWidth || img.naturalWidth || 800;
-    canvas.height = img.clientHeight || img.naturalHeight || 600;
+    const w = vp.clientWidth || 800;
+    const h = vp.clientHeight || 600;
+    if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+    }
 
     const ctx = canvas.getContext('2d');
-    
-    // Заливаем всё "облачным" цветом (текстуру даст SVG фильтр в CSS)
-    ctx.fillStyle = '#14191e'; 
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.clearRect(0, 0, w, h);
+    ctx.globalCompositeOperation = 'source-over';
 
-    // Включаем режим "вырезания" дырок
-    ctx.globalCompositeOperation = 'destination-out';
-    
+    // 1. Заливаем холст бесшовными пушистыми светло-серыми облаками (как на твоём референсе!)
+    const cloudImg = ENSURE_CLOUD_FOG_IMG();
+    if (cloudImg) {
+        const pat = ctx.createPattern(cloudImg, 'repeat');
+        ctx.fillStyle = pat || '#cfd5da';
+        ctx.fillRect(0, 0, w, h);
+    } else {
+        ctx.fillStyle = '#cfd5da';
+        ctx.fillRect(0, 0, w, h);
+    }
+
+    // 2. Мягко вырезаем открытые Мастером участки с плавными облачными краями
     if (revealedAreas && revealedAreas.length > 0) {
+        ctx.globalCompositeOperation = 'destination-out';
         revealedAreas.forEach(area => {
-            const xPx = (area.x / 100) * canvas.width;
-            const yPx = (area.y / 100) * canvas.height;
-            // Радиус тоже пропорционален ширине карты
-            const rPx = (area.r / 100) * canvas.width;
-            
-            // Создаем градиент для мягких краев тумана
-            const gradient = ctx.createRadialGradient(xPx, yPx, 0, xPx, yPx, rPx);
-            gradient.addColorStop(0, 'rgba(0,0,0,1)'); // Полностью прозрачно в центре
-            gradient.addColorStop(0.7, 'rgba(0,0,0,0.8)');
-            gradient.addColorStop(1, 'rgba(0,0,0,0)'); // Плавный переход в туман
-            
-            ctx.fillStyle = gradient;
+            const xPx = (area.x / 100) * w;
+            const yPx = (area.y / 100) * h;
+            const rPx = ((area.r || 9) / 100) * w;
+
+            const grad = ctx.createRadialGradient(xPx, yPx, rPx * 0.25, xPx, yPx, rPx);
+            grad.addColorStop(0, 'rgba(0,0,0,1)');
+            grad.addColorStop(0.65, 'rgba(0,0,0,0.88)');
+            grad.addColorStop(1, 'rgba(0,0,0,0)');
+
+            ctx.fillStyle = grad;
             ctx.beginPath();
             ctx.arc(xPx, yPx, rPx, 0, Math.PI * 2);
             ctx.fill();
         });
     }
-    
-    // Возвращаем стандартный режим наложения
     ctx.globalCompositeOperation = 'source-over';
 }
 
@@ -3093,7 +3154,7 @@ function OPEN_GM_MAP_MODAL() {
     `).join('');
 
     cont.innerHTML = `
-        <h2>🗺️ Редактор Карты, Погоды, Сетки и Значков</h2>
+        <h2>🗺️ Редактор Карты, Погоды, Сетки и Тумана</h2>
         <div style="display:grid; grid-template-columns: 1.15fr 1fr; gap:20px; align-items:start;">
             <div style="background:#181715; border:1px solid #423c33; padding:18px; border-radius:10px; display:flex; flex-direction:column; gap:12px;">
                 <h3 style="margin-top:0;">1. Изображение и описание локации</h3>
@@ -3122,7 +3183,7 @@ function OPEN_GM_MAP_MODAL() {
                     <textarea id="gm-map-desc" style="min-height:60px;">${st.desc||''}</textarea>
                 </div>
 
-                <div style="background:#22201d; padding:12px; border-radius:8px; border:1px solid #38332c; display:flex; flex-direction:column; gap:8px;">
+                <div style="background:#22201d; padding:12px; border-radius:8px; border:1px solid #38332c; display:flex; flex-direction:column; gap:10px;">
                     <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
                         <label style="color:#c9a96e; font-size:0.9rem;">🌦️ Погода / Атмосфера на карте:</label>
                         <select id="gm-map-weather" style="width:220px; text-align:left;">
@@ -3133,19 +3194,33 @@ function OPEN_GM_MAP_MODAL() {
                             <option value="night" ${st.weather==='night'?'selected':''}>🌙 Глубокая ночь</option>
                         </select>
                     </div>
+
                     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
                         <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
-                        <input type="checkbox" id="gm-map-fog" ${st.fogMode !== 'none' ? 'checked' : ''}>
-                        <span>🌫️ <b>Включить Туман войны</b></span>
-                    </label>
-                    <div style="display:flex; align-items:center; gap:8px; margin-top:4px;">
-                        <span style="color:#aaa; font-size:0.85rem; margin-left:26px;">Режим:</span>
-                        <select id="gm-map-fog-mode" style="width:180px; padding:4px;" ${st.fogMode === 'none' ? 'disabled' : ''}>
-                            <option value="full" ${st.fogMode === 'full' ? 'selected' : ''}>Сплошной (Скрыто всё)</option>
-                            <option value="dynamic" ${st.fogMode === 'dynamic' ? 'selected' : ''}>Динамический (Мастер открывает зоны)</option>
-                        </select>
-                        <button class="btn-small btn-danger" style="padding:4px 8px;" onclick="GM_CLEAR_FOG_REVEAL()" title="Сбросить все открытые зоны">Сбросить ластик</button>
+                            <input type="checkbox" id="gm-map-grid" ${st.grid ? 'checked' : ''}>
+                            <span>📏 <b>Показать тактическую сетку (Grid)</b></span>
+                        </label>
+                        <div style="display:flex; align-items:center; gap:6px;">
+                            <small style="color:#aaa;">Клетка:</small>
+                            <input type="number" id="gm-map-grid-size" min="20" max="120" value="${st.gridSize || 48}" style="width:70px;"> <small>px</small>
+                        </div>
                     </div>
+
+                    <div style="border-top:1px dashed #38332c; padding-top:8px;">
+                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                            <input type="checkbox" id="gm-map-fog" ${st.fogMode !== 'none' ? 'checked' : ''} onchange="document.getElementById('gm-map-fog-mode').disabled = !this.checked;">
+                            <span>☁️ <b>Включить Туман войны (облака)</b></span>
+                        </label>
+                        <div style="display:flex; align-items:center; gap:8px; margin-top:8px; flex-wrap:wrap;">
+                            <span style="color:#aaa; font-size:0.85rem;">Режим:</span>
+                            <select id="gm-map-fog-mode" style="flex:1; min-width:190px; padding:5px; text-align:left;" ${st.fogMode === 'none' ? 'disabled' : ''}>
+                                <option value="full" ${st.fogMode === 'full' ? 'selected' : ''}>Сплошной (скрыто всё)</option>
+                                <option value="dynamic" ${st.fogMode === 'dynamic' ? 'selected' : ''}>Динамический (Мастер стирает кистью)</option>
+                            </select>
+                            <button class="btn-small btn-danger" style="padding:5px 9px;" onclick="GM_CLEAR_FOG_REVEAL()" title="Затянуть всю карту облаками заново">🔄 Сбросить туман</button>
+                        </div>
+                    </div>
+                </div>
 
                 <button class="btn-save" style="padding:12px;" onclick="GM_SAVE_MAP()">✅ Применить настройки карты</button>
             </div>
