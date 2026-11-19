@@ -759,32 +759,37 @@ button:disabled {
     opacity: 1;
 }
 
-/* --- ЭФФЕКТ ОБЛАЧНОГО ТУМАНА ВОЙНЫ --- */
-.fog-of-war-clouds {
-    position: absolute;
-    top: -50%; /* С запасом, чтобы покрыть края при зуме/панорамировании */
-    left: -50%;
-    width: 200%;
-    height: 200%;
-    pointer-events: none; /* Пропускаем клики сквозь туман к карте/фишкам (если разрешено) */
-    z-index: 4; /* Поверх карты и сетки, но под значками и фишками, чтобы их было видно в открытых зонах */
-    
-    /* Текстура облаков/тумана через CSS Radial Gradients */
-    background-color: rgba(20, 25, 30, 0.95); /* Тёмно-сизый базовый цвет */
-    background-image: 
-        radial-gradient(circle at 20% 30%, rgba(255, 255, 255, 0.08) 0%, transparent 20%),
-        radial-gradient(circle at 80% 70%, rgba(255, 255, 255, 0.05) 0%, transparent 25%),
-        radial-gradient(circle at 50% 50%, rgba(0, 0, 0, 0.2) 0%, transparent 40%);
-    background-size: 200px 200px, 300px 300px, 150px 150px;
-    
-    /* Добавляем SVG фильтр турбулентности для "клубящегося" эффекта, если браузер поддерживает */
-    filter: url(#cloud-turbulence) blur(4px);
-    
-    opacity: 1;
-    transition: opacity 0.3s ease;
+/* --- ЭФФЕКТ ПУШИСТЫХ СВЕТЛО-СЕРЫХ ОБЛАКОВ (ТУМАН ВОЙНЫ И КРАЯ КАРТЫ) --- */
+@keyframes driftFogClouds {
+    0% { background-position: 0px 0px, 0px 0px; }
+    100% { background-position: 512px 256px, -256px 512px; }
 }
 
-/* Фон за краями карты - тоже туманный */
+#map-area {
+    background-color: #cfd5da !important;
+    background-image:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512' viewBox='0 0 512 512'%3E%3Cdefs%3E%3Cfilter id='c' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.011 0.016' numOctaves='5' seed='7' stitchTiles='stitch' result='n'/%3E%3CfeColorMatrix type='matrix' values='0.78 0 0 0 0.40 0.78 0 0 0 0.42 0.78 0 0 0 0.43 0 0 0 0 1' in='n' result='cl'/%3E%3CfeGaussianBlur stdDeviation='2.5' in='cl'/%3E%3C/filter%3E%3C/defs%3E%3Crect width='512' height='512' filter='url(%23c)'/%3E%3C/svg%3E");
+    background-size: 512px 512px;
+    background-repeat: repeat;
+}
+
 #map-viewport {
-    background: radial-gradient(circle, #2a2c30 0%, #0d0c0b 100%); /* Немного сизого оттенка для пустоты */
+    background: transparent;
+}
+#main-map-image {
+    box-shadow: 0 0 38px 16px rgba(210, 216, 222, 0.72);
+    border-radius: 4px;
+}
+
+.fog-of-war-clouds {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 8;
+    background-color: #d3d9de;
+    background-image:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512' viewBox='0 0 512 512'%3E%3Cdefs%3E%3Cfilter id='c1' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.011 0.016' numOctaves='5' seed='7' stitchTiles='stitch' result='n'/%3E%3CfeColorMatrix type='matrix' values='0.82 0 0 0 0.39 0.82 0 0 0 0.41 0.82 0 0 0 0.42 0 0 0 0 1' in='n' result='cl'/%3E%3CfeGaussianBlur stdDeviation='2.5' in='cl'/%3E%3C/filter%3E%3C/defs%3E%3Crect width='512' height='512' filter='url(%23c1)'/%3E%3C/svg%3E"),
+        radial-gradient(ellipse at 30% 40%, rgba(255,255,255,0.45) 0%, transparent 55%);
+    background-size: 512px 512px, 100% 100%;
+    animation: driftFogClouds 55s linear infinite;
 }
