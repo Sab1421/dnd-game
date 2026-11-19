@@ -1175,7 +1175,12 @@ function ULV(lv) {
     RMC();
 }
 
-function ROS(){CM('char-sheet-modal');setTimeout(()=>OCS(),100);}
+function ROS() {
+    const cont = document.getElementById('char-sheet-content');
+    const savedScroll = cont ? cont.scrollTop : 0;
+    OCS();
+    if (cont) cont.scrollTop = savedScroll;
+}
 function CCS(){CM('char-sheet-modal');RMC();}
 function UCF(f,v){const cs=GC();if(!cs.length)return;if(f==='race')cs[PI].subrace='';cs[PI][f]=v;SC(cs);}
 
