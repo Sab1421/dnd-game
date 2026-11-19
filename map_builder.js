@@ -3,6 +3,8 @@
 // Поддержка реальных PNG-текстур из assets/, произвольных размеров
 // локации (от таверны до столицы) и процедурной рандомной генерации!
 // ================================================================
+window._mbStampCat = window._mbStampCat || 'nature';
+window._mbStampSearch = window._mbStampSearch || '';
 window._mbCols = window._mbCols || 20;
 window._mbRows = window._mbRows || 12;
 window._mbTool = window._mbTool || 'tile';          // 'tile' | 'brush3' | 'stamp' | 'eraser'
@@ -80,14 +82,42 @@ function MB_GET_LOADED_IMG(src) {
 function MB_PRELOAD_ALL_ASSETS() {
     const tiles = GET_MB_TILES();
     Object.values(tiles).forEach(t => { if (t.img) MB_GET_LOADED_IMG(t.img); });
-    GET_MB_STAMPS().forEach(s => { if (s.img) MB_GET_LOADED_IMG(s.img); });
 }
 
 // Преобразует старые сохранённые эмодзи-штампы в новые id штампов (для обратной совместимости)
+// Находит реальную PNG-картинку из assets.js (в том числе для рандомного генератора!)
+const MB_STAMP_KEYWORDS = {
+    pine: /(pine|tree|spruce|fir|forest)/i,
+    oak: /(oak|tree|bush|foliage|palm)/i,
+    rock: /(rock|boulder|stone)/i,
+    house: /(roof|house|building|cottage|hut|stall)/i,
+    tower: /(tower|watchpost|castle|fort|statue)/i,
+    door: /(door|gate|arch)/i,
+    table: /(table|desk|bench|chair)/i,
+    barrel: /(barrel|keg|bar|mug)/i,
+    crate: /(crate|box|sack|bag)/i,
+    chest: /(chest|treasure|gold|coin)/i,
+    campfire: /(campfire|fire|hearth|brazier)/i,
+    torch: /(torch|candle|lamp|lantern|light)/i,
+    bed: /(bed|bedroll|hammock|cot)/i,
+    altar: /(altar|shrine|statue|pillar)/i,
+    fountain: /(fountain|well|oasis|pool)/i,
+    bridge: /(bridge|plank|dock)/i,
+    web: /(web|cobweb|vine|root)/i,
+    bones: /(bone|skull|skeleton|grave)/i
+};
+
 function MB_FIND_STAMP_OBJ(stampVal) {
     if (!stampVal) return null;
     const list = GET_MB_STAMPS();
-    return list.find(s => s.id === stampVal || s.icon === stampVal) || { id: stampVal, icon: stampVal, label: '', img: '' };
+    const exact = list.find(s => s.id === stampVal || s.icon === stampVal);
+    if (exact) return exact;
+    const rx = MB_STAMP_KEYWORDS[stampVal];
+    if (rx) {
+        const matched = list.find(s => rx.test(s.id) || rx.test(s.label || ''));
+        if (matched) return matched;
+    }
+    return { id: stampVal, icon: stampVal, label: '', img: '' };
 }
 
 // --- ХРАНИЛИЩЕ И ИЗМЕНЕНИЕ РАЗМЕРА СЕТКИ ---
@@ -189,20 +219,38 @@ function RENDER_GM_MAP_BUILDER_UI() {
     }
 
     // Кнопки выбора объектов
-    let stampBtnsHTML = stamps.map(st => {
-        const isSel = (window._mbTool === 'stamp' && window._mbSelectedStamp === st.id);
-        const hasPng = st.img && window._mbImgCache[st.img]?.status === 'ok';
-        const previewHTML = hasPng
-            ? `<img src="${st.img}" style="width:20px; height:20px; object-fit:contain; vertical-align:middle;">`
-            : `<span style="font-size:1.05rem;">${st.icon}</span>`;
+    // Кнопки выбора объектов (с вкладками категорий и живым поиском)
+    const STAMP_CATS = [
+        { id: 'all',       label: '📦 Все' },
+        { id: 'nature',    label: '🌲 Природа' },
+        { id: 'city',      label: '🏠 Город' },
+        { id: 'furniture', label: '🪑 Мебель' },
+        { id: 'dungeon',   label: '🏰 Подземелье' },
+        { id: 'camp',      label: '⛺ Лагерь' },
+        { id: 'effects',   label: '✨ Эффекты' },
+        { id: 'other',     label: '🔹 Прочее' }
+    ];
 
-        return `
-            <button class="btn-small" title="${st.label}" onclick="MB_SELECT_STAMP('${st.id}')"
-                style="background:${isSel ? '#c9a96e' : '#181715'}; color:${isSel ? '#141210' : '#fff'}; border:1px solid ${isSel ? '#fff' : '#3d3830'}; padding:4px 8px; display:inline-flex; align-items:center; gap:5px; font-size:0.82rem;">
-                ${previewHTML} <span>${st.label}</span>
-            </button>
-        `;
+    const curCat = window._mbStampCat || 'nature';
+    const catTabsHTML = STAMP_CATS.map(c => {
+        const cnt = c.id === 'all' ? stamps.length : stamps.filter(s => (s.cat || 'other') === c.id).length;
+        if (c.id !== 'all' && cnt === 0) return '';
+        const active = curCat === c.id;
+        return `<button class="btn-small" style="padding:3px 8px; font-size:0.78rem; background:${active ? '#c9a96e' : '#22201d'}; color:${active ? '#141210' : '#ccc'};" onclick="window._mbStampCat='${c.id}'; RENDER_GM_MAP_BUILDER_UI();">${c.label} (${cnt})</button>`;
     }).join('');
+
+    let stampBtnsHTML = `
+        <div style="display:flex; gap:5px; flex-wrap:wrap; align-items:center; margin-bottom:6px; width:100%;">
+            ${catTabsHTML}
+            <input type="text" id="mb-stamp-search-inp" value="${(window._mbStampSearch || '').replace(/"/g, '&quot;')}"
+                   placeholder="🔍 Поиск объекта..."
+                   oninput="window._mbStampSearch=this.value; MB_RENDER_STAMP_GRID_ONLY();"
+                   style="width:175px; padding:3px 8px; font-size:0.8rem; text-align:left; margin-left:auto;">
+        </div>
+        <div id="mb-stamps-grid-wrap" style="display:flex; gap:5px; flex-wrap:wrap; max-height:145px; overflow-y:auto; padding:5px; background:#121110; border-radius:6px; border:1px solid #302c26; width:100%;">
+            ${MB_BUILD_STAMP_BUTTONS_HTML()}
+        </div>
+    `;
 
     const tModeBtn = (mode, label) => `
         <button class="btn-small" onclick="window._mbTool='${mode}'; RENDER_GM_MAP_BUILDER_UI();"
@@ -313,6 +361,43 @@ function RENDER_GM_MAP_BUILDER_UI() {
 
     INIT_MB_CANVAS_EVENTS();
     DRAW_MB_CANVAS();
+}
+
+function MB_BUILD_STAMP_BUTTONS_HTML() {
+    const stamps = GET_MB_STAMPS();
+    const curCat = window._mbStampCat || 'nature';
+    const q = (window._mbStampSearch || '').toLowerCase().trim();
+    const filtered = stamps.filter(st => {
+        const stCat = st.cat || 'other';
+        const catOk = (curCat === 'all') || (stCat === curCat);
+        const qOk = !q || (st.label || '').toLowerCase().includes(q) || (st.id || '').toLowerCase().includes(q);
+        return catOk && qOk;
+    });
+
+    if (filtered.length === 0) {
+        return '<span style="color:#777; font-size:0.84rem; padding:6px;">В этой категории ничего не найдено</span>';
+    }
+    let html = filtered.slice(0, 120).map(st => {
+        const isSel = (window._mbTool === 'stamp' && window._mbSelectedStamp === st.id);
+        const previewHTML = st.img
+            ? `<img src="${st.img}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='inline';" style="width:22px; height:22px; object-fit:contain;"><span style="display:none; font-size:1rem;">${st.icon}</span>`
+            : `<span style="font-size:1rem;">${st.icon}</span>`;
+        return `
+            <button class="btn-small" title="${st.label}" onclick="MB_SELECT_STAMP('${st.id}')"
+                style="background:${isSel ? '#c9a96e' : '#1b1917'}; color:${isSel ? '#141210' : '#fff'}; border:1px solid ${isSel ? '#fff' : '#3d3830'}; padding:4px 7px; display:inline-flex; align-items:center; gap:5px; font-size:0.78rem;">
+                ${previewHTML} <span>${st.label}</span>
+            </button>`;
+    }).join('');
+
+    if (filtered.length > 120) {
+        html += `<div style="width:100%; color:#aaa; font-size:0.78rem; padding:4px;">Показаны первые 120 из ${filtered.length} — уточните поиск сверху.</div>`;
+    }
+    return html;
+}
+
+function MB_RENDER_STAMP_GRID_ONLY() {
+    const box = document.getElementById('mb-stamps-grid-wrap');
+    if (box) box.innerHTML = MB_BUILD_STAMP_BUTTONS_HTML();
 }
 
 function MB_SELECT_TILE(tileKey) {
