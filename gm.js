@@ -889,16 +889,16 @@ window._gmFogBrushAction = window._gmFogBrushAction || 'erase'; // 'erase' (от
 window._gmFogBrushRadius = window._gmFogBrushRadius || 9;       // Размер кисти в % (5 | 9 | 15)
 window._isErasingFog = false;
 
-// Кэшируем бесшовную текстуру пушистых светло-серых облаков для Canvas-тумана
+// Бесшовная 100% непрозрачная текстура мягких облаков (без размытия краёв, поэтому швов нет!)
 const CLOUD_FOG_SVG_URL = "data:image/svg+xml," + encodeURIComponent(
     `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
         <defs>
             <filter id="c" x="0" y="0" width="100%" height="100%">
-                <feTurbulence type="fractalNoise" baseFrequency="0.011 0.016" numOctaves="5" seed="7" stitchTiles="stitch" result="n"/>
-                <feColorMatrix type="matrix" values="0.82 0 0 0 0.39  0.82 0 0 0 0.41  0.82 0 0 0 0.42  0 0 0 0 1" in="n" result="cl"/>
-                <feGaussianBlur stdDeviation="2.5" in="cl"/>
+                <feTurbulence type="fractalNoise" baseFrequency="0.008 0.011" numOctaves="3" seed="7" stitchTiles="stitch" result="n"/>
+                <feColorMatrix type="matrix" values="0.86 0 0 0 0.41  0.86 0 0 0 0.43  0.86 0 0 0 0.45  0 0 0 0 1" in="n"/>
             </filter>
         </defs>
+        <rect width="512" height="512" fill="#d4dae0"/>
         <rect width="512" height="512" filter="url(#c)"/>
     </svg>`
 );
@@ -1241,7 +1241,7 @@ function RENDER_MAP_AREA() {
     } else if (st.fogMode === 'dynamic') {
         const fogOpacity = isGM ? '0.62' : '1';
         dynamicFogCanvasHTML = `
-            <canvas id="fog-canvas" style="position:absolute; top:0; left:0; width:100%; height:100%; z-index:7; pointer-events:none; opacity:${fogOpacity};"></canvas>
+            <canvas id="fog-canvas" style="position:absolute; top:-2px; left:-2px; width:calc(100% + 4px); height:calc(100% + 4px); z-index:7; pointer-events:none; opacity:${fogOpacity};"></canvas>
         `;
         setTimeout(() => DRAW_DYNAMIC_FOG(st.revealedAreas, isGM), 30);
     }
@@ -1542,8 +1542,8 @@ function DRAW_DYNAMIC_FOG(revealedAreas, isGM) {
     const vp = document.getElementById('map-viewport');
     if (!canvas || !vp) return;
 
-    const w = vp.clientWidth || 800;
-    const h = vp.clientHeight || 600;
+    const w = Math.ceil(vp.clientWidth) + 4 || 800;
+    const h = Math.ceil(vp.clientHeight) + 4 || 600;
     if (canvas.width !== w || canvas.height !== h) {
         canvas.width = w;
         canvas.height = h;
@@ -1553,18 +1553,21 @@ function DRAW_DYNAMIC_FOG(revealedAreas, isGM) {
     ctx.clearRect(0, 0, w, h);
     ctx.globalCompositeOperation = 'source-over';
 
-    // 1. Заливаем холст бесшовными пушистыми светло-серыми облаками (как на твоём референсе!)
+    // 1. Плотная непрозрачная подложка (исключает любые щели и просвечивание карты)
+    ctx.fillStyle = '#d4dae0';
+    ctx.fillRect(0, 0, w, h);
+
+    // 2. Бесшовная текстура мягких светло-серых облаков
     const cloudImg = ENSURE_CLOUD_FOG_IMG();
     if (cloudImg) {
         const pat = ctx.createPattern(cloudImg, 'repeat');
-        ctx.fillStyle = pat || '#cfd5da';
-        ctx.fillRect(0, 0, w, h);
-    } else {
-        ctx.fillStyle = '#cfd5da';
-        ctx.fillRect(0, 0, w, h);
+        if (pat) {
+            ctx.fillStyle = pat;
+            ctx.fillRect(0, 0, w, h);
+        }
     }
 
-    // 2. Мягко вырезаем открытые Мастером участки с плавными облачными краями
+    // 3. Мягко вырезаем открытые Мастером участки
     if (revealedAreas && revealedAreas.length > 0) {
         ctx.globalCompositeOperation = 'destination-out';
         revealedAreas.forEach(area => {
