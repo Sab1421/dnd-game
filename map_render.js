@@ -758,3 +758,441 @@ MB_BUILD_STAMP_BUTTONS_HTML = function() {
     }
     return html;
 };
+
+// ================================================================
+// 🚀 ФИКС ПРОИЗВОДИТЕЛЬНОСТИ (УБИРАЕТ 1500+ БЛЮРОВ И ЛАГИ)
+// ================================================================
+(function INSTALL_MAP_RENDER_TURBO() {
+    window._mbStampMapCache = null;
+    window._mbImgLoadVer = 0;
+
+    // 1. Мгновенный поиск спрайта O(1) вместо перебора 700 элементов
+    MB_FIND_STAMP_OBJ = function(stampVal) {
+        if (!stampVal) return null;
+        if (!window._mbStampMapCache) {
+            const m = new Map();
+            const raw = (window.SITE_ASSETS && Array.isArray(window.SITE_ASSETS.builderStamps)) ? window.SITE_ASSETS.builderStamps : [];
+            for (let i = 0; i < raw.length; i++) {
+                const s = raw[i];
+                if (s && !MB_IS_BROKEN_MACOS_ENTRY(s)) m.set(s.id, s);
+            }
+            window._mbStampMapCache = m;
+        }
+        return window._mbStampMapCache.get(stampVal) || null;
+    };
+
+    // 2. Пакетная перерисовка при догрузке картинок (не дёргаем холст 30 раз подряд)
+    MB_GET_LOADED_IMG = function(src) {
+        if (!src) return null;
+        const entry = window._mbImgCache[src];
+        if (entry) return entry.status === 'ok' ? entry.img : null;
+
+        const img = new Image();
+        img.decoding = 'async';
+        window._mbImgCache[src] = { status: 'loading', img };
+        img.onload = function() {
+            window._mbImgCache[src].status = 'ok';
+            window._mbImgLoadVer++;
+            for (const k of Object.keys(window._mbPatternCache)) {
+                if (k.includes(src)) delete window._mbPatternCache[k];
+            }
+            if (document.getElementById('mb-editor-canvas') && !window._mbRedrawTimer) {
+                window._mbRedrawTimer = setTimeout(() => {
+                    window._mbRedrawTimer = null;
+                    requestAnimationFrame(() => DRAW_MB_CANVAS());
+                }, 100);
+            }
+        };
+        img.onerror = function() {
+            window._mbImgCache[src].status = 'error';
+        };
+        img.src = src;
+        return null;
+    };
+
+    function hashCells(cells) {
+        let h = 2166136261;
+        for (let i = 0; i < cells.length; i++) {
+            const t = cells[i].t;
+            for (let j = 0; j < t.length; j++) { h ^= t.charCodeAt(j); h = Math.imul(h, 16777619); }
+            h ^= 44; h = Math.imul(h, 16777619);
+        }
+        return h >>> 0;
+    }
+
+    function hashObjs(objs) {
+        let h = 2166136261 ^ objs.length;
+        for (let i = 0; i < objs.length; i++) {
+            const o = objs[i];
+            h ^= Math.round(o.x * 100) ^ (Math.round(o.y * 100) << 7) ^ (Math.round((o.scale || 1) * 100) << 13) ^ ((o.rot || 0) << 19);
+            h = Math.imul(h, 16777619);
+            const id = o.id || '';
+            if (id.length) { h ^= id.charCodeAt(0) ^ (id.charCodeAt(id.length - 1) << 8); h = Math.imul(h, 16777619); }
+        }
+        return h >>> 0;
+    }
+
+    // 3. Быстрый рендер: 1 блюр на весь слой вместо 500 + кэш земли и готовой карты
+    DRAW_MB_CANVAS = function(isExport = false) {
+        const canvas = document.getElementById('mb-editor-canvas');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+
+        const data = window._mbData || GET_MB_DATA();
+        const tiles = GET_MB_TILES();
+        const cols = data.cols, rows = data.rows;
+        const W = canvas.width, H = canvas.height;
+        const cellW = W / cols, cellH = H / rows;
+        const lightKey = data.lighting || window._mbLighting || 'day';
+        const lightCfg = MB_LIGHTING_MODES[lightKey] || MB_LIGHTING_MODES.day;
+        const postFx = !!window._mbPostFx;
+        const showGrid = !!window._mbShowGrid;
+
+        const cHash = hashCells(data.cells);
+        const oHash = hashObjs(data.objects || []);
+        const terrainKey = `${cols}x${rows}|${W}x${H}|${cHash}|${postFx ? 1 : 0}|${showGrid ? 1 : 0}|${window._mbImgLoadVer}`;
+        const fullKey = `${terrainKey}|${oHash}|${lightKey}`;
+
+        const drawObjItem = (targetCtx, item, lightSources, ghostAlpha = 1.0) => {
+            const { o, stObj, meta } = item;
+            const img = stObj.img ? MB_GET_LOADED_IMG(stObj.img) : null;
+            if (!img || img.naturalWidth <= 0) return;
+
+            const cx = o.x * cellW, cy = o.y * cellH;
+            const targetMaxPx = cellW * meta.baseCells * (o.scale || 1.0);
+
+            if (meta.glow && ghostAlpha === 1.0 && lightSources) {
+                lightSources.push({
+                    x: cx, y: cy, color: meta.glow.color,
+                    r: cellW * meta.glow.radius * (o.scale || 1.0),
+                    intensity: meta.glow.intensity
+                });
+            }
+
+            if (postFx && ghostAlpha === 1.0 && meta.layer >= 1 && meta.layer <= 2) {
+                const sr = targetMaxPx * (meta.layer === 2 ? 0.46 : 0.36);
+                const sx = cx + (meta.layer === 2 ? cellW * 0.16 : cellW * 0.06);
+                const sy = cy + (meta.layer === 2 ? cellH * 0.18 : cellH * 0.07);
+                const g = targetCtx.createRadialGradient(sx, sy, sr * 0.12, sx, sy, sr);
+                g.addColorStop(0, meta.layer === 2 ? 'rgba(0,0,0,0.44)' : 'rgba(0,0,0,0.34)');
+                g.addColorStop(1, 'rgba(0,0,0,0)');
+                targetCtx.fillStyle = g;
+                targetCtx.beginPath(); targetCtx.arc(sx, sy, sr, 0, Math.PI * 2); targetCtx.fill();
+            }
+
+            targetCtx.save();
+            if (ghostAlpha !== 1.0) targetCtx.globalAlpha = ghostAlpha;
+            targetCtx.translate(cx, cy);
+            if (o.rot) targetCtx.rotate((o.rot * Math.PI) / 180);
+
+            const aspect = img.naturalWidth / img.naturalHeight;
+            const drawW = aspect >= 1 ? targetMaxPx : targetMaxPx * aspect;
+            const drawH = aspect >= 1 ? targetMaxPx / aspect : targetMaxPx;
+            targetCtx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
+            targetCtx.restore();
+        };
+
+        // Если карта не менялась (например, двигаем мышку) — просто копируем готовый кадр за 0.5 мс!
+        if (!window._mbFullMapCache) window._mbFullMapCache = document.createElement('canvas');
+        const fullCanvas = window._mbFullMapCache;
+
+        if (window._mbFullMapCacheKey !== fullKey || fullCanvas.width !== W || fullCanvas.height !== H) {
+            fullCanvas.width = W;
+            fullCanvas.height = H;
+            const fctx = fullCanvas.getContext('2d');
+            fctx.imageSmoothingEnabled = true;
+            fctx.imageSmoothingQuality = 'high';
+
+            const fillStyleForTile = (targetCtx, tileKey) => {
+                const cfg = tiles[tileKey] || tiles.grass || { bg: '#34592e' };
+                const img = (cfg.img && !window._mbBrokenTileKeys[tileKey]) ? MB_GET_LOADED_IMG(cfg.img) : null;
+                if (img) return MB_GET_TILE_PATTERN(targetCtx, tileKey, img, cfg.img, cellW);
+                return MB_BUILD_PROCEDURAL_PATTERN(targetCtx, tileKey, cfg, cellW);
+            };
+            const isWallAt = (c, r) => (r >= 0 && r < rows && c >= 0 && c < cols && /^wall/.test(data.cells[r * cols + c].t));
+
+            // КЭШ ЗЕМЛИ: пересобираем только если реально поменялись клетки
+            if (!window._mbTerrainCache) window._mbTerrainCache = document.createElement('canvas');
+            const tCanvas = window._mbTerrainCache;
+            if (window._mbTerrainCacheKey !== terrainKey || tCanvas.width !== W || tCanvas.height !== H) {
+                tCanvas.width = W;
+                tCanvas.height = H;
+                const tctx = tCanvas.getContext('2d');
+
+                const counts = {};
+                for (let i = 0; i < data.cells.length; i++) {
+                    const k = data.cells[i].t;
+                    counts[k] = (counts[k] || 0) + 1;
+                }
+                let baseTileKey = 'grass', maxC = -1;
+                for (const [k, v] of Object.entries(counts)) {
+                    if (!/^wall/.test(k) && v > maxC) { maxC = v; baseTileKey = k; }
+                }
+
+                tctx.fillStyle = fillStyleForTile(tctx, baseTileKey);
+                tctx.fillRect(0, 0, W, H);
+
+                // Маленькая маска 1/4 разрешения -> 1 блюр на слой вместо 500!
+                const mw = Math.max(64, Math.round(W * 0.25));
+                const mh = Math.max(48, Math.round(H * 0.25));
+                if (!window._mbMaskCanvas) window._mbMaskCanvas = document.createElement('canvas');
+                const maskCanvas = window._mbMaskCanvas;
+                if (maskCanvas.width !== mw || maskCanvas.height !== mh) { maskCanvas.width = mw; maskCanvas.height = mh; }
+                const mctx = maskCanvas.getContext('2d');
+                const mcW = mw / cols, mcH = mh / rows;
+
+                if (!window._mbLayerCanvas) window._mbLayerCanvas = document.createElement('canvas');
+                const layerCanvas = window._mbLayerCanvas;
+                if (layerCanvas.width !== W || layerCanvas.height !== H) { layerCanvas.width = W; layerCanvas.height = H; }
+                const lyr = layerCanvas.getContext('2d');
+
+                const presentTiles = Object.keys(counts)
+                    .filter(k => k !== baseTileKey && !/^wall/.test(k))
+                    .sort((a, b) => MB_TILE_PRIORITY(a) - MB_TILE_PRIORITY(b));
+
+                for (const tKey of presentTiles) {
+                    const isStruct = MB_IS_STRUCTURAL_TILE(tKey);
+                    const isLiquid = /^(water|lava|abyss)/.test(tKey);
+
+                    if (isStruct) {
+                        tctx.save();
+                        tctx.fillStyle = fillStyleForTile(tctx, tKey);
+                        for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+                            if (data.cells[r * cols + c].t === tKey) {
+                                tctx.fillRect(c * cellW - 0.5, r * cellH - 0.5, cellW + 1, cellH + 1);
+                            }
+                        }
+                        tctx.strokeStyle = 'rgba(0, 0, 0, 0.28)';
+                        tctx.lineWidth = Math.max(1.5, cellW * 0.05);
+                        tctx.beginPath();
+                        for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+                            if (data.cells[r * cols + c].t !== tKey) continue;
+                            const x = c * cellW, y = r * cellH;
+                            if (r > 0 && data.cells[(r - 1) * cols + c].t !== tKey && !isWallAt(c, r - 1)) { tctx.moveTo(x, y); tctx.lineTo(x + cellW, y); }
+                            if (r < rows - 1 && data.cells[(r + 1) * cols + c].t !== tKey && !isWallAt(c, r + 1)) { tctx.moveTo(x, y + cellH); tctx.lineTo(x + cellW, y + cellH); }
+                            if (c > 0 && data.cells[r * cols + c - 1].t !== tKey && !isWallAt(c - 1, r)) { tctx.moveTo(x, y); tctx.lineTo(x, y + cellH); }
+                            if (c < cols - 1 && data.cells[r * cols + c + 1].t !== tKey && !isWallAt(c + 1, r)) { tctx.moveTo(x + cellW, y); tctx.lineTo(x + cellW, y + cellH); }
+                        }
+                        tctx.stroke();
+                        tctx.restore();
+                        continue;
+                    }
+
+                    // Влажный берег: 1 проход на маске + 1 блюр
+                    if (isLiquid) {
+                        mctx.clearRect(0, 0, mw, mh);
+                        mctx.fillStyle = /^lava/.test(tKey) ? 'rgba(28, 10, 4, 0.85)' : (/^water/.test(tKey) ? 'rgba(24, 20, 12, 0.45)' : 'rgba(0,0,0,0.85)');
+                        mctx.beginPath();
+                        for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+                            if (data.cells[r * cols + c].t !== tKey) continue;
+                            const cx = (c + 0.5) * mcW, cy = (r + 0.5) * mcH, rad = mcW * 0.80;
+                            mctx.moveTo(cx + rad, cy);
+                            mctx.arc(cx, cy, rad, 0, Math.PI * 2);
+                        }
+                        mctx.fill();
+                        tctx.save();
+                        tctx.filter = `blur(${Math.max(3, Math.round(cellW * 0.14))}px)`;
+                        tctx.drawImage(maskCanvas, 0, 0, W, H);
+                        tctx.restore();
+                    }
+
+                    // Органический слой: 1 проход на маске + 1 блюр
+                    mctx.clearRect(0, 0, mw, mh);
+                    mctx.fillStyle = '#000';
+                    mctx.beginPath();
+                    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+                        if (data.cells[r * cols + c].t !== tKey) continue;
+                        const x = c * mcW, y = r * mcH, rad = mcW * 0.65;
+                        mctx.rect(x + mcW * 0.05, y + mcH * 0.05, mcW * 0.90, mcH * 0.90);
+                        mctx.moveTo(x + mcW * 0.5 + rad, y + mcH * 0.5);
+                        mctx.arc(x + mcW * 0.5, y + mcH * 0.5, rad, 0, Math.PI * 2);
+                    }
+                    mctx.fill();
+
+                    lyr.clearRect(0, 0, W, H);
+                    lyr.save();
+                    lyr.globalCompositeOperation = 'source-over';
+                    lyr.filter = `blur(${Math.max(2, Math.round(cellW * (isLiquid ? 0.09 : 0.17)))}px)`;
+                    lyr.drawImage(maskCanvas, 0, 0, W, H);
+                    lyr.filter = 'none';
+                    lyr.globalCompositeOperation = 'source-in';
+                    lyr.fillStyle = fillStyleForTile(lyr, tKey);
+                    lyr.fillRect(0, 0, W, H);
+                    lyr.restore();
+                    tctx.drawImage(layerCanvas, 0, 0);
+
+                    // Глубина воды: 1 блюр вместо 200
+                    if (/^water/.test(tKey) && postFx) {
+                        mctx.clearRect(0, 0, mw, mh);
+                        mctx.fillStyle = 'rgba(4, 22, 48, 0.36)';
+                        mctx.beginPath();
+                        for (let r = 1; r < rows - 1; r++) for (let c = 1; c < cols - 1; c++) {
+                            if (data.cells[r * cols + c].t === tKey &&
+                                data.cells[(r - 1) * cols + c].t === tKey && data.cells[(r + 1) * cols + c].t === tKey &&
+                                data.cells[r * cols + c - 1].t === tKey && data.cells[r * cols + c + 1].t === tKey) {
+                                const cx = (c + 0.5) * mcW, cy = (r + 0.5) * mcH, rad = mcW * 0.60;
+                                mctx.moveTo(cx + rad, cy); mctx.arc(cx, cy, rad, 0, Math.PI * 2);
+                            }
+                        }
+                        mctx.fill();
+                        tctx.save();
+                        tctx.filter = `blur(${Math.max(3, Math.round(cellW * 0.16))}px)`;
+                        tctx.drawImage(maskCanvas, 0, 0, W, H);
+                        tctx.restore();
+                    }
+                }
+
+                if (postFx) {
+                    tctx.fillStyle = MB_GET_ORGANIC_NOISE_PATTERN(tctx);
+                    tctx.fillRect(0, 0, W, H);
+                }
+
+                // Тени от стен
+                for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+                    if (isWallAt(c, r)) continue;
+                    const x = c * cellW, y = r * cellH;
+                    if (isWallAt(c, r - 1)) {
+                        const g = tctx.createLinearGradient(x, y, x, y + cellH * 0.70);
+                        g.addColorStop(0, 'rgba(0,0,0,0.65)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+                        tctx.fillStyle = g; tctx.fillRect(x, y, cellW, cellH * 0.70);
+                    }
+                    if (isWallAt(c - 1, r)) {
+                        const g = tctx.createLinearGradient(x, y, x + cellW * 0.55, y);
+                        g.addColorStop(0, 'rgba(0,0,0,0.54)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+                        tctx.fillStyle = g; tctx.fillRect(x, y, cellW * 0.55, cellH);
+                    }
+                }
+
+                // Сетка
+                if (showGrid) {
+                    tctx.strokeStyle = 'rgba(240, 215, 165, 0.11)';
+                    tctx.lineWidth = 1;
+                    tctx.beginPath();
+                    for (let c = 0; c <= cols; c++) { tctx.moveTo(c * cellW + 0.5, 0); tctx.lineTo(c * cellW + 0.5, H); }
+                    for (let r = 0; r <= rows; r++) { tctx.moveTo(0, r * cellH + 0.5); tctx.lineTo(W, r * cellH + 0.5); }
+                    tctx.stroke();
+                }
+
+                window._mbTerrainCacheKey = terrainKey;
+            }
+
+            fctx.drawImage(tCanvas, 0, 0);
+
+            // Объекты и 3D-стены
+            const lightSources = [];
+            const layers = [[], [], [], []];
+            for (const o of (data.objects || [])) {
+                const stObj = MB_FIND_STAMP_OBJ(o.id);
+                if (!stObj) continue;
+                const meta = MB_ANALYZE_STAMP_META(stObj);
+                layers[meta.layer].push({ o, stObj, meta });
+            }
+
+            layers[0].forEach(i => drawObjItem(fctx, i, lightSources));
+
+            // Стены
+            fctx.save();
+            for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+                const wKey = data.cells[r * cols + c].t;
+                if (!/^wall/.test(wKey)) continue;
+                const x = c * cellW, y = r * cellH;
+                fctx.fillStyle = fillStyleForTile(fctx, wKey);
+                fctx.fillRect(x, y, cellW + 0.5, cellH + 0.5);
+                fctx.fillStyle = 'rgba(10, 8, 6, 0.32)';
+                fctx.fillRect(x, y, cellW, cellH);
+
+                fctx.strokeStyle = 'rgba(245, 226, 196, 0.36)';
+                fctx.lineWidth = 2;
+                if (!isWallAt(c, r - 1)) { fctx.beginPath(); fctx.moveTo(x, y + 1); fctx.lineTo(x + cellW, y + 1); fctx.stroke(); }
+                if (!isWallAt(c - 1, r)) { fctx.beginPath(); fctx.moveTo(x + 1, y); fctx.lineTo(x + 1, y + cellH); fctx.stroke(); }
+
+                fctx.strokeStyle = 'rgba(0, 0, 0, 0.88)';
+                fctx.lineWidth = 3;
+                if (!isWallAt(c, r + 1)) { fctx.beginPath(); fctx.moveTo(x, y + cellH - 1); fctx.lineTo(x + cellW, y + cellH - 1); fctx.stroke(); }
+                if (!isWallAt(c + 1, r)) { fctx.beginPath(); fctx.moveTo(x + cellW - 1, y); fctx.lineTo(x + cellW - 1, y + cellH); fctx.stroke(); }
+            }
+            fctx.restore();
+
+            layers[1].forEach(i => drawObjItem(fctx, i, lightSources));
+            layers[2].forEach(i => drawObjItem(fctx, i, lightSources));
+            layers[3].forEach(i => drawObjItem(fctx, i, lightSources));
+
+            for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+                if (/^lava/.test(data.cells[r * cols + c].t) && (r + c) % 2 === 0) {
+                    lightSources.push({ x: (c + 0.5) * cellW, y: (r + 0.5) * cellH, color: [255, 118, 36], r: cellW * 2.8, intensity: 0.78 });
+                }
+            }
+
+            // Свет и виньетка (на 1/3 разрешения — быстро и мягко)
+            if (postFx) {
+                const lw = Math.max(120, Math.round(W / 3)), lh = Math.max(80, Math.round(H / 3));
+                const sX = lw / W, sY = lh / H;
+                if (!window._mbLightCanvas) window._mbLightCanvas = document.createElement('canvas');
+                const lc = window._mbLightCanvas;
+                if (lc.width !== lw || lc.height !== lh) { lc.width = lw; lc.height = lh; }
+                const lctx = lc.getContext('2d');
+
+                const [ar, ag, ab] = lightCfg.ambient;
+                lctx.globalCompositeOperation = 'source-over';
+                lctx.fillStyle = `rgb(${ar}, ${ag}, ${ab})`;
+                lctx.fillRect(0, 0, lw, lh);
+
+                if (lightSources.length > 0) {
+                    lctx.globalCompositeOperation = 'lighter';
+                    for (const ls of lightSources) {
+                        const lx = ls.x * sX, ly = ls.y * sY, lr = ls.r * sX;
+                        const [cr, cg, cb] = ls.color;
+                        const g = lctx.createRadialGradient(lx, ly, lr * 0.05, lx, ly, lr);
+                        g.addColorStop(0, `rgba(${cr}, ${cg}, ${cb}, ${Math.min(1, ls.intensity)})`);
+                        g.addColorStop(0.48, `rgba(${cr}, ${cg}, ${cb}, ${ls.intensity * 0.45})`);
+                        g.addColorStop(1, 'rgba(0,0,0,0)');
+                        lctx.fillStyle = g;
+                        lctx.beginPath(); lctx.arc(lx, ly, lr, 0, Math.PI * 2); lctx.fill();
+                    }
+                }
+
+                fctx.save();
+                fctx.globalCompositeOperation = 'multiply';
+                fctx.drawImage(lc, 0, 0, W, H);
+
+                if (lightSources.length > 0 && lightCfg.bloom > 0) {
+                    fctx.globalCompositeOperation = 'screen';
+                    for (const ls of lightSources) {
+                        const [cr, cg, cb] = ls.color;
+                        const br = ls.r * 0.62;
+                        const g = fctx.createRadialGradient(ls.x, ls.y, br * 0.04, ls.x, ls.y, br);
+                        g.addColorStop(0, `rgba(${cr}, ${cg}, ${cb}, ${lightCfg.bloom * ls.intensity})`);
+                        g.addColorStop(1, 'rgba(0,0,0,0)');
+                        fctx.fillStyle = g;
+                        fctx.beginPath(); fctx.arc(ls.x, ls.y, br, 0, Math.PI * 2); fctx.fill();
+                    }
+                }
+
+                fctx.globalCompositeOperation = 'source-over';
+                const vig = fctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.hypot(W, H) * 0.56);
+                vig.addColorStop(0, 'rgba(0,0,0,0)');
+                vig.addColorStop(1, `rgba(0,0,0,${lightCfg.vignette})`);
+                fctx.fillStyle = vig;
+                fctx.fillRect(0, 0, W, H);
+                fctx.restore();
+            }
+
+            window._mbFullMapCacheKey = fullKey;
+        }
+
+        // Выводим готовый кэш на экран
+        ctx.clearRect(0, 0, W, H);
+        ctx.drawImage(fullCanvas, 0, 0);
+
+        // Предпросмотр объекта под курсором (без перерисовки всей карты!)
+        if (!isExport && window._mbTool === 'stamp' && window._mbHoverPos && window._mbSelectedStamp) {
+            const stObj = MB_FIND_STAMP_OBJ(window._mbSelectedStamp);
+            if (stObj) {
+                const meta = MB_ANALYZE_STAMP_META(stObj);
+                const gx = window._mbSnapGrid ? (window._mbHoverPos.col + 0.5) : window._mbHoverPos.gx;
+                const gy = window._mbSnapGrid ? (window._mbHoverPos.row + 0.5) : window._mbHoverPos.gy;
+                drawObjItem(ctx, { o: { id: window._mbSelectedStamp, x: gx, y: gy, scale: window._mbStampScale || 1, rot: window._mbStampRot || 0 }, stObj, meta }, null, 0.62);
+            }
+        }
+    };
+})();
