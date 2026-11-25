@@ -707,3 +707,54 @@ DRAW_MB_CANVAS = function(isExport = false) {
         }
     }
 };
+
+// ================================================================
+// ⚡ ОПТИМИЗАЦИЯ ПРОГРУЗКИ (ЛЕНИВАЯ ЗАГРУЗКА ДЛЯ ТЕЛЕФОНОВ И WI-FI)
+// ================================================================
+window._mbTileCat = 'nature'; // Не открываем все 64 пола сразу при входе
+window._mbStampPageLimit = 36; // Показываем по 36 объектов вместо 150 за раз
+
+// Загружаем только те полы, которые РЕАЛЬНО есть на текущей карте
+MB_PRELOAD_ALL_TILES = function() {
+    const tiles = GET_MB_TILES();
+    const data = window._mbData || GET_MB_DATA();
+    const usedKeys = new Set((data.cells || []).map(c => c.t));
+    usedKeys.forEach(k => {
+        if (tiles[k] && tiles[k].img && !window._mbBrokenTileKeys[k]) {
+            MB_GET_LOADED_IMG(tiles[k].img);
+        }
+    });
+};
+
+const _ORIG_STAMP_BTNS_FAST = MB_BUILD_STAMP_BUTTONS_HTML;
+MB_BUILD_STAMP_BUTTONS_HTML = function() {
+    const stamps = GET_UNIQUE_MB_STAMPS();
+    const curCat = window._mbStampCat || 'nature';
+    const q = (window._mbStampSearch || '').toLowerCase().trim();
+    const filtered = stamps.filter(st => {
+        const catOk = (curCat === 'all') || ((st.cat || 'other') === curCat);
+        const qOk = !q || (st.label || '').toLowerCase().includes(q) || (st.id || '').toLowerCase().includes(q);
+        return catOk && qOk;
+    });
+
+    if (!filtered.length) return '<div style="grid-column:1/-1; color:#777; font-size:0.82rem; padding:14px; text-align:center;">Ничего не найдено</div>';
+
+    const limit = window._mbStampPageLimit || 36;
+    let html = filtered.slice(0, limit).map(st => {
+        const isSel = (window._mbTool === 'stamp' && window._mbSelectedStamp === st.id);
+        const previewHTML = st.img
+            ? `<img src="${st.img}" loading="lazy" decoding="async" onerror="this.closest('button').style.display='none';" style="width:44px; height:44px; object-fit:contain; filter:drop-shadow(0 2px 3px rgba(0,0,0,0.8));">`
+            : `<span style="font-size:1.4rem;">${st.icon}</span>`;
+        return `
+            <button title="${st.label}" onclick="MB_SELECT_STAMP('${st.id}')"
+                style="background:${isSel ? '#3a301e' : '#191816'}; color:${isSel ? '#f6d899' : '#d6d2c9'}; border:2px solid ${isSel ? '#c9a96e' : '#2f2b25'}; border-radius:8px; padding:5px 4px; display:flex; flex-direction:column; align-items:center; justify-content:space-between; gap:3px; min-height:74px; cursor:pointer; box-shadow:none;">
+                ${previewHTML}
+                <span style="font-size:0.68rem; font-weight:normal; line-height:1.1; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${st.label}</span>
+            </button>`;
+    }).join('');
+
+    if (filtered.length > limit) {
+        html += `<button class="btn-small" style="grid-column:1/-1; padding:7px; font-size:0.78rem; background:#2b251c; color:#e6c88c; border:1px solid #c9a96e;" onclick="window._mbStampPageLimit+=36; MB_RENDER_STAMP_GRID_ONLY();">⬇️ Показать ещё (${filtered.length - limit} осталось)</button>`;
+    }
+    return html;
+};
