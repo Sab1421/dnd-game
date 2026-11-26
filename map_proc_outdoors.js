@@ -843,3 +843,648 @@
         RENDER_GM_MAP_BUILDER_UI();
     };
 })();
+
+// ================================================================
+// 👑❄️ ЧАСТЬ 3: ЛОГИЧНЫЕ ПРОЦЕДУРНЫЕ ГОРОД И СНЕЖНЫЙ ПЕРЕВАЛ (V5)
+// ================================================================
+(function INSTALL_CITY_AND_SNOW_V5() {
+    const _PREV_GEN = MB_GENERATE_RANDOM;
+    const TARGETS = ['city', 'snow'];
+
+    MB_GENERATE_RANDOM = function(biome) {
+        const allBiomes = ['tavern', 'city', 'battlefield', 'forest', 'dungeon', 'mansion', 'dwarven', 'pirate', 'desert', 'fey', 'eastern', 'warcamp', 'snow'];
+        const picked = (biome === 'random' || !biome) ? MB_PICK_NEXT_VARIANT('_global', allBiomes) : biome;
+        if (!TARGETS.includes(picked)) return _PREV_GEN(picked);
+
+        MB_PUSH_UNDO();
+        const cols = window._mbCols, rows = window._mbRows;
+
+        const T = {
+            grass:     Math.random() < 0.25 ? MB_PICK_TILE_FAMILY('moss', 'grass') : MB_PICK_TILE_FAMILY('grass', 'grass'),
+            dirt:      MB_PICK_TILE_FAMILY('dirt', 'dirt'),
+            stone:     MB_PICK_TILE_FAMILY('stone', 'stone'),
+            flagstone: MB_PICK_TILE_FAMILY('flagstone', 'stone'),
+            cobble:    MB_PICK_TILE_FAMILY('cobble', 'stone'),
+            wall:      MB_PICK_TILE_FAMILY('wall', 'wall'),
+            snow:      MB_PICK_TILE_FAMILY('snow', 'snow'),
+            ice:       MB_PICK_TILE_FAMILY('ice', 'snow'),
+            water:     'water'
+        };
+        // Гарантируем, чтобы улицы и кварталы города отличались по текстуре
+        if (T.flagstone === T.cobble) T.flagstone = T.stone;
+
+        const lightMap = {
+            city: ['day', 'day', 'sunset', 'night'],
+            snow: ['day', 'day', 'night']
+        };
+        window._mbLighting = MB_PICK(lightMap[picked]);
+        const data = CREATE_EMPTY_MB_DATA(picked === 'city' ? T.cobble : T.snow, cols, rows);
+        data.lighting = window._mbLighting;
+
+        const inB = (c, r) => c >= 0 && c < cols && r >= 0 && r < rows;
+        const getT = (c, r) => inB(c, r) ? data.cells[r * cols + c].t : null;
+        const setT = (c, r, t) => { if (inB(c, r)) data.cells[r * cols + c].t = t; };
+        const isWall = (c, r) => /^wall/.test(getT(c, r) || '');
+        const isWater = (c, r) => /^water/.test(getT(c, r) || '');
+
+        const fillRect = (x1, y1, x2, y2, t, onlyOn = null) => {
+            for (let r = Math.max(0, Math.floor(y1)); r <= Math.min(rows - 1, Math.floor(y2)); r++)
+                for (let c = Math.max(0, Math.floor(x1)); c <= Math.min(cols - 1, Math.floor(x2)); c++) {
+                    if (onlyOn && !onlyOn.includes(getT(c, r))) continue;
+                    setT(c, r, t);
+                }
+        };
+
+        const phaseA = MB_RAND_FLOAT(0, 6.28), phaseB = MB_RAND_FLOAT(0, 6.28);
+        const paintBlob = (cx, cy, rx, ry, tile, wob = 0.16, onlyOn = null) => {
+            const rMin = Math.max(0, Math.floor(cy - ry - 3)), rMax = Math.min(rows - 1, Math.ceil(cy + ry + 3));
+            const cMin = Math.max(0, Math.floor(cx - rx - 3)), cMax = Math.min(cols - 1, Math.ceil(cx + rx + 3));
+            for (let r = rMin; r <= rMax; r++) for (let c = cMin; c <= cMax; c++) {
+                if (onlyOn && !onlyOn.includes(getT(c, r))) continue;
+                const ang = Math.atan2(r - cy, c - cx);
+                const noise = Math.sin(ang * 3 + phaseA) * wob + Math.cos(ang * 5 + phaseB) * (wob * 0.45);
+                const d = Math.hypot((c - cx) / Math.max(0.6, rx), (r - cy) / Math.max(0.6, ry));
+                if (d <= 1.0 + noise) setT(c, r, tile);
+            }
+        };
+
+        const placedZones = [];
+        const canPlace = (x, y, minDist = 1.0) => {
+            if (!inB(Math.floor(x), Math.floor(y))) return false;
+            return !placedZones.some(z => Math.hypot(z.x - x, z.y - y) < Math.max(minDist, z.r));
+        };
+        const addObj = (poolOrId, x, y, scale = 1.0, rot = 0, reserve = 0) => {
+            const id = Array.isArray(poolOrId) ? MB_PICK(poolOrId) : poolOrId;
+            if (!id) return false;
+            const stObj = MB_FIND_STAMP_OBJ(id);
+            if (!stObj) return false;
+            if (stObj.img) MB_GET_LOADED_IMG(stObj.img, false);
+            data.objects.push({ id, x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100, scale, rot: Math.round(rot) });
+            if (reserve > 0) placedZones.push({ x, y, r: reserve });
+            return true;
+        };
+
+        const P = {
+            roofTile:    MB_GET_POOL(/^city_roof_tiled_6x4_shaded$|^city_roof_premade_8x6$/),
+            roofThatch:  MB_GET_POOL(/^city_roof_thatch_6x4_shaded$|^city_roof_thatch_6x4$/),
+            cityCenter:  MB_GET_POOL(/^city_fountain$|^city_well$|^city_feature_statue_[1-3]_stone$|^city_statue[1-3]$/),
+            carts:       MB_GET_POOL(/^city_cart_|^city_wagon$/),
+            horses:      MB_GET_POOL(/^other_horse2?$/),
+            lamps:       MB_GET_POOL(/^city_woodlamp$|^other_light_stand_lit_iron$/),
+            market:      MB_GET_POOL(/^other_apples$|^other_baskets$|^other_clutter_sacks_[12]$|^furniture_storage_crate_[12]_dark$|^furniture_storage_barrel_[12]_dark$|^other_cabbage$/),
+            gardens:     MB_GET_POOL(/^other_garden[123]$|^nature_flower[123]$/),
+            tables:      MB_GET_POOL(/^furniture_table_(rectangle_[1-3]|long_1)_dark$|^furniture_table_long_1$/),
+            barrels:     MB_GET_POOL(/^furniture_storage_barrel_[1-3]_dark$|^other_keg(5tapped|6)$/),
+            crates:      MB_GET_POOL(/^furniture_storage_crate_[1-4]_dark$|^other_clutter_sacks_[12]$|^furniture_crate_[12]$/),
+            watchpost:   MB_GET_POOL(/^other_watchpost$/),
+            flags:       MB_GET_POOL(/^other_largeflag$/),
+            boats:       MB_GET_POOL(/^other_canoe$/),
+            stoneBridge: MB_GET_POOL(/^nature_stone_bridge_section_7x4$/),
+            woodBridge:  MB_GET_POOL(/^nature_wooden_bridge_section_7x4$/),
+
+            trees:       MB_GET_POOL(/^nature_tree_(small_[12]|large_[12]|[123])$/),
+            bushes:      MB_GET_POOL(/^nature_bush_(2|3|4|5|7)_green|^nature_bush_shrub_[12]$/),
+            flowers:     MB_GET_POOL(/^nature_flower_[1-4]$|^nature_flowers_[1-3]$/),
+
+            // Строго природные зимние скалы и сухостой (без летних цветов и без новогодних игрушек!)
+            cliffs:      MB_GET_POOL(/^nature_cliff_[123]$|^nature_rock_formation_[2-6]$|^nature_rock_outcrop$/),
+            snowRocks:   MB_GET_POOL(/^nature_rock_[123]$|^nature_rock_small_[12]$|^nature_boulder$|^nature_rocks_[1-5]$/),
+            deadwood:    MB_GET_POOL(/^other_deadwood3$|^nature_fallen_tree_[12]$|^nature_stump_[123]$|^nature_log_fallen_tree$/),
+            waterRocks:  MB_GET_POOL(/^nature_submerged_rocks_[1-4]$|^nature_river_rock_[123]$/),
+            campfires:   MB_GET_POOL(/^camp_campfire(_fire|_pot_cooking)?$/),
+            bigTents:    MB_GET_POOL(/^camp_tent_round_large_pavillion$|^camp_tent_large_9x5$/),
+            tents:       MB_GET_POOL(/^camp_tent_(round_small|square_[123]|narrow_[12])$|^other_shelter$/),
+            pelts:       MB_GET_POOL(/^camp_(wolf|beaver)pelt$|^camp_pelt(wolf|fox)$|^furniture_bedroll_[123]$|^other_firewood_pile$|^nature_stump_axe_chopping$|^nature_log_seat_[12]$/),
+            barricades:  MB_GET_POOL(/^furniture_barricade$|^other_woodenstakes$/),
+            braziers:    MB_GET_POOL(/^dungeon_light_brazier_[123]_[abc]$|^other_light_stand_lit_iron$/),
+            pillars:     MB_GET_POOL(/^dungeon_pillar_(round|square)_1x1$|^dungeon_stone_pillar_[12]$/),
+            ruins:       MB_GET_POOL(/^other_ruin_[1-4]_2x2$|^other_rubble_(small|medium|mixed_3x2)$/),
+            altars:      MB_GET_POOL(/^dungeon_feature_altar_gold$|^dungeon_tomb_(1|open)$/),
+            chests:      MB_GET_POOL(/^dungeon_chest_[12]_(steel|gold)$/),
+            iceCrystals: MB_GET_POOL(/^dungeon_crystalblue$|^dungeon_crystal_vertical_2x2$/)
+        };
+
+        let genTitle = 'Локация';
+
+        // ============================================================
+        // 👑 1. ГОРОД: СТРОГИЕ КВАРТАЛЫ, РО́ВНЫЕ УЛИЦЫ И УМНАЯ ЗАСТРОЙКА
+        // ============================================================
+        if (picked === 'city') {
+            const style = MB_PICK_NEXT_VARIANT('city_v5', ['plaza_crossroads', 'canal_city', 'city_gates']);
+            const thatchProb = Math.random() < 0.45 ? 0.30 : 0.08;
+
+            // Карта занятости клеток под дома, улицы, площади, каналы и стены
+            const occ = Array.from({ length: rows }, () => new Uint8Array(cols));
+            const markOcc = (x1, y1, x2, y2, val = 1) => {
+                for (let r = Math.max(0, Math.floor(y1)); r <= Math.min(rows - 1, Math.floor(y2)); r++)
+                    for (let c = Math.max(0, Math.floor(x1)); c <= Math.min(cols - 1, Math.floor(x2)); c++) occ[r][c] = val;
+            };
+            const rectFreeForHouse = (x1, y1, w, h) => {
+                if (x1 < 0 || y1 < 0 || x1 + w > cols || y1 + h > rows) return false;
+                for (let r = y1; r < y1 + h; r++) for (let c = x1; c < x1 + w; c++) {
+                    if (occ[r][c] !== 0 || getT(c, r) !== T.cobble) return false;
+                }
+                return true;
+            };
+            const touchesStreet = (x1, y1, w, h) => {
+                let hTouch = false, vTouch = false;
+                for (let c = x1; c < x1 + w; c++) {
+                    if (getT(c, y1 - 1) === T.flagstone || getT(c, y1 + h) === T.flagstone) hTouch = true;
+                }
+                for (let r = y1; r < y1 + h; r++) {
+                    if (getT(x1 - 1, r) === T.flagstone || getT(x1 + w, r) === T.flagstone) vTouch = true;
+                }
+                return { hTouch, vTouch };
+            };
+
+            const placeBridgeStraight = (x1, y1, x2, y2, isStone = true) => {
+                const horiz = (Math.abs(x2 - x1) >= Math.abs(y2 - y1));
+                const span = (horiz ? (x2 - x1 + 1) : (y2 - y1 + 1)) + 1.3;
+                const segs = Math.max(1, Math.ceil(span / 3.4));
+                const sc = Math.max(0.76, (span / segs) / 3.45);
+                const pool = isStone ? P.stoneBridge : P.woodBridge;
+                for (let i = 0; i < segs; i++) {
+                    const f = (i + 0.5) / segs;
+                    const bx = horiz ? (x1 - 0.15 + (x2 - x1 + 1.3) * f) : (x1 + 0.5);
+                    const by = horiz ? (y1 + 0.5) : (y1 - 0.15 + (y2 - y1 + 1.3) * f);
+                    addObj(pool, bx, by, sc, horiz ? 0 : 90, 1.35);
+                }
+            };
+
+            const placeStreet = (isHoriz, pos, width = 2, start = 0, end = null) => {
+                const lim = end !== null ? end : (isHoriz ? cols - 1 : rows - 1);
+                if (isHoriz) {
+                    fillRect(start, pos, lim, pos + width - 1, T.flagstone);
+                    markOcc(start, pos, lim, pos + width - 1, 2);
+                } else {
+                    fillRect(pos, start, pos + width - 1, lim, T.flagstone);
+                    markOcc(pos, start, pos + width - 1, lim, 2);
+                }
+            };
+
+            // Умный упаковщик домов: выравнивает крыши по улицам, оставляет проулки и дворики!
+            const packDistrictHouses = () => {
+                const trySizes = cols <= 18
+                    ? [{ w: 4, h: 3, sc: 0.84, horiz: true }, { w: 3, h: 4, sc: 0.84, horiz: false }]
+                    : [
+                        { w: 5, h: 3, sc: 0.98, horiz: true }, { w: 3, h: 5, sc: 0.98, horiz: false },
+                        { w: 4, h: 3, sc: 0.84, horiz: true }, { w: 3, h: 4, sc: 0.84, horiz: false }
+                    ];
+
+                // Проходим по карте и сажаем дома с аккуратным зазором (1 клетка между домами)
+                for (let r = 0; r < rows - 2; r++) {
+                    for (let c = 0; c < cols - 2; c++) {
+                        if (occ[r][c] !== 0 || getT(c, r) !== T.cobble) continue;
+
+                        // Сначала смотрим, к какой улице ближе эта клетка, чтобы выбрать правильную ориентацию крыши
+                        const preferVert = (getT(c - 1, r) === T.flagstone || getT(c + 3, r) === T.flagstone || getT(c + 4, r) === T.flagstone) &&
+                                           !(getT(c, r - 1) === T.flagstone || getT(c, r + 3) === T.flagstone);
+                        const ordered = trySizes.slice().sort((a, b) => (a.horiz === !preferVert ? -1 : 1));
+
+                        let placed = false;
+                        for (const sz of ordered) {
+                            if (!rectFreeForHouse(c, r, sz.w, sz.h)) continue;
+                            const touch = touchesStreet(c, r, sz.w, sz.h);
+                            // Маленький шанс оставить на участке зелёный дворик с деревом и клумбой вместо дома
+                            if (Math.random() < 0.14 && sz.w >= 4 && sz.h >= 3) {
+                                fillRect(c, r, c + sz.w - 1, r + sz.h - 1, T.grass);
+                                markOcc(c, r, c + sz.w - 1, r + sz.h - 1, 3);
+                                const gx = c + sz.w / 2, gy = r + sz.h / 2;
+                                addObj(P.trees, gx - 0.6, gy - 0.2, 0.95, MB_RAND_INT(0, 359), 1.1);
+                                addObj(P.gardens, gx + 0.8, gy + 0.3, 0.82, MB_RAND_INT(0, 359), 0.6);
+                                placed = true;
+                                break;
+                            }
+
+                            const cx = c + sz.w / 2, cy = r + sz.h / 2;
+                            const rot = sz.horiz ? MB_PICK([0, 180]) : MB_PICK([90, 270]);
+                            const useThatch = Math.random() < thatchProb;
+                            addObj(useThatch ? P.roofThatch : P.roofTile, cx, cy, sz.sc, rot, 0);
+                            if (Math.random() < 0.78) {
+                                addObj('other_misc_chimney_1x1', cx + (sz.horiz ? 0.8 : 0.2), cy - (sz.horiz ? 0.35 : 0.7), 0.82, 0, 0);
+                            }
+                            // Бронируем сам дом + узкий 1-клеточный переулок сбоку, чтобы крыши не слипались в кашу
+                            markOcc(c, r, c + sz.w - 1, r + sz.h - 1, 1);
+                            markOcc(c + sz.w, r, c + sz.w, r + sz.h - 1, 4);
+                            markOcc(c, r + sz.h, c + sz.w - 1, r + sz.h, 4);
+
+                            // Клумба или ящики у стены со стороны переулка (никогда посреди дороги!)
+                            const decX = sz.horiz ? (c + sz.w + 0.5) : (c + 0.5);
+                            const decY = sz.horiz ? (r + sz.h / 2) : (r + sz.h + 0.5);
+                            if (inB(Math.floor(decX), Math.floor(decY)) && getT(Math.floor(decX), Math.floor(decY)) === T.cobble && canPlace(decX, decY, 0.8)) {
+                                addObj(Math.random() < 0.55 ? P.market : P.gardens, decX, decY, 0.72, MB_RAND_INT(0, 359), 0.65);
+                            }
+                            // Если дом выходит к улице — ставим иногда уличный фонарь у угла
+                            if ((touch.hTouch || touch.vTouch) && Math.random() < 0.35) {
+                                const lx = c + (touch.vTouch ? -0.35 : 0.2), ly = r + (touch.hTouch ? -0.35 : 0.2);
+                                if (inB(Math.floor(lx), Math.floor(ly)) && getT(Math.floor(lx), Math.floor(ly)) === T.flagstone && canPlace(lx, ly, 3.2)) {
+                                    addObj(P.lamps, lx, ly, 0.82, 0, 0.7);
+                                }
+                            }
+                            placed = true;
+                            break;
+                        }
+                        if (placed) c += 2;
+                    }
+                }
+            };
+
+            // ВАРИАНТ 1: ТОРГОВАЯ ПЛОЩАДЬ И КВАРТАЛЫ
+            if (style === 'plaza_crossroads') {
+                genTitle = MB_PICK(['Торговая площадь', 'Ярмарочный квартал', 'Перекрёсток Купцов', 'Старый город']);
+                const stW = cols >= 26 ? 3 : 2;
+                const mx = MB_RAND_INT(Math.floor(cols * 0.38), Math.floor(cols * 0.60));
+                const my = MB_RAND_INT(Math.floor(rows * 0.38), Math.floor(rows * 0.60));
+
+                placeStreet(true, my - Math.floor(stW / 2), stW);
+                placeStreet(false, mx - Math.floor(stW / 2), stW);
+
+                // Дополнительный переулок на больших картах
+                if (cols >= 32) {
+                    const secX = mx > cols / 2 ? Math.max(4, mx - 11) : Math.min(cols - 6, mx + 11);
+                    placeStreet(false, secX, 2);
+                }
+
+                // Прямоугольная мощёная площадь в центре перекрёстка
+                const pRx = Math.min(5, Math.max(3, Math.floor(cols * 0.14)));
+                const pRy = Math.min(4, Math.max(2, Math.floor(rows * 0.19)));
+                const px1 = Math.max(2, mx - pRx), px2 = Math.min(cols - 3, mx + pRx);
+                const py1 = Math.max(2, my - pRy), py2 = Math.min(rows - 3, my + pRy);
+                fillRect(px1, py1, px2, py2, T.stone);
+                markOcc(px1, py1, px2, py2, 2);
+
+                const pcx = (px1 + px2 + 1) / 2, pcy = (py1 + py2 + 1) / 2;
+                addObj(P.cityCenter, pcx, pcy, cols >= 26 ? 1.25 : 1.1, 0, 1.9);
+
+                // Фонари по 4 углам площади
+                [[px1 + 0.7, py1 + 0.7], [px2 + 0.3, py1 + 0.7], [px1 + 0.7, py2 + 0.3], [px2 + 0.3, py2 + 0.3]].forEach(([lx, ly]) => {
+                    addObj(P.lamps, lx, ly, 0.85, 0, 0.7);
+                });
+
+                // Прилавки рынка ровно по углам площади (не перекрывая проезд по улицам!)
+                const stallSpots = [
+                    { x: px1 + 1.5, y: py1 + 1.4, rot: 0 }, { x: px2 - 0.5, y: py1 + 1.4, rot: 0 },
+                    { x: px1 + 1.5, y: py2 - 0.4, rot: 0 }, { x: px2 - 0.5, y: py2 - 0.4, rot: 0 }
+                ];
+                stallSpots.forEach(s => {
+                    if (Math.hypot(s.x - pcx, s.y - pcy) > 2.3 && canPlace(s.x, s.y, 1.2)) {
+                        addObj(P.tables, s.x, s.y, 0.88, s.rot, 1.15);
+                        addObj(P.market, s.x + (s.x < pcx ? -0.5 : 0.5), s.y + (s.y < pcy ? 0.55 : -0.55), 0.72, MB_RAND_INT(0, 359), 0);
+                    }
+                });
+
+                // Повозка, едущая РОВНО вдоль горизонтальной улицы!
+                const cartX = mx > cols / 2 ? Math.max(2.5, px1 - 2.6) : Math.min(cols - 2.5, px2 + 2.6);
+                addObj(P.carts, cartX, my + 0.5, 0.96, mx > cols / 2 ? 0 : 180, 1.6);
+
+                packDistrictHouses();
+            }
+
+            // ВАРИАНТ 2: РЕЧНОЙ КВАРТАЛ С КАНАЛОМ И НАБЕРЕЖНЫМИ
+            else if (style === 'canal_city') {
+                genTitle = MB_PICK(['Речной квартал', 'Набережная каналов', 'Мосты Старого города']);
+                const horizCanal = (cols >= rows); // На широких картах канал горизонтальный, дома сверху и снизу
+                const cW = (horizCanal ? rows : cols) >= 18 ? 3 : 2;
+                const pos = horizCanal
+                    ? MB_RAND_INT(Math.floor(rows * 0.38), Math.floor(rows * 0.56))
+                    : MB_RAND_INT(Math.floor(cols * 0.38), Math.floor(cols * 0.56));
+
+                // Каменная набережная + сам канал
+                if (horizCanal) {
+                    fillRect(0, pos - 1, cols - 1, pos + cW, T.flagstone);
+                    fillRect(0, pos, cols - 1, pos + cW - 1, T.water);
+                    markOcc(0, pos - 1, cols - 1, pos + cW, 2);
+
+                    const bridges = cols >= 28
+                        ? [Math.floor(cols * 0.24), Math.floor(cols * 0.52), Math.floor(cols * 0.78)]
+                        : [Math.floor(cols * 0.32), Math.floor(cols * 0.68)];
+                    bridges.forEach(bx => {
+                        placeStreet(false, bx, 2, 0, pos - 1);
+                        placeStreet(false, bx, 2, pos + cW, rows - 1);
+                        placeBridgeStraight(bx + 0.5, pos, bx + 0.5, pos + cW - 1, true);
+                        addObj(P.lamps, bx - 0.5, pos - 0.5, 0.85, 0, 0.7);
+                        addObj(P.lamps, bx + 2.5, pos + cW + 0.5, 0.85, 0, 0.7);
+                    });
+
+                    // Лодки ровно вдоль канала + ящики на набережной
+                    for (let x = 3; x <= cols - 4; x += 8) {
+                        if (bridges.some(bx => Math.abs(bx + 1 - x) < 3.5)) continue;
+                        addObj(P.boats, x, pos + cW / 2, 1.0, MB_PICK([0, 180]), 1.4);
+                        if (canPlace(x, pos - 0.5, 0.9)) addObj(P.crates, x, pos - 0.5, 0.76, 0, 0.7);
+                        if (canPlace(x + 1.2, pos + cW + 0.5, 0.9)) addObj(P.barrels, x + 1.2, pos + cW + 0.5, 0.76, 0, 0.7);
+                    }
+                } else {
+                    fillRect(pos - 1, 0, pos + cW, rows - 1, T.flagstone);
+                    fillRect(pos, 0, pos + cW - 1, rows - 1, T.water);
+                    markOcc(pos - 1, 0, pos + cW, rows - 1, 2);
+
+                    const bridges = [Math.floor(rows * 0.32), Math.floor(rows * 0.68)];
+                    bridges.forEach(by => {
+                        placeStreet(true, by, 2, 0, pos - 1);
+                        placeStreet(true, by, 2, pos + cW, cols - 1);
+                        placeBridgeStraight(pos, by + 0.5, pos + cW - 1, by + 0.5, true);
+                        addObj(P.lamps, pos - 0.5, by - 0.5, 0.85, 0, 0.7);
+                        addObj(P.lamps, pos + cW + 0.5, by + 2.5, 0.85, 0, 0.7);
+                    });
+                    addObj(P.boats, pos + cW / 2, rows / 2, 1.0, 90, 1.4);
+                }
+
+                packDistrictHouses();
+            }
+
+            // ВАРИАНТ 3: ГОРОДСКИЕ ВОРОТА И ПРИГОРОД
+            else {
+                genTitle = MB_PICK(['Городские ворота', 'Застава Столицы', 'Въезд в Притишье']);
+                const cityRight = Math.random() < 0.5;
+                const wallX = cityRight ? Math.floor(cols * MB_RAND_FLOAT(0.34, 0.42)) : Math.floor(cols * MB_RAND_FLOAT(0.56, 0.64));
+                const gateY = MB_RAND_INT(Math.floor(rows * 0.35), Math.floor(rows * 0.65));
+
+                // Пригород за стеной — зелёная трава + грунтовый тракт
+                if (cityRight) {
+                    fillRect(0, 0, wallX - 1, rows - 1, T.grass);
+                    markOcc(0, 0, wallX + 1, rows - 1, 2);
+                    fillRect(0, gateY - 1, wallX - 1, gateY + 1, T.dirt);
+                    placeStreet(true, gateY - 1, 3, wallX, cols - 1);
+                } else {
+                    fillRect(wallX + 2, 0, cols - 1, rows - 1, T.grass);
+                    markOcc(wallX, 0, cols - 1, rows - 1, 2);
+                    fillRect(wallX + 2, gateY - 1, cols - 1, gateY + 1, T.dirt);
+                    placeStreet(true, gateY - 1, 3, 0, wallX + 1);
+                }
+
+                // Внутренняя поперечная улица вдоль стены на расстоянии квартала
+                const innerStX = cityRight ? Math.min(cols - 5, wallX + 7) : Math.max(3, wallX - 7);
+                if (cols >= 24) placeStreet(false, innerStX, 2);
+
+                // Ровная крепостная стена толщиной 2 клетки с широким проездом ворот
+                for (let r = 0; r < rows; r++) {
+                    if (Math.abs(r - gateY) > 1) {
+                        setT(wallX, r, T.wall);
+                        setT(wallX + 1, r, T.wall);
+                    }
+                }
+
+                // Сторожевые башни, флаги и фонари точно у ворот
+                const outSign = cityRight ? -1 : 1;
+                addObj(P.watchpost, wallX + 1.0, Math.max(1.5, gateY - 3.0), 1.08, 0, 1.8);
+                addObj(P.watchpost, wallX + 1.0, Math.min(rows - 1.5, gateY + 3.6), 1.08, 0, 1.8);
+                addObj(P.flags, wallX + (cityRight ? -0.3 : 2.3), Math.max(1.2, gateY - 2.4), 1.0, 0, 0.7);
+                addObj(P.flags, wallX + (cityRight ? -0.3 : 2.3), Math.min(rows - 1.2, gateY + 3.0), 1.0, 0, 0.7);
+                addObj(P.lamps, wallX + (cityRight ? -0.6 : 2.6), gateY - 1.4, 0.85, 0, 0.6);
+                addObj(P.lamps, wallX + (cityRight ? -0.6 : 2.6), gateY + 2.2, 0.85, 0, 0.6);
+
+                // Подъезжающая к воротам повозка с лошадью
+                const cartX = Math.max(2.2, Math.min(cols - 2.2, wallX + outSign * 4.2));
+                const horseX = Math.max(1.2, Math.min(cols - 1.2, cartX - outSign * 2.0));
+                addObj(P.carts, cartX, gateY + 0.5, 0.98, cityRight ? 0 : 180, 1.6);
+                addObj(P.horses, horseX, gateY + 0.5, 0.92, cityRight ? 0 : 180, 1.0);
+
+                // Небольшой колодец внутри города у ворот + плотная застройка городской половины
+                const wellX = cityRight ? Math.min(cols - 3, wallX + 3.8) : Math.max(2.5, wallX - 2.8);
+                const wellY = gateY > rows / 2 ? Math.max(2.5, gateY - 3.5) : Math.min(rows - 2.5, gateY + 3.8);
+                if (getT(Math.floor(wellX), Math.floor(wellY)) === T.cobble) {
+                    addObj('city_well', wellX, wellY, 1.05, 0, 1.5);
+                    markOcc(wellX - 1, wellY - 1, wellX + 1, wellY + 1, 3);
+                }
+
+                packDistrictHouses();
+
+                // Живой пригород снаружи стен (рощи деревьев и кустов, без прилипания к стене)
+                for (let r = 1; r < rows - 1; r++) for (let c = 1; c < cols - 1; c++) {
+                    if (getT(c, r) !== T.grass) continue;
+                    if (Math.abs(c - wallX) <= 2 || Math.abs(c - (wallX + 1)) <= 2) continue;
+                    if (!canPlace(c + 0.5, r + 0.5, 1.75)) continue;
+                    const rnd = Math.random();
+                    if (rnd < 0.18) addObj(P.trees, c + 0.5, r + 0.5, MB_RAND_FLOAT(0.9, 1.25), MB_RAND_INT(0, 359), 1.65);
+                    else if (rnd < 0.28) addObj(P.bushes, c + 0.5, r + 0.5, 0.9, MB_RAND_INT(0, 359), 0.95);
+                    else if (rnd < 0.33) addObj(P.flowers, c + 0.5, r + 0.5, 0.8, MB_RAND_INT(0, 359), 0.7);
+                }
+            }
+        }
+
+        // ============================================================
+        // ❄️ 2. СНЕЖНЫЙ ПЕРЕВАЛ: ПРИРОДНЫЕ СКАЛЫ, ГЛАДКИЕ ТРОПЫ И ЛЁД
+        // ============================================================
+        else if (picked === 'snow') {
+            const style = MB_PICK_NEXT_VARIANT('snow_v5', ['frozen_river_crossing', 'mountain_pass_outpost', 'frozen_lake_ruins']);
+
+            const carveSnowSpline = (p0, p1, radius, tile, opts = {}) => {
+                const bend = (opts.bend !== undefined ? opts.bend : MB_RAND_FLOAT(-0.24, 0.24));
+                const dx = p1.x - p0.x, dy = p1.y - p0.y;
+                const len = Math.max(1, Math.hypot(dx, dy));
+                const nx = -dy / len, ny = dx / len;
+                const ctrl = { x: (p0.x + p1.x) / 2 + nx * len * bend, y: (p0.y + p1.y) / 2 + ny * len * bend };
+                const steps = Math.max(24, Math.ceil(len * 3));
+                const pts = [];
+                for (let i = 0; i <= steps; i++) {
+                    const t = i / steps, u = 1 - t;
+                    const x = u * u * p0.x + 2 * u * t * ctrl.x + t * t * p1.x;
+                    const y = u * u * p0.y + 2 * u * t * ctrl.y + t * t * p1.y;
+                    const tx = 2 * u * (ctrl.x - p0.x) + 2 * t * (p1.x - ctrl.x);
+                    const ty = 2 * u * (ctrl.y - p0.y) + 2 * t * (p1.y - ctrl.y);
+                    const tLen = Math.max(0.01, Math.hypot(tx, ty));
+                    pts.push({ x, y, ux: tx / tLen, uy: ty / tLen, nx: -ty / tLen, ny: tx / tLen });
+
+                    const rr = Math.ceil(radius + 0.5);
+                    for (let dr = -rr; dr <= rr; dr++) for (let dc = -rr; dc <= rr; dc++) {
+                        const cx = Math.floor(x) + dc, cy = Math.floor(y) + dr;
+                        if (!inB(cx, cy)) continue;
+                        if (Math.hypot(cx + 0.5 - x, cy + 0.5 - y) <= radius) {
+                            if (opts.keepWater && isWater(cx, cy)) continue;
+                            if (opts.onlyOn && !opts.onlyOn.includes(getT(cx, cy))) continue;
+                            setT(cx, cy, tile);
+                        }
+                    }
+                }
+                return pts;
+            };
+
+            const autoBridgeSnow = (roadPts, isStone = false) => {
+                const pool = isStone ? P.stoneBridge : P.woodBridge;
+                let inW = false, sIdx = 0;
+                for (let i = 0; i < roadPts.length; i++) {
+                    const pt = roadPts[i];
+                    const wet = isWater(Math.floor(pt.x), Math.floor(pt.y));
+                    if (wet && !inW) { inW = true; sIdx = i; }
+                    else if ((!wet || i === roadPts.length - 1) && inW) {
+                        inW = false;
+                        const a = roadPts[sIdx], b = roadPts[wet ? i : i - 1];
+                        const span = Math.hypot(b.x - a.x, b.y - a.y) + 1.9;
+                        if (span < 1.5) continue;
+                        const deg = Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI;
+                        const segs = Math.max(1, Math.ceil(span / 3.4));
+                        const sc = Math.max(0.76, (span / segs) / 3.45);
+                        for (let s = 0; s < segs; s++) {
+                            const f = (s + 0.5) / segs;
+                            addObj(pool, a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f, sc, deg, 1.45);
+                        }
+                    }
+                }
+            };
+
+            const placeWinterCamp = (cx, cy, bigTent = false) => {
+                paintBlob(cx, cy, 2.7, 2.3, T.dirt, 0.16, [T.snow]);
+                addObj(P.campfires, cx, cy, 1.15, 0, 1.5);
+                const nTents = bigTent ? 2 : MB_RAND_INT(2, 3);
+                const baseAng = MB_RAND_FLOAT(0, 6.28);
+                for (let i = 0; i < nTents; i++) {
+                    const ang = baseAng + (i / nTents) * 6.28 + MB_RAND_FLOAT(-0.25, 0.25);
+                    const tx = cx + Math.cos(ang) * 2.55, ty = cy + Math.sin(ang) * 2.25;
+                    if (!inB(Math.floor(tx), Math.floor(ty)) || isWater(Math.floor(tx), Math.floor(ty))) continue;
+                    if (!canPlace(tx, ty, 1.8)) continue;
+                    const useBig = (i === 0 && bigTent);
+                    addObj(useBig ? P.bigTents : P.tents, tx, ty, useBig ? 0.85 : 1.0, (ang * 180 / Math.PI) + 90, 1.9);
+                }
+                for (let k = 0; k < 3; k++) {
+                    const ang = MB_RAND_FLOAT(0, 6.28);
+                    const px = cx + Math.cos(ang) * MB_RAND_FLOAT(1.4, 2.3);
+                    const py = cy + Math.sin(ang) * MB_RAND_FLOAT(1.3, 2.1);
+                    if (canPlace(px, py, 0.9) && !isWater(Math.floor(px), Math.floor(py))) {
+                        addObj(P.pelts, px, py, 0.92, MB_RAND_INT(0, 359), 0.85);
+                    }
+                }
+            };
+
+            // ВАРИАНТ 1: ЛЕДЯНАЯ ПЕРЕПРАВА И ПРИВАЛ ЭКСПЕДИЦИИ
+            if (style === 'frozen_river_crossing') {
+                genTitle = MB_PICK(['Ледяная переправа', 'Замёрзшая река и привал', 'Мост на Северном тракте']);
+                const verticalRiver = (cols >= rows);
+                const bend = MB_RAND_FLOAT(-0.22, 0.22);
+                const r0 = verticalRiver ? { x: cols * MB_RAND_FLOAT(0.38, 0.62), y: 0 } : { x: 0, y: rows * MB_RAND_FLOAT(0.38, 0.62) };
+                const r1 = verticalRiver ? { x: cols * MB_RAND_FLOAT(0.38, 0.62), y: rows - 1 } : { x: cols - 1, y: rows * MB_RAND_FLOAT(0.38, 0.62) };
+
+                // Широкий замёрзший берег (лёд) + узкая тёмная полынья (вода) по центру русла
+                carveSnowSpline(r0, r1, cols >= 26 ? 2.6 : 2.1, T.ice, { bend });
+                carveSnowSpline(r0, r1, cols >= 26 ? 1.35 : 1.05, T.water, { bend });
+
+                // Плавная снежно-земляная дорога поперёк реки + автоматический мост!
+                const t0 = verticalRiver ? { x: 0, y: rows * MB_RAND_FLOAT(0.30, 0.70) } : { x: cols * MB_RAND_FLOAT(0.30, 0.70), y: 0 };
+                const t1 = verticalRiver ? { x: cols - 1, y: rows * MB_RAND_FLOAT(0.30, 0.70) } : { x: cols * MB_RAND_FLOAT(0.30, 0.70), y: rows - 1 };
+                const roadPts = carveSnowSpline(t0, t1, 1.15, T.dirt, { keepWater: true, bend: MB_RAND_FLOAT(-0.18, 0.18) });
+                autoBridgeSnow(roadPts, Math.random() < 0.45);
+
+                // Повозка на подходе к мосту
+                const cartPt = roadPts[Math.floor(roadPts.length * 0.20)];
+                if (cartPt && !isWater(Math.floor(cartPt.x), Math.floor(cartPt.y))) {
+                    addObj(P.carts, cartPt.x, cartPt.y, 0.96, Math.atan2(cartPt.uy, cartPt.ux) * 180 / Math.PI, 1.6);
+                }
+
+                // Тёплый лагерь экспедиции на сухом снежном берегу
+                for (let tries = 0; tries < 30; tries++) {
+                    const cx = MB_RAND_FLOAT(3.5, cols - 3.5), cy = MB_RAND_FLOAT(3.5, rows - 3.5);
+                    if (getT(Math.floor(cx), Math.floor(cy)) !== T.snow || !canPlace(cx, cy, 4.2)) continue;
+                    const dry = [-2, 0, 2].every(dy => [-2, 0, 2].every(dx => getT(Math.floor(cx) + dx, Math.floor(cy) + dy) === T.snow));
+                    if (!dry) continue;
+                    placeWinterCamp(cx, cy, cols >= 24);
+                    break;
+                }
+            }
+
+            // ВАРИАНТ 2: ГОРНЫЙ ПЕРЕВАЛ И ЗАСТАВА (НАСТОЯЩИЕ СКАЛЫ, НИКАКИХ КИРПИЧНЫХ СТЕН!)
+            else if (style === 'mountain_pass_outpost') {
+                genTitle = MB_PICK(['Горный перевал', 'Северная застава', 'Снежное ущелье']);
+                const horizPass = (cols >= rows);
+                const p0 = horizPass ? { x: 0, y: rows * MB_RAND_FLOAT(0.36, 0.64) } : { x: cols * MB_RAND_FLOAT(0.36, 0.64), y: 0 };
+                const p1 = horizPass ? { x: cols - 1, y: rows * MB_RAND_FLOAT(0.36, 0.64) } : { x: cols * MB_RAND_FLOAT(0.36, 0.64), y: rows - 1 };
+
+                // Прокладываем извилистый горный тракт через перевал
+                const roadPts = carveSnowSpline(p0, p1, 1.25, T.dirt, { bend: MB_RAND_FLOAT(-0.22, 0.22) });
+
+                // Природные скальные гребни по обе стороны перевала (из скал, утёсов и валунов!)
+                const ridgeOffset = Math.max(3.8, Math.min(cols, rows) * 0.34);
+                for (let i = 2; i < roadPts.length - 2; i += 4) {
+                    const pt = roadPts[i];
+                    for (const side of [-1, 1]) {
+                        const rx = pt.x + pt.nx * side * (ridgeOffset + MB_RAND_FLOAT(-0.6, 1.4));
+                        const ry = pt.y + pt.ny * side * (ridgeOffset + MB_RAND_FLOAT(-0.6, 1.4));
+                        if (!inB(Math.floor(rx), Math.floor(ry)) || getT(Math.floor(rx), Math.floor(ry)) !== T.snow) continue;
+                        if (canPlace(rx, ry, 1.7)) {
+                            addObj(P.cliffs, rx, ry, MB_RAND_FLOAT(1.05, 1.45), MB_RAND_INT(0, 359), 1.85);
+                        }
+                    }
+                }
+                // Дополнительная каменная гряда вдоль самых краёв карты
+                for (let c = 1; c < cols - 1; c += 3) {
+                    if (horizPass) {
+                        if (getT(c, 1) === T.snow && canPlace(c + 0.5, 1.2, 1.5)) addObj(P.cliffs, c + 0.5, 1.2, MB_RAND_FLOAT(0.95, 1.3), MB_RAND_INT(0, 359), 1.5);
+                        if (getT(c, rows - 2) === T.snow && canPlace(c + 0.5, rows - 1.2, 1.5)) addObj(P.cliffs, c + 0.5, rows - 1.2, MB_RAND_FLOAT(0.95, 1.3), MB_RAND_INT(0, 359), 1.5);
+                    }
+                }
+
+                // Пограничная застава в самом узком месте перевала
+                const mid = roadPts[Math.floor(roadPts.length * MB_RAND_FLOAT(0.45, 0.58))];
+                const roadDeg = Math.atan2(mid.uy, mid.ux) * 180 / Math.PI;
+                addObj(P.watchpost, mid.x + mid.nx * 2.5, mid.y + mid.ny * 2.5, 1.08, 0, 1.8);
+                addObj(P.flags, mid.x + mid.nx * 1.4, mid.y + mid.ny * 1.4, 1.0, 0, 0.7);
+                addObj(P.barricades, mid.x + mid.ux * 2.2 - mid.nx * 0.9, mid.y + mid.uy * 2.2 - mid.ny * 0.9, 1.05, roadDeg + 90, 1.15);
+                addObj(P.barricades, mid.x + mid.ux * 2.2 + mid.nx * 1.4, mid.y + mid.uy * 2.2 + mid.ny * 1.4, 1.05, roadDeg + 90, 1.15);
+                addObj(P.braziers, mid.x + mid.ux * 1.1 + mid.nx * 1.6, mid.y + mid.uy * 1.1 + mid.ny * 1.6, 0.85, 0, 0.7);
+                addObj(P.braziers, mid.x + mid.ux * 1.1 - mid.nx * 1.6, mid.y + mid.uy * 1.1 - mid.ny * 1.6, 0.85, 0, 0.7);
+
+                // Тёплый лагерь гарнизона за заставой
+                const campX = Math.max(3, Math.min(cols - 3, mid.x - mid.ux * 3.8 - mid.nx * 2.2));
+                const campY = Math.max(3, Math.min(rows - 3, mid.y - mid.uy * 3.8 - mid.ny * 2.2));
+                placeWinterCamp(campX, campY, false);
+            }
+
+            // ВАРИАНТ 3: ЗАМЁРЗШЕЕ ОЗЕРО И ЗАСНЕЖЕННЫЕ ДРЕВНИЕ РУИНЫ
+            else {
+                genTitle = MB_PICK(['Замёрзшее озеро и руины', 'Ледяное святилище', 'Полынья в тундре']);
+                const lx = cols * MB_RAND_FLOAT(0.38, 0.62), ly = rows * MB_RAND_FLOAT(0.38, 0.62);
+                const rx = Math.min(7.5, Math.max(3.6, cols * 0.25)), ry = Math.min(5.2, Math.max(2.8, rows * 0.29));
+                paintBlob(lx, ly, rx, ry, T.ice, 0.18);
+                // 1–2 тёмные полыньи внутри льда
+                paintBlob(lx + MB_RAND_FLOAT(-1.2, 1.2), ly + MB_RAND_FLOAT(-0.8, 0.8), rx * 0.44, ry * 0.42, T.water, 0.16, [T.ice]);
+
+                // Заснеженные руины на одном берегу
+                const rSide = lx > cols / 2 ? -1 : 1;
+                const rX = Math.max(4, Math.min(cols - 4, lx + rSide * (rx + 2.8)));
+                const rY = Math.max(3.5, Math.min(rows - 3.5, ly + MB_RAND_FLOAT(-1.5, 1.5)));
+                paintBlob(rX, rY, 2.8, 2.3, T.flagstone, 0.16, [T.snow]);
+                addObj(P.altars, rX, rY, 1.15, MB_PICK([0, 90, 180, 270]), 1.4);
+                if (canPlace(rX + 1.5, rY - 0.6, 0.8)) addObj(P.chests, rX + 1.5, rY - 0.6, 0.88, 20, 0.85);
+                for (let i = 0; i < 5; i++) {
+                    const ang = (i / 5) * 6.28 + 0.4;
+                    const px = rX + Math.cos(ang) * 2.5, py = rY + Math.sin(ang) * 2.1;
+                    if (inB(Math.floor(px), Math.floor(py)) && canPlace(px, py, 0.9)) {
+                        addObj(i % 2 === 0 ? P.pillars : (Math.random() < 0.5 ? P.ruins : P.iceCrystals), px, py, 0.92, MB_RAND_INT(0, 359), 0.9);
+                    }
+                }
+                addObj(P.braziers, rX - 1.6, rY + 1.2, 0.85, 0, 0.7);
+
+                // Лагерь исследователей на противоположном берегу
+                const cX = Math.max(3.5, Math.min(cols - 3.5, lx - rSide * (rx + 2.6)));
+                const cY = Math.max(3.5, Math.min(rows - 3.5, ly > rows / 2 ? 3.5 : rows - 3.5));
+                if (getT(Math.floor(cX), Math.floor(cY)) === T.snow) placeWinterCamp(cX, cY, false);
+            }
+
+            // Камни в ледяной воде
+            for (let r = 1; r < rows - 1; r++) for (let c = 1; c < cols - 1; c++) {
+                if (isWater(c, r) && canPlace(c + 0.5, r + 0.5, 1.5) && Math.random() < 0.12) {
+                    addObj(P.waterRocks, c + 0.5, r + 0.5, 0.88, MB_RAND_INT(0, 359), 0.9);
+                }
+            }
+
+            // Редкие северные рощи: хвойные деревья, валуны и сухостой строго на снегу
+            const groves = Math.max(4, Math.floor((cols * rows) / 56));
+            for (let g = 0; g < groves; g++) {
+                const gx = MB_RAND_FLOAT(1.5, cols - 1.5), gy = MB_RAND_FLOAT(1.5, rows - 1.5);
+                if (getT(Math.floor(gx), Math.floor(gy)) !== T.snow) continue;
+                for (let k = 0; k < MB_RAND_INT(3, 5); k++) {
+                    const ox = gx + MB_RAND_FLOAT(-2.5, 2.5), oy = gy + MB_RAND_FLOAT(-2.2, 2.2);
+                    if (getT(Math.floor(ox), Math.floor(oy)) !== T.snow || !canPlace(ox, oy, 1.55)) continue;
+                    if (k < 2) addObj(P.trees, ox, oy, MB_RAND_FLOAT(0.85, 1.22), MB_RAND_INT(0, 359), 1.65);
+                    else if (k < 4) addObj(P.snowRocks, ox, oy, MB_RAND_FLOAT(0.82, 1.18), MB_RAND_INT(0, 359), 1.05);
+                    else addObj(P.deadwood, ox, oy, 0.88, MB_RAND_INT(0, 359), 1.0);
+                }
+            }
+        }
+
+        const titleInp = document.getElementById('mb-map-title-inp');
+        if (titleInp) titleInp.value = genTitle;
+
+        window._mbData = data;
+        SAVE_MB_DATA(data);
+        RENDER_GM_MAP_BUILDER_UI();
+    };
+})();
