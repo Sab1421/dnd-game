@@ -243,11 +243,95 @@
                 color: var(--ui-text) !important;
             }
 
-            /* Базовые кнопки в тон выбранной палитры */
+            /* Базовые кнопки в тон выбранной палитры (чистая матовость без глянца) */
             button:not(.btn-save):not(.btn-danger):not(.btn-reset):not(.btn-cast):not(.btn-warn):not(.btn-rest):not([data-custom-bg]) {
                 background: var(--ui-btn-bg);
                 color: var(--ui-btn-text);
                 border-color: var(--ui-border-strong);
+            }
+            button:hover {
+                filter: brightness(1.06) !important;
+            }
+
+            /* Матовые приглушённые оттенки для всех цветных кнопок (зелёные, красные, синие, фиолетовые, оранжевые) */
+            button.btn-save {
+                background: #3f6e49 !important;
+                border-color: #588a62 !important;
+                color: #eef5ef !important;
+                box-shadow: none !important;
+            }
+            button.btn-danger, button.btn-reset,
+            button[data-admin-ui="admin"]:not(.btn-warn),
+            button[style*="#dc2626"] {
+                background: #7e3d3d !important;
+                border-color: #9e5858 !important;
+                color: #f6ebeb !important;
+                box-shadow: none !important;
+            }
+            button.btn-cast {
+                background: #3b5f82 !important;
+                border-color: #577da1 !important;
+                color: #ebf2f8 !important;
+                box-shadow: none !important;
+            }
+            button.btn-warn {
+                background: #966638 !important;
+                border-color: #b58454 !important;
+                color: #faf3eb !important;
+                box-shadow: none !important;
+            }
+            button.btn-rest {
+                background: #463c59 !important;
+                border-color: #6a5e82 !important;
+                color: #ece8f5 !important;
+                box-shadow: none !important;
+            }
+            button[style*="#8b5cf6"]:not([data-custom-bg]),
+            button[style*="#7c3aed"]:not([data-custom-bg]),
+            button[style*="#6d28d9"]:not([data-custom-bg]),
+            button[style*="#9b59b6"]:not([data-custom-bg]),
+            #dm-widget-send-btn {
+                background: #614e82 !important;
+                border-color: #826ea6 !important;
+                color: #f2eef9 !important;
+                box-shadow: none !important;
+            }
+
+            /* Приглушаем яркие неоновые акценты: ХП-бар, ячейки магии, рамки карточек, бейджи и Личку */
+            .hp-fill {
+                background: #4f8558 !important;
+            }
+            .rpg-slot-pill.pact {
+                background: #9174b8 !important;
+                border-color: #b49bd6 !important;
+                box-shadow: none !important;
+            }
+            .rpg-slot-pill.regular, .rpg-slot-pill.arcanum {
+                background: #5b8fb8 !important;
+                border-color: #84b3d6 !important;
+                box-shadow: none !important;
+            }
+            span[style*="#ef4444"] {
+                background: #a84848 !important;
+            }
+            #lobby-screen .panel[style*="#439c47"] {
+                border-color: #4f7856 !important;
+            }
+            #lobby-screen .panel[style*="#9b59b6"] {
+                border-color: #6b588c !important;
+            }
+            #dm-floating-widget, #dm-whisper-toast {
+                border-color: #6b588c !important;
+            }
+            #dm-widget-header {
+                background: #272133 !important;
+                border-bottom-color: #453a59 !important;
+            }
+            #role-status-bar span[style*="#7c3aed"] {
+                background: #5b487d !important;
+            }
+            #role-status-bar span[style*="#2e5a2e"] {
+                background: #3d6344 !important;
             }
 
             /* Спокойная просторная вёрстка */
