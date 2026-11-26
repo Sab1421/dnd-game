@@ -86,6 +86,20 @@
         return ms;
     }
 
+    function GET_TOTAL_CAMPAIGN_MS(st) {
+        if (!st) return 0;
+        const pastMs = (st.history || []).reduce((sum, h) => sum + (Number(h && h.durationMs) || 0), 0);
+        return pastMs + GET_ELAPSED_MS(st);
+    }
+
+    function FORMAT_HUMAN_DURATION(ms) {
+        const totalMin = Math.floor(Math.max(0, ms || 0) / 60000);
+        const h = Math.floor(totalMin / 60);
+        const m = totalMin % 60;
+        if (h === 0) return `${m} мин`;
+        return `${h} ч ${m} мин`;
+    }
+
     // ================================================================
     // 1. ПРИСУТСТВИЕ (ОНЛАЙН / ОФФЛАЙН / АФК) И АКТИВНЫЙ СОСТАВ ОТРЯДА
     // ================================================================
@@ -310,7 +324,8 @@
         cont.innerHTML = `
             <h2>⏹️ Завершить сессию #${st.sessionNum || 1} на сегодня</h2>
             <div style="background:var(--ui-panel2, #181715); border:1px solid var(--ui-border, #423c33); border-radius:10px; padding:14px; margin-bottom:14px; text-align:left;">
-                <div style="margin-bottom:8px;">⏱️ Длительность партии: <b style="color:var(--ui-accent, #e6c88c);">${FORMAT_DURATION(elapsed)}</b></div>
+                <div style="margin-bottom:6px;">⏱️ Длительность этой сессии: <b style="color:var(--ui-accent, #e6c88c);">${FORMAT_DURATION(elapsed)}</b></div>
+                <div style="margin-bottom:10px; color:var(--ui-muted, #aaa); font-size:0.88rem;">⏳ Общее время кампании: <b style="color:var(--ui-text, #ebe8e2);">${FORMAT_DURATION(GET_TOTAL_CAMPAIGN_MS(st))}</b> (${FORMAT_HUMAN_DURATION(GET_TOTAL_CAMPAIGN_MS(st))})</div>
                 <label style="color:var(--ui-accent, #c9a96e); font-size:0.9rem; font-weight:bold;">📖 На чём остановились (заметка в Хронику):</label>
                 <textarea id="end-session-summary-inp" style="min-height:95px; margin-top:6px;" placeholder="Например: отряд победил разведчиков в чаще и остановился на привал у старой башни..."></textarea>
             </div>
@@ -358,7 +373,13 @@
         if (!cont) return;
         cont.style.maxWidth = '660px';
 
-        const cards = (st.history || []).map(h => `
+        const hist = st.history || [];
+        const totalMs = GET_TOTAL_CAMPAIGN_MS(st);
+        const avgMs = hist.length
+            ? Math.round(hist.reduce((s, h) => s + (Number(h && h.durationMs) || 0), 0) / hist.length)
+            : 0;
+
+        const cards = hist.map(h => `
             <div style="background:var(--ui-panel2, #181715); border:1px solid var(--ui-border, #3d3830); border-radius:9px; padding:12px 14px; margin-bottom:10px; text-align:left;">
                 <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px; flex-wrap:wrap;">
                     <b style="color:var(--ui-accent, #e6c88c);">📖 Сессия #${h.num}</b>
@@ -370,7 +391,22 @@
 
         cont.innerHTML = `
             <h2>📜 Хроника встреч комнаты #${CUR_ROOM() || '—'}</h2>
-            <div style="max-height:56vh; overflow-y:auto; padding-right:4px;">
+            <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; margin-bottom:14px;">
+                <div style="background:var(--ui-panel2, #181715); border:1px solid var(--ui-border, #3d3830); border-radius:8px; padding:10px; text-align:center;">
+                    <div style="font-size:0.78rem; color:var(--ui-muted, #aaa);">⏳ Всего в кампании</div>
+                    <div style="font-weight:bold; font-size:1.05rem; color:var(--ui-accent, #e6c88c); margin-top:2px;">${FORMAT_HUMAN_DURATION(totalMs)}</div>
+                    <div style="font-size:0.75rem; font-family:monospace; color:var(--ui-muted, #888);">${FORMAT_DURATION(totalMs)}</div>
+                </div>
+                <div style="background:var(--ui-panel2, #181715); border:1px solid var(--ui-border, #3d3830); border-radius:8px; padding:10px; text-align:center;">
+                    <div style="font-size:0.78rem; color:var(--ui-muted, #aaa);">📖 Завершено сессий</div>
+                    <div style="font-weight:bold; font-size:1.15rem; color:var(--ui-text, #ebe8e2); margin-top:4px;">${hist.length}</div>
+                </div>
+                <div style="background:var(--ui-panel2, #181715); border:1px solid var(--ui-border, #3d3830); border-radius:8px; padding:10px; text-align:center;">
+                    <div style="font-size:0.78rem; color:var(--ui-muted, #aaa);">📊 Средняя встреча</div>
+                    <div style="font-weight:bold; font-size:1.05rem; color:var(--ui-text, #ebe8e2); margin-top:4px;">${hist.length ? FORMAT_HUMAN_DURATION(avgMs) : '—'}</div>
+                </div>
+            </div>
+            <div style="max-height:50vh; overflow-y:auto; padding-right:4px;">
                 ${cards || '<div style="padding:26px; text-align:center; color:var(--ui-muted, #888);">Завершённых сессий пока нет. Когда Мастер нажмёт «Завершить на сегодня», запись появится здесь.</div>'}
             </div>
             <div style="margin-top:14px; text-align:right;"><button onclick="CM('gm-tool-modal')">Закрыть</button></div>
@@ -632,6 +668,7 @@
         const st = GET_SESS_STATE();
         const isGM = (sess.role === 'gm');
         const elapsedStr = FORMAT_DURATION(GET_ELAPSED_MS(st));
+        const totalCampaignStr = FORMAT_DURATION(GET_TOTAL_CAMPAIGN_MS(st));
 
         let statusBadge = '';
         if (st.status === 'active') {
@@ -681,8 +718,11 @@
         bar.innerHTML = `
             <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
                 ${statusBadge}
-                <span style="background:var(--ui-panel, #1e1c1a); border:1px solid var(--ui-border, #3e3830); padding:2px 9px; border-radius:6px; font-family:monospace; font-weight:bold; color:var(--ui-accent, #e6c88c);">
-                    ⏱️ <span id="session-timer-clock">${elapsedStr}</span>
+                <span title="Время текущей сессии" style="background:var(--ui-panel, #1e1c1a); border:1px solid var(--ui-border, #3e3830); padding:2px 9px; border-radius:6px; font-family:monospace; font-weight:bold; color:var(--ui-accent, #e6c88c);">
+                    ⏱️ Сессия: <span id="session-timer-clock">${elapsedStr}</span>
+                </span>
+                <span title="Общее время кампании за все сессии" style="background:var(--ui-panel, #1e1c1a); border:1px solid var(--ui-border, #3e3830); padding:2px 9px; border-radius:6px; font-family:monospace; color:var(--ui-muted, #aaa);">
+                    ⏳ Всего: <span id="campaign-total-clock">${totalCampaignStr}</span>
                 </span>
                 ${gmStatusHTML}
             </div>
@@ -692,13 +732,15 @@
         `;
     }
 
-    // Локальное тиканье таймера (0 запросов к Firebase)
+    // Локальное тиканье таймера сессии и общего времени кампании (0 запросов к Firebase)
     if (!timerInterval) {
         timerInterval = setInterval(() => {
-            const el = document.getElementById('session-timer-clock');
-            if (!el || !CUR_ROOM()) return;
+            if (!CUR_ROOM()) return;
             const st = GET_SESS_STATE();
-            el.textContent = FORMAT_DURATION(GET_ELAPSED_MS(st));
+            const sessEl = document.getElementById('session-timer-clock');
+            const totEl = document.getElementById('campaign-total-clock');
+            if (sessEl) sessEl.textContent = FORMAT_DURATION(GET_ELAPSED_MS(st));
+            if (totEl) totEl.textContent = FORMAT_DURATION(GET_TOTAL_CAMPAIGN_MS(st));
         }, 1000);
     }
 
