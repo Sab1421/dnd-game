@@ -1,5 +1,5 @@
 // ================================================================
-// 🎨 ЧИСТЫЙ БЫСТРЫЙ РЕНДЕР И 2-КОЛОНОЧНЫЙ ИНТЕРФЕЙС (БЕЗ ctx.filter!)
+// 🎨 БЫСТРЫЙ СБАЛАНСИРОВАННЫЙ РЕНДЕР V6 (0 ctx.filter, ГЛАДКИЙ КАМЕНЬ, МЯГКИЙ СВЕТ)
 // ================================================================
 window._mbSideTab = window._mbSideTab || 'tiles';
 window._mbTileCat = 'nature';
@@ -9,7 +9,94 @@ window._mbStampMapCache = null;
 window._mbTileLoadVer = 0;
 window._mbStampLoadVer = 0;
 
-// 1. Мгновенный поиск спрайта O(1) вместо перебора всего массива
+// Общий генератор плавного 2D-шума (для бесконечного рельефа без шаблонов)
+window.MB_MAKE_NOISE = function(seed = Math.random() * 999999) {
+    const s = (Math.floor(seed) || 1337) >>> 0;
+    const hash2 = (ix, iy) => {
+        let n = Math.imul(ix, 374761393) + Math.imul(iy, 668265263) + Math.imul(s, 1442695041);
+        n = (n ^ (n >>> 13)) >>> 0;
+        n = Math.imul(n, 1274126177) >>> 0;
+        return ((n ^ (n >>> 16)) >>> 0) / 4294967295;
+    };
+    const val = (x, y) => {
+        const ix = Math.floor(x), iy = Math.floor(y);
+        const fx = x - ix, fy = y - iy;
+        const u = fx * fx * (3 - 2 * fx), v = fy * fy * (3 - 2 * fy);
+        const a = hash2(ix, iy), b = hash2(ix + 1, iy);
+        const c = hash2(ix, iy + 1), d = hash2(ix + 1, iy + 1);
+        return (a + (b - a) * u) + ((c + (d - c) * u) - (a + (b - a) * u)) * v;
+    };
+    return (x, y, freq = 0.14) => (
+        val(x * freq, y * freq) * 0.62 +
+        val(x * freq * 2.1 + 17.3, y * freq * 2.1 + 9.1) * 0.27 +
+        val(x * freq * 4.3 + 41.7, y * freq * 4.3 + 23.4) * 0.11
+    );
+};
+
+// Переводим природный stone в органические слои (убирает уродливые квадраты вокруг руин и пещер!)
+MB_IS_STRUCTURAL_TILE = function(key) {
+    return /^(wall|wood|flagstone|cobble|marble|floor|carpet)/.test(key || '');
+};
+
+// Калиброванные масштабы, слои и мягкое свечение без пересвета
+MB_ANALYZE_STAMP_META = function(stObj) {
+    const id = ((stObj?.id || '') + ' ' + (stObj?.label || '')).toLowerCase();
+
+    let layer = 1;
+    if (/(rug|carpet|mat|tatami|puddle|leaf_litter|duff|clover|soil_patch|dirt_patch|paving_stone|blood|webs|lily|submerged|current|rapids|river_edge|road_edge|path_edge|bridge|floor|ruin|shadow|shade|embers|fiery_area|oasis|watertransparent)/i.test(id)) {
+        layer = 0;
+    } else if (/(chimney|weather_vane)/i.test(id)) {
+        layer = 3;
+    } else if (/(roof|tree|palm|canopy|balloon|wing|tower|watchpost|chandelier|lightning|fireball|burning_hands|breath_weapon|wall_of_fire)/i.test(id) && !/(stump|fallen|branch|root|log|trunk)/i.test(id)) {
+        layer = 2;
+    }
+
+    let baseCells = 1.15;
+    const dimMatch = id.match(/(\d+)\s*x\s*(\d+)/i);
+    if (/(roof_tiled_6x4|roof_thatch_6x4)/i.test(id)) {
+        baseCells = 4.8;
+    } else if (/(roof_premade)/i.test(id)) {
+        baseCells = 5.2;
+    } else if (/(bridge_section)/i.test(id)) {
+        baseCells = 3.8;
+    } else if (/(door_narrow|door_shoji|door_tatami)/i.test(id)) {
+        baseCells = 1.22;
+    } else if (/(door_wide|double_door)/i.test(id)) {
+        baseCells = 1.85;
+    } else if (/(window_wide|window_narrow)/i.test(id)) {
+        baseCells = 1.12;
+    } else if (dimMatch) {
+        const wC = parseInt(dimMatch[1]) || 1;
+        const hC = parseInt(dimMatch[2]) || 1;
+        baseCells = Math.max(0.85, Math.min(5.0, Math.max(wC, hC) * 0.68));
+    } else if (/(tent_large|tent_round_large|pavillion|balloon|city_roof$)/i.test(id)) {
+        baseCells = 3.35;
+    } else if (/(tree_large|palmtree|fountain|wagon|catapult|shelter|watchpost|oasis|bigstatue|large_statue|tatami_mat_large)/i.test(id)) {
+        baseCells = 2.3;
+    } else if (/(tree|palm|tent|ballista|cannon$|table_long|tabledinning|tableroundlarge|carpet|rug_6|bed_pattern|bedframeddouble|billiards_table|piano|sofa|forge|altar|tomb|bridge|rock_formation|fallen_tree|boulder|cart|thicket|casting_table|chandelier|orrery_huge|barricade|woodenstakes)/i.test(id)) {
+        baseCells = 1.68;
+    } else if (/(table_modular)/i.test(id)) {
+        baseCells = 1.12;
+    } else if (/(table|bed|desk|bench|bookshelf|dresser|cupboard|statue|well|barrel|crate|chest|campfire|brazier|cauldron|oven|stove|throne|bush|shrub|cactus|fungi|mushroom|rock|stump|log|pillar|door|grave|bonepile|crystal|flytrap|anvil|melting_pot|shrine|samurai_armor|taiko|bonsai|totem|meatrack|tanningrack|shipswheel|anchor|stairs)/i.test(id)) {
+        baseCells = 1.15;
+    } else if (/(candle|lantern|torch|flower|apple|egg|pie|plate|meat|tankard|card|scroll|skull|bone|coin|shell|starfish|crab|parrot|seagull|cat_|bottle|chair|stool|cushion|sack|bucket|hammer|axe|sword|shield|ingot|tongs|spyglass|parchment|chimney|kettle|slippers|vase|kimono)/i.test(id)) {
+        baseCells = 0.72;
+    }
+
+    // Мягкое, реалистичное свечение (без слепящих кругов)
+    let glow = null;
+    if (/(campfire|forge|oven_fireplace|melting_pot|embers|fiery_area)/i.test(id) && !/unlit|empty|wood$|ring$|smoke/i.test(id)) {
+        glow = { color: [255, 152, 68], radius: 2.6, intensity: 0.68 };
+    } else if (/(brazier|torch|lantern|lamp|candle|chandelier|stand_lit|cooking_pit)/i.test(id) && !/unlit/i.test(id)) {
+        glow = { color: [255, 204, 122], radius: 1.9, intensity: 0.54 };
+    } else if (/(crystalblue|crystal_vertical|crystal_horizontal|rootsorb)/i.test(id)) {
+        glow = { color: [105, 198, 255], radius: 1.85, intensity: 0.46 };
+    }
+
+    return { layer, baseCells, glow };
+};
+
+// Мгновенный поиск спрайта O(1)
 MB_FIND_STAMP_OBJ = function(stampVal) {
     if (!stampVal) return null;
     if (!window._mbStampMapCache) {
@@ -24,7 +111,7 @@ MB_FIND_STAMP_OBJ = function(stampVal) {
     return window._mbStampMapCache.get(stampVal) || null;
 };
 
-// 2. Ленивая загрузка + однократное сжатие гигантских PNG в кэше (чтобы 4K-спрайты не вешали рендер)
+// Ленивая загрузка + однократное сжатие тяжёлых PNG
 MB_GET_LOADED_IMG = function(src, isTile = false) {
     if (!src) return null;
     const entry = window._mbImgCache[src];
@@ -66,7 +153,7 @@ MB_GET_LOADED_IMG = function(src, isTile = false) {
             window._mbRedrawTimer = setTimeout(() => {
                 window._mbRedrawTimer = null;
                 requestAnimationFrame(() => DRAW_MB_CANVAS());
-            }, 160);
+            }, 140);
         }
     };
 
@@ -78,7 +165,6 @@ MB_GET_LOADED_IMG = function(src, isTile = false) {
     return null;
 };
 
-// Подгружаем только полы, которые реально есть на текущей карте
 function MB_PRELOAD_ALL_TILES() {
     const tiles = GET_MB_TILES();
     const data = window._mbData || GET_MB_DATA();
@@ -90,24 +176,39 @@ function MB_PRELOAD_ALL_TILES() {
     });
 }
 
+// Гармоничный подбор текстур (отсекает дико выбивающиеся варианты из 14+ текстур)
 MB_PICK_TILE_FAMILY = function(prefix, fallback = 'grass') {
     const tiles = GET_MB_TILES();
-    const rx = new RegExp(`^${prefix}(_\\d+)?$`);
+    const CURATED = {
+        dirt:      ['dirt', 'dirt_2', 'dirt_3', 'dirt_4', 'dirt_5'],
+        flagstone: ['flagstone', 'flagstone_2', 'flagstone_3', 'flagstone_4', 'flagstone_5', 'flagstone_6'],
+        wood:      ['wood', 'wood_2', 'wood_3', 'wood_4', 'wood_5'],
+        wall:      ['wall', 'wall_2', 'wall_3', 'wall_4'],
+        stone:     ['stone', 'stone_2', 'stone_3', 'stone_4'],
+        grass:     ['grass', 'grass_2'],
+        snow:      ['snow', 'snow_2', 'snow_3'],
+        ice:       ['ice', 'ice_2']
+    };
     const isOk = (k) => {
         if (!tiles[k] || window._mbBrokenTileKeys[k]) return false;
         const src = tiles[k].img;
         if (src && window._mbImgCache[src] && window._mbImgCache[src].status === 'error') return false;
         return true;
     };
+    if (CURATED[prefix]) {
+        const pref = CURATED[prefix].filter(isOk);
+        if (pref.length) return MB_PICK(pref);
+    }
+    const rx = new RegExp(`^${prefix}(_\\d+)?$`);
     const keys = Object.keys(tiles).filter(k => rx.test(k) && isOk(k));
     if (keys.length) return MB_PICK(keys);
     if (isOk(fallback)) return fallback;
     return Object.keys(tiles).find(k => isOk(k)) || 'grass';
 };
 
-// Паттерн пола БЕЗ octx.filter (вместо фильтра — лёгкая тонировка поверх за 0.01 мс)
+// Единая цветокоррекция тайлов БЕЗ ctx.filter (убирает слепящий снег и кислотную листву)
 MB_GET_TILE_PATTERN = function(ctx, tileKey, tileImg, src, cellPx) {
-    const cacheKey = `v6_${tileKey}_${src}_${Math.round(cellPx)}`;
+    const cacheKey = `v7_${tileKey}_${src}_${Math.round(cellPx)}`;
     if (window._mbPatternCache[cacheKey]) return window._mbPatternCache[cacheKey];
 
     let repeatCells = 2.6;
@@ -127,8 +228,21 @@ MB_GET_TILE_PATTERN = function(ctx, tileKey, tileImg, src, cellPx) {
     if (/^wall/.test(tileKey)) {
         octx.fillStyle = 'rgba(14, 12, 10, 0.30)';
         octx.fillRect(0, 0, targetPx, targetPx);
-    } else if (!/^(water|lava|snow|ice)/.test(tileKey)) {
-        octx.fillStyle = 'rgba(20, 18, 15, 0.12)';
+    } else if (/^snow/.test(tileKey)) {
+        // Матируем яркий белый снег, чтобы глаза не уставали
+        octx.fillStyle = 'rgba(42, 60, 82, 0.24)';
+        octx.fillRect(0, 0, targetPx, targetPx);
+    } else if (/^ice/.test(tileKey)) {
+        octx.fillStyle = 'rgba(24, 52, 78, 0.20)';
+        octx.fillRect(0, 0, targetPx, targetPx);
+    } else if (/^leaves_red/.test(tileKey)) {
+        octx.fillStyle = 'rgba(38, 28, 18, 0.34)';
+        octx.fillRect(0, 0, targetPx, targetPx);
+    } else if (/^lava/.test(tileKey)) {
+        octx.fillStyle = 'rgba(24, 8, 4, 0.20)';
+        octx.fillRect(0, 0, targetPx, targetPx);
+    } else if (!/^water/.test(tileKey)) {
+        octx.fillStyle = 'rgba(18, 16, 13, 0.14)';
         octx.fillRect(0, 0, targetPx, targetPx);
     }
 
@@ -406,18 +520,17 @@ RENDER_GM_MAP_BUILDER_UI = function() {
     DRAW_MB_CANVAS();
 };
 
-// Мягкая круглая кисть 32×32 для плавных берегов и стыков БЕЗ ctx.filter!
 function MB_GET_SOFT_BRUSH() {
     if (window._mbSoftBrushCanvas) return window._mbSoftBrushCanvas;
     const c = document.createElement('canvas');
-    c.width = 32; c.height = 32;
+    c.width = 64; c.height = 64;
     const gctx = c.getContext('2d');
-    const g = gctx.createRadialGradient(16, 16, 8.5, 16, 16, 16);
+    const g = gctx.createRadialGradient(32, 32, 17, 32, 32, 32);
     g.addColorStop(0, 'rgba(0,0,0,1)');
-    g.addColorStop(0.65, 'rgba(0,0,0,0.85)');
+    g.addColorStop(0.68, 'rgba(0,0,0,0.88)');
     g.addColorStop(1, 'rgba(0,0,0,0)');
     gctx.fillStyle = g;
-    gctx.fillRect(0, 0, 32, 32);
+    gctx.fillRect(0, 0, 64, 64);
     window._mbSoftBrushCanvas = c;
     return c;
 }
@@ -445,7 +558,7 @@ function MB_HASH_OBJS(objs) {
 }
 
 // ================================================================
-// ⚡ БЫСТРЫЙ HD-РЕНДЕР (0 ВЫЗОВОВ ctx.filter, РАЗДЕЛЬНЫЕ КЭШИ)
+// ⚡ БЫСТРЫЙ HD-РЕНДЕР V6 (mScale=8, МЯГКИЙ BLOOM, 0 ctx.filter)
 // ================================================================
 DRAW_MB_CANVAS = function(isExport = false) {
     const canvas = document.getElementById('mb-editor-canvas');
@@ -464,7 +577,6 @@ DRAW_MB_CANVAS = function(isExport = false) {
 
     const cHash = MB_HASH_CELLS(data.cells);
     const oHash = MB_HASH_OBJS(data.objects || []);
-    // ВАЖНО: земля зависит ТОЛЬКО от _mbTileLoadVer (никогда не пересобирается при загрузке объектов!)
     const terrainKey = `${cols}x${rows}|${W}x${H}|${cHash}|${postFx?1:0}|${showGrid?1:0}|${window._mbTileLoadVer}`;
     const fullKey = `${terrainKey}|${oHash}|${lightKey}|${window._mbStampLoadVer}`;
 
@@ -480,19 +592,23 @@ DRAW_MB_CANVAS = function(isExport = false) {
         const targetMaxPx = cellW * meta.baseCells * (o.scale || 1.0);
 
         if (meta.glow && ghostAlpha === 1.0 && lightSources) {
-            lightSources.push({
-                x: cx, y: cy, color: meta.glow.color,
-                r: cellW * meta.glow.radius * (o.scale || 1.0),
-                intensity: meta.glow.intensity
-            });
+            // Не стакаем два источника света впритык, чтобы не было слепящего пятна
+            const tooClose = lightSources.some(ls => Math.hypot(ls.x - cx, ls.y - cy) < cellW * 1.45);
+            if (!tooClose) {
+                lightSources.push({
+                    x: cx, y: cy, color: meta.glow.color,
+                    r: cellW * meta.glow.radius * Math.min(1.25, o.scale || 1.0),
+                    intensity: meta.glow.intensity
+                });
+            }
         }
 
         if (postFx && ghostAlpha === 1.0 && meta.layer >= 1 && meta.layer <= 2) {
-            const sr = targetMaxPx * (meta.layer === 2 ? 0.44 : 0.34);
-            const sx = cx + (meta.layer === 2 ? cellW * 0.14 : cellW * 0.05);
-            const sy = cy + (meta.layer === 2 ? cellH * 0.16 : cellH * 0.06);
+            const sr = targetMaxPx * (meta.layer === 2 ? 0.42 : 0.32);
+            const sx = cx + (meta.layer === 2 ? cellW * 0.13 : cellW * 0.05);
+            const sy = cy + (meta.layer === 2 ? cellH * 0.15 : cellH * 0.06);
             const g = targetCtx.createRadialGradient(sx, sy, sr * 0.12, sx, sy, sr);
-            g.addColorStop(0, meta.layer === 2 ? 'rgba(0,0,0,0.42)' : 'rgba(0,0,0,0.32)');
+            g.addColorStop(0, meta.layer === 2 ? 'rgba(0,0,0,0.38)' : 'rgba(0,0,0,0.28)');
             g.addColorStop(1, 'rgba(0,0,0,0)');
             targetCtx.fillStyle = g;
             targetCtx.beginPath(); targetCtx.arc(sx, sy, sr, 0, Math.PI * 2); targetCtx.fill();
@@ -527,7 +643,6 @@ DRAW_MB_CANVAS = function(isExport = false) {
         };
         const isWallAt = (c, r) => (r >= 0 && r < rows && c >= 0 && c < cols && /^wall/.test(data.cells[r * cols + c].t));
 
-        // --- КЭШ ЗЕМЛИ (0 ctx.filter!) ---
         if (!window._mbTerrainCache) window._mbTerrainCache = document.createElement('canvas');
         const tCanvas = window._mbTerrainCache;
 
@@ -550,8 +665,8 @@ DRAW_MB_CANVAS = function(isExport = false) {
             tctx.fillStyle = fillStyleForTile(tctx, baseTileKey);
             tctx.fillRect(0, 0, W, H);
 
-            // Микро-маска (4px на клетку -> для 24x15 это всего 96x60 px!) + плавное масштабирование
-            const mScale = 4;
+            // Чёткая микро-маска 8px на клетку (0.2 мс, но аккуратные берега и тропы!)
+            const mScale = 8;
             const mw = cols * mScale, mh = rows * mScale;
             if (!window._mbMaskCanvas) window._mbMaskCanvas = document.createElement('canvas');
             const maskCanvas = window._mbMaskCanvas;
@@ -600,8 +715,8 @@ DRAW_MB_CANVAS = function(isExport = false) {
                             tctx.fillRect(c * cellW - 0.5, r * cellH - 0.5, cellW + 1, cellH + 1);
                         }
                     }
-                    tctx.strokeStyle = 'rgba(0, 0, 0, 0.28)';
-                    tctx.lineWidth = Math.max(1.5, cellW * 0.05);
+                    tctx.strokeStyle = 'rgba(0, 0, 0, 0.16)';
+                    tctx.lineWidth = Math.max(1, cellW * 0.035);
                     tctx.beginPath();
                     for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
                         if (data.cells[r * cols + c].t !== tKey) continue;
@@ -616,16 +731,14 @@ DRAW_MB_CANVAS = function(isExport = false) {
                     continue;
                 }
 
-                // Влажный берег вокруг воды/лавы (без blur)
                 if (isLiquid) {
-                    const shoreCol = /^lava/.test(tKey) ? 'rgba(28, 10, 4, 0.80)' : (/^water/.test(tKey) ? 'rgba(24, 20, 12, 0.42)' : 'rgba(0,0,0,0.82)');
-                    paintSoftMaskTint(shoreCol, 1.05, (c, r) => data.cells[r * cols + c].t === tKey);
+                    const shoreCol = /^lava/.test(tKey) ? 'rgba(26, 10, 4, 0.72)' : (/^water/.test(tKey) ? 'rgba(20, 18, 12, 0.36)' : 'rgba(0,0,0,0.80)');
+                    paintSoftMaskTint(shoreCol, 1.02, (c, r) => data.cells[r * cols + c].t === tKey);
                 }
 
-                // Мягкий слой текстуры через микро-маску (без blur)
                 mctx.clearRect(0, 0, mw, mh);
                 mctx.globalCompositeOperation = 'source-over';
-                const rad = mScale * (isLiquid ? 0.86 : 0.96);
+                const rad = mScale * (isLiquid ? 0.84 : 0.94);
                 const d = rad * 2;
                 for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
                     if (data.cells[r * cols + c].t !== tKey) continue;
@@ -642,9 +755,8 @@ DRAW_MB_CANVAS = function(isExport = false) {
                 lyr.globalCompositeOperation = 'source-over';
                 tctx.drawImage(layerCanvas, 0, 0);
 
-                // Глубина воды (без blur)
                 if (/^water/.test(tKey) && postFx) {
-                    paintSoftMaskTint('rgba(4, 22, 48, 0.34)', 0.85, (c, r) =>
+                    paintSoftMaskTint('rgba(4, 22, 48, 0.32)', 0.82, (c, r) =>
                         r > 0 && r < rows - 1 && c > 0 && c < cols - 1 &&
                         data.cells[r * cols + c].t === tKey &&
                         data.cells[(r - 1) * cols + c].t === tKey &&
@@ -660,25 +772,23 @@ DRAW_MB_CANVAS = function(isExport = false) {
                 tctx.fillRect(0, 0, W, H);
             }
 
-            // Тени от стен
             for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
                 if (isWallAt(c, r)) continue;
                 const x = c * cellW, y = r * cellH;
                 if (isWallAt(c, r - 1)) {
-                    const g = tctx.createLinearGradient(x, y, x, y + cellH * 0.68);
-                    g.addColorStop(0, 'rgba(0,0,0,0.62)'); g.addColorStop(1, 'rgba(0,0,0,0)');
-                    tctx.fillStyle = g; tctx.fillRect(x, y, cellW, cellH * 0.68);
+                    const g = tctx.createLinearGradient(x, y, x, y + cellH * 0.65);
+                    g.addColorStop(0, 'rgba(0,0,0,0.58)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+                    tctx.fillStyle = g; tctx.fillRect(x, y, cellW, cellH * 0.65);
                 }
                 if (isWallAt(c - 1, r)) {
-                    const g = tctx.createLinearGradient(x, y, x + cellW * 0.54, y);
-                    g.addColorStop(0, 'rgba(0,0,0,0.52)'); g.addColorStop(1, 'rgba(0,0,0,0)');
-                    tctx.fillStyle = g; tctx.fillRect(x, y, cellW * 0.54, cellH);
+                    const g = tctx.createLinearGradient(x, y, x + cellW * 0.52, y);
+                    g.addColorStop(0, 'rgba(0,0,0,0.48)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+                    tctx.fillStyle = g; tctx.fillRect(x, y, cellW * 0.52, cellH);
                 }
             }
 
-            // Сетка
             if (showGrid) {
-                tctx.strokeStyle = 'rgba(240, 215, 165, 0.11)';
+                tctx.strokeStyle = 'rgba(230, 205, 160, 0.10)';
                 tctx.lineWidth = 1;
                 tctx.beginPath();
                 for (let c = 0; c <= cols; c++) { tctx.moveTo(c * cellW + 0.5, 0); tctx.lineTo(c * cellW + 0.5, H); }
@@ -691,7 +801,6 @@ DRAW_MB_CANVAS = function(isExport = false) {
 
         fctx.drawImage(tCanvas, 0, 0);
 
-        // Объекты и 3D-стены
         const lightSources = [];
         const layers = [[], [], [], []];
         for (const o of (data.objects || [])) {
@@ -710,15 +819,15 @@ DRAW_MB_CANVAS = function(isExport = false) {
             const x = c * cellW, y = r * cellH;
             fctx.fillStyle = fillStyleForTile(fctx, wKey);
             fctx.fillRect(x, y, cellW + 0.5, cellH + 0.5);
-            fctx.fillStyle = 'rgba(10, 8, 6, 0.30)';
+            fctx.fillStyle = 'rgba(10, 8, 6, 0.28)';
             fctx.fillRect(x, y, cellW, cellH);
 
-            fctx.strokeStyle = 'rgba(245, 226, 196, 0.36)';
+            fctx.strokeStyle = 'rgba(245, 226, 196, 0.34)';
             fctx.lineWidth = 2;
             if (!isWallAt(c, r - 1)) { fctx.beginPath(); fctx.moveTo(x, y + 1); fctx.lineTo(x + cellW, y + 1); fctx.stroke(); }
             if (!isWallAt(c - 1, r)) { fctx.beginPath(); fctx.moveTo(x + 1, y); fctx.lineTo(x + 1, y + cellH); fctx.stroke(); }
 
-            fctx.strokeStyle = 'rgba(0, 0, 0, 0.86)';
+            fctx.strokeStyle = 'rgba(0, 0, 0, 0.84)';
             fctx.lineWidth = 3;
             if (!isWallAt(c, r + 1)) { fctx.beginPath(); fctx.moveTo(x, y + cellH - 1); fctx.lineTo(x + cellW, y + cellH - 1); fctx.stroke(); }
             if (!isWallAt(c + 1, r)) { fctx.beginPath(); fctx.moveTo(x + cellW - 1, y); fctx.lineTo(x + cellW - 1, y + cellH); fctx.stroke(); }
@@ -730,12 +839,15 @@ DRAW_MB_CANVAS = function(isExport = false) {
         layers[3].forEach(i => drawObjItem(fctx, i, lightSources));
 
         for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
-            if (/^lava/.test(data.cells[r * cols + c].t) && (r + c) % 2 === 0) {
-                lightSources.push({ x: (c + 0.5) * cellW, y: (r + 0.5) * cellH, color: [255, 118, 36], r: cellW * 2.8, intensity: 0.78 });
+            if (/^lava/.test(data.cells[r * cols + c].t) && (r * 3 + c) % 4 === 0) {
+                const lx = (c + 0.5) * cellW, ly = (r + 0.5) * cellH;
+                if (!lightSources.some(ls => Math.hypot(ls.x - lx, ls.y - ly) < cellW * 2.2)) {
+                    lightSources.push({ x: lx, y: ly, color: [255, 126, 48], r: cellW * 2.4, intensity: 0.48 });
+                }
             }
         }
 
-        // Свет и виньетка (1/4 разрешения)
+        // Свет и виньетка (деликатный bloom, без выжигания глаз!)
         if (postFx) {
             const lw = Math.max(96, Math.round(W / 4)), lh = Math.max(64, Math.round(H / 4));
             const sX = lw / W, sY = lh / H;
@@ -755,8 +867,8 @@ DRAW_MB_CANVAS = function(isExport = false) {
                     const lx = ls.x * sX, ly = ls.y * sY, lr = ls.r * sX;
                     const [cr, cg, cb] = ls.color;
                     const g = lctx.createRadialGradient(lx, ly, lr * 0.05, lx, ly, lr);
-                    g.addColorStop(0, `rgba(${cr}, ${cg}, ${cb}, ${Math.min(1, ls.intensity)})`);
-                    g.addColorStop(0.48, `rgba(${cr}, ${cg}, ${cb}, ${ls.intensity * 0.45})`);
+                    g.addColorStop(0, `rgba(${cr}, ${cg}, ${cb}, ${Math.min(0.82, ls.intensity)})`);
+                    g.addColorStop(0.5, `rgba(${cr}, ${cg}, ${cb}, ${ls.intensity * 0.36})`);
                     g.addColorStop(1, 'rgba(0,0,0,0)');
                     lctx.fillStyle = g;
                     lctx.beginPath(); lctx.arc(lx, ly, lr, 0, Math.PI * 2); lctx.fill();
@@ -767,13 +879,14 @@ DRAW_MB_CANVAS = function(isExport = false) {
             fctx.globalCompositeOperation = 'multiply';
             fctx.drawImage(lc, 0, 0, W, H);
 
-            if (lightSources.length > 0 && lightCfg.bloom > 0) {
+            const softBloom = Math.min(0.20, (lightCfg.bloom || 0) * 0.38);
+            if (lightSources.length > 0 && softBloom > 0) {
                 fctx.globalCompositeOperation = 'screen';
                 for (const ls of lightSources) {
                     const [cr, cg, cb] = ls.color;
-                    const br = ls.r * 0.60;
+                    const br = ls.r * 0.52;
                     const g = fctx.createRadialGradient(ls.x, ls.y, br * 0.04, ls.x, ls.y, br);
-                    g.addColorStop(0, `rgba(${cr}, ${cg}, ${cb}, ${lightCfg.bloom * ls.intensity})`);
+                    g.addColorStop(0, `rgba(${cr}, ${cg}, ${cb}, ${softBloom * ls.intensity})`);
                     g.addColorStop(1, 'rgba(0,0,0,0)');
                     fctx.fillStyle = g;
                     fctx.beginPath(); fctx.arc(ls.x, ls.y, br, 0, Math.PI * 2); fctx.fill();
@@ -781,9 +894,9 @@ DRAW_MB_CANVAS = function(isExport = false) {
             }
 
             fctx.globalCompositeOperation = 'source-over';
-            const vig = fctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.hypot(W, H) * 0.56);
+            const vig = fctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.38, W / 2, H / 2, Math.hypot(W, H) * 0.58);
             vig.addColorStop(0, 'rgba(0,0,0,0)');
-            vig.addColorStop(1, `rgba(0,0,0,${lightCfg.vignette})`);
+            vig.addColorStop(1, `rgba(0,0,0,${Math.min(0.45, lightCfg.vignette)})`);
             fctx.fillStyle = vig;
             fctx.fillRect(0, 0, W, H);
             fctx.restore();
