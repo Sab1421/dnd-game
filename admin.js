@@ -3,7 +3,7 @@
 // ================================================================
 (function INIT_ADMIN_AND_UPDATES_MODULE() {
     // 👇 ВПИШИ СЮДА СВОЙ ЛОГИН (строчными буквами). Можно несколько через запятую.
-    const HARDCODED_ADMIN_LOGINS = ['admin'];
+    const HARDCODED_ADMIN_LOGINS = ['lwolf'];
 
     const ADMIN_FB_URL = "https://dnds-23b7d-default-rtdb.firebaseio.com/campaign_v2";
     window._adminPreviewAsUser = false; // Режим предпросмотра сайта глазами обычного игрока
