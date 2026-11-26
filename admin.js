@@ -394,7 +394,7 @@
     };
 
 
-    window.RENDER_ADMIN_PANEL_MODAL = RENDER_ADMIN_PANEL_MODAL;
+    window.RENDER_ADMIN_PANEL_MODAL = function() {
     function RENDER_ADMIN_PANEL_MODAL() {
         const cont = document.getElementById('admin-panel-content');
         if (!cont) return;
@@ -581,15 +581,15 @@
     function INJECT_ROOM_TOPBAR_BUTTONS() {
         const bar = document.getElementById('role-status-bar');
         if (!bar || bar.style.display === 'none') return;
-        bar.querySelectorAll('[data-admin-ui]').forEach(el => el.remove());
+        bar.querySelectorAll('[data-admin-ui="updates"], [data-admin-ui="admin"]').forEach(el => el.remove());
 
         const exitBtn = bar.querySelector('button[onclick="SHOW_LOBBY_SCREEN()"]');
         if (!exitBtn) return;
 
-        let row = exitBtn.parentElement.querySelector('[data-admin-ui="topbar-row"]');
+        let row = exitBtn.closest('[data-admin-topbar-row]');
         if (!row) {
             row = document.createElement('div');
-            row.setAttribute('data-admin-ui', 'topbar-row');
+            row.setAttribute('data-admin-topbar-row', '1');
             row.style.cssText = 'display:flex; align-items:center; gap:6px; flex-wrap:wrap; justify-content:flex-end;';
             exitBtn.before(row);
             row.appendChild(exitBtn);
