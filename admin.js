@@ -393,6 +393,7 @@
         }
     };
 
+    window.RENDER_ADMIN_PANEL_MODAL = RENDER_ADMIN_PANEL_MODAL;
     function RENDER_ADMIN_PANEL_MODAL() {
         const cont = document.getElementById('admin-panel-content');
         if (!cont) return;
