@@ -479,6 +479,87 @@
                 background: var(--ui-panel2);
             }
 
+            /* 🔒 СТАБИЛЬНАЯ ВЁРСТКА ШАПКИ И КАРТОЧКИ ПЕРСОНАЖА (НИЧЕГО НЕ СЪЕЗЖАЕТ) */
+            #role-status-bar, #room-session-bar {
+                max-width: 1740px !important;
+                width: 100%;
+                box-sizing: border-box !important;
+                justify-content: space-between !important;
+                align-items: center !important;
+                gap: 8px 14px !important;
+                padding: 8px 14px !important;
+                letter-spacing: 0 !important;
+                line-height: 1.3 !important;
+            }
+            #role-status-bar > div:first-child,
+            #room-session-bar > div:first-child {
+                flex: 1 1 auto;
+                min-width: 0;
+            }
+            #role-status-bar > div:last-child,
+            #room-session-bar > div:last-child {
+                margin-left: auto !important;
+                flex: 0 1 auto;
+                align-items: flex-end !important;
+                justify-content: flex-end !important;
+            }
+            #role-status-bar [data-admin-topbar-row] {
+                justify-content: flex-end !important;
+            }
+            #role-status-bar button,
+            #room-session-bar button,
+            #role-status-bar span,
+            #role-status-bar label,
+            #room-session-bar span {
+                font-size: clamp(12px, 0.84rem, 15px) !important;
+                min-height: 0 !important;
+            }
+            #role-status-bar button,
+            #room-session-bar button {
+                padding: 5px 9px !important;
+                white-space: nowrap;
+            }
+
+            /* Возвращаем привычный компактный вид карточки персонажа и тёмной полоски ХП/КБ/Ячейки */
+            #left-column {
+                flex: 0 0 325px !important;
+                width: 325px !important;
+                max-width: 325px !important;
+                box-sizing: border-box !important;
+            }
+            .char-card {
+                padding: 10px 14px !important;
+                overflow: hidden;
+            }
+            .char-stats {
+                padding: 6px 8px !important;
+                margin-top: 6px !important;
+                width: 100% !important;
+                max-width: 100% !important;
+                box-sizing: border-box !important;
+                gap: 4px !important;
+                line-height: 1.2 !important;
+                letter-spacing: 0 !important;
+            }
+            .char-stats .stat-item {
+                flex: 1 1 0 !important;
+                min-width: 0 !important;
+            }
+            .char-stats .stat-value {
+                font-size: clamp(16px, 1.12rem, 20px) !important;
+                line-height: 1.2 !important;
+            }
+            .char-stats .stat-label {
+                font-size: clamp(11px, 0.74rem, 13px) !important;
+                line-height: 1.2 !important;
+                letter-spacing: 0 !important;
+                white-space: nowrap;
+            }
+            body.ui-comfort-eyes .btn-small,
+            body.ui-comfort-eyes .char-card button {
+                min-height: 0 !important;
+            }
+
             /* 📱 МОБИЛЬНАЯ АДАПТАЦИЯ (<= 980px) */
             #mobile-room-nav { display: none; }
             @media (max-width: 980px) {
