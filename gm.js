@@ -3975,7 +3975,7 @@ function RENDER_LOBBY_HTML() {
 }
 
 // ================================================================
-// ⚡ БЕЗОПАСНАЯ WEBSOCKET-СИНХРОНИЗАЦИЯ (БЕЗ ПОТЕРИ НОВЫХ ИГРОКОВ И БЕЗ ПИНГА)
+// ⚡ ПОКОМНАТНАЯ WEBSOCKET-СИНХРОНИЗАЦИЯ (ИЗОЛЯЦИЯ КОМНАТ + АВТО-МИГРАЦИЯ #1001)
 // ================================================================
 (function INIT_TURBO_MULTIPLAYER() {
     const FIREBASE_DB_URL = "https://dnds-23b7d-default-rtdb.firebaseio.com";
@@ -4029,32 +4029,80 @@ function RENDER_LOBBY_HTML() {
         }
     });
 
-    let isApplyingRemote = false;
-    let initialCloudLoaded = false;
-    let mediaCache = {};
-
-    const SYNC_KEYS = [
-        'dnd_characters', 'dnd_users_accounts', 'dnd_accounts_db', 'dnd_shared_templates',
-        'dnd_rooms', 'dnd_map_state', 'dnd_gm_shop',
-        'dnd_bestiary', 'dnd_npcs', 'dnd_vn_dialog', 'dnd_prepared_events',
-        'dnd_custom_lore', 'dnd_gm_event', 'dnd_gm_skill_check',
-        'dnd_gm_edit_request', 'dnd_rest_poll', 'dnd_tasks',
-        'dnd_chat', 'dnd_sys_log', 'dnd_npc_dialog_log'
+    // Глобальные ключи (общие для всего сайта)
+    const GLOBAL_SYNC_KEYS = [
+        'dnd_characters', 'dnd_users_accounts', 'dnd_accounts_db',
+        'dnd_shared_templates', 'dnd_rooms'
     ];
+
+    // Комнатные ключи (отдельные в каждой комнате и в Firebase: rooms/<code >/state/<key>)
+    const ROOM_SYNC_KEYS = [
+        'dnd_map_state', 'dnd_gm_shop', 'dnd_bestiary', 'dnd_npcs',
+        'dnd_vn_dialog', 'dnd_prepared_events', 'dnd_custom_lore',
+        'dnd_gm_event', 'dnd_gm_skill_check', 'dnd_gm_edit_request',
+        'dnd_rest_poll', 'dnd_tasks', 'dnd_chat', 'dnd_sys_log',
+        'dnd_npc_dialog_log'
+    ];
+
+    // Комнатные ключи только для текущего браузера (черновики, секретные заметки, флаги просмотра)
+    const ROOM_LOCAL_ONLY_KEYS = [
+        'dnd_map_builder_grid', 'dnd_gm_secret_notes', 'dnd_map_bg_img'
+    ];
+
+    function IS_ROOM_KEY(key) {
+        if (!key) return false;
+        return ROOM_SYNC_KEYS.includes(key) ||
+               ROOM_LOCAL_ONLY_KEYS.includes(key) ||
+               key.startsWith('dnd_seen_event_') ||
+               key.startsWith('dnd_seen_shop_');
+    }
+
+    window.GET_ACTIVE_ROOM_CODE = function() {
+        try {
+            const s = sessionStorage.getItem('dnd_current_session');
+            if (s) {
+                const parsed = JSON.parse(s);
+                if (parsed && parsed.roomCode) return String(parsed.roomCode);
+            }
+        } catch (e) {}
+        return null;
+    };
+
+    function ROOM_LS_KEY(roomCode, key) {
+        return `__r_${roomCode}__${key}`;
+    }
+
+    let isApplyingRemote = false;
+    let initialGlobalLoaded = false;
+    let loadedRooms = {};
+    let globalMediaCache = {};
+    let roomMediaCache = {};
+
+    let dbRootRef = null;
+    let dbGlobalStateRef = null;
+    let dbGlobalMediaRef = null;
+    let activeFbRoom = null;
+    let activeRoomStateRef = null;
+    let activeRoomMediaRef = null;
+    let pendingRoomCode = null;
+    let roomSwitchToken = 0;
 
     const origSetItem = localStorage.setItem.bind(localStorage);
     const origGetItem = localStorage.getItem.bind(localStorage);
     const origRemoveItem = localStorage.removeItem.bind(localStorage);
 
-    function stripHeavyImages(key, rawVal, dbMediaRef) {
+    function stripHeavyImages(key, rawVal, roomCode) {
         if (!rawVal || typeof rawVal !== 'string') return rawVal;
         try {
-            if (key === 'dnd_map_state') {
+            if (key === 'dnd_map_state' && roomCode) {
                 const st = JSON.parse(rawVal);
                 if (st.img && st.img.startsWith('data:')) {
-                    if (mediaCache['map_img'] !== st.img) {
-                        mediaCache['map_img'] = st.img;
-                        if (dbMediaRef) dbMediaRef.child('map_img').set(st.img);
+                    if (!roomMediaCache[roomCode]) roomMediaCache[roomCode] = {};
+                    if (roomMediaCache[roomCode]['map_img'] !== st.img) {
+                        roomMediaCache[roomCode]['map_img'] = st.img;
+                        if (dbRootRef && loadedRooms[roomCode]) {
+                            dbRootRef.child('rooms').child(roomCode).child('media').child('map_img').set(st.img);
+                        }
                     }
                     st.img = '__CACHED_MAP_IMG__';
                 }
@@ -4065,65 +4113,369 @@ function RENDER_LOBBY_HTML() {
                 }
                 return JSON.stringify(st);
             }
+            if (key === 'dnd_vn_dialog' && roomCode) {
+                const vn = JSON.parse(rawVal);
+                if (vn && vn.avatar && vn.avatar.startsWith('data:')) {
+                    if (!roomMediaCache[roomCode]) roomMediaCache[roomCode] = {};
+                    if (roomMediaCache[roomCode]['vn_av'] !== vn.avatar) {
+                        roomMediaCache[roomCode]['vn_av'] = vn.avatar;
+                        if (dbRootRef && loadedRooms[roomCode]) {
+                            dbRootRef.child('rooms').child(roomCode).child('media').child('vn_av').set(vn.avatar);
+                        }
+                    }
+                    vn.avatar = '__CACHED_VN_AV__';
+                }
+                return JSON.stringify(vn);
+            }
             if (key === 'dnd_characters') {
                 const cs = JSON.parse(rawVal);
                 cs.forEach((c, idx) => {
                     if (c && c.avatar && c.avatar.startsWith('data:')) {
                         const mKey = 'char_av_' + (c.id || idx);
-                        if (mediaCache[mKey] !== c.avatar) {
-                            mediaCache[mKey] = c.avatar;
-                            if (dbMediaRef) dbMediaRef.child(mKey).set(c.avatar);
+                        if (globalMediaCache[mKey] !== c.avatar) {
+                            globalMediaCache[mKey] = c.avatar;
+                            if (dbGlobalMediaRef) dbGlobalMediaRef.child(mKey).set(c.avatar);
                         }
                         c.avatar = '__CACHED_AV_' + (c.id || idx) + '__';
                     }
                 });
                 return JSON.stringify(cs);
             }
-            if (key === 'dnd_vn_dialog') {
-                const vn = JSON.parse(rawVal);
-                if (vn && vn.avatar && vn.avatar.startsWith('data:')) {
-                    if (mediaCache['vn_av'] !== vn.avatar) {
-                        mediaCache['vn_av'] = vn.avatar;
-                        if (dbMediaRef) dbMediaRef.child('vn_av').set(vn.avatar);
-                    }
-                    vn.avatar = '__CACHED_VN_AV__';
-                }
-                return JSON.stringify(vn);
-            }
         } catch (e) {}
         return rawVal;
     }
 
-    function restoreHeavyImages(key, rawVal) {
+    function restoreHeavyImages(key, rawVal, roomCode) {
         if (!rawVal || typeof rawVal !== 'string') return rawVal;
         try {
             if (key === 'dnd_map_state' && rawVal.includes('__CACHED_MAP_IMG__')) {
                 const st = JSON.parse(rawVal);
-                st.img = mediaCache['map_img'] || '';
+                st.img = (roomCode && roomMediaCache[roomCode] && roomMediaCache[roomCode]['map_img']) || '';
                 return JSON.stringify(st);
+            }
+            if (key === 'dnd_vn_dialog' && rawVal.includes('__CACHED_VN_AV__')) {
+                const vn = JSON.parse(rawVal);
+                if (vn) vn.avatar = (roomCode && roomMediaCache[roomCode] && roomMediaCache[roomCode]['vn_av']) || '';
+                return JSON.stringify(vn);
             }
             if (key === 'dnd_characters' && rawVal.includes('__CACHED_AV_')) {
                 const cs = JSON.parse(rawVal);
                 cs.forEach((c, idx) => {
                     if (c && typeof c.avatar === 'string' && c.avatar.startsWith('__CACHED_AV_')) {
                         const mKey = c.avatar.replace(/^__CACHED_AV_/, '').replace(/__$/, '');
-                        c.avatar = mediaCache['char_av_' + mKey] || mediaCache['char_av_' + idx] || '';
+                        c.avatar = globalMediaCache['char_av_' + mKey] || globalMediaCache['char_av_' + idx] || '';
                     }
                 });
                 return JSON.stringify(cs);
-            }
-            if (key === 'dnd_vn_dialog' && rawVal.includes('__CACHED_VN_AV__')) {
-                const vn = JSON.parse(rawVal);
-                if (vn) vn.avatar = mediaCache['vn_av'] || '';
-                return JSON.stringify(vn);
             }
         } catch (e) {}
         return rawVal;
     }
 
+    // Синхронная виртуализация localStorage по комнатам (работает сразу, до загрузки Firebase)
     localStorage.getItem = function(key) {
+        if (IS_ROOM_KEY(key)) {
+            const rc = window.GET_ACTIVE_ROOM_CODE();
+            if (!rc) return null;
+            const val = origGetItem(ROOM_LS_KEY(rc, key));
+            return restoreHeavyImages(key, val, rc);
+        }
         const val = origGetItem(key);
-        return restoreHeavyImages(key, val);
+        return restoreHeavyImages(key, val, null);
+    };
+
+    localStorage.setItem = function(key, val) {
+        if (IS_ROOM_KEY(key)) {
+            const rc = window.GET_ACTIVE_ROOM_CODE();
+            if (!rc) return;
+            const lightVal = stripHeavyImages(key, val, rc);
+            try { origSetItem(ROOM_LS_KEY(rc, key), lightVal); } catch (e) { return; }
+            if (!isApplyingRemote && ROOM_SYNC_KEYS.includes(key) && loadedRooms[rc] && dbRootRef) {
+                dbRootRef.child('rooms').child(rc).child('state').child(key).set({
+                    v: lightVal,
+                    by: MY_CLIENT_ID,
+                    t: Date.now()
+                });
+            }
+            return;
+        }
+
+        const lightVal = stripHeavyImages(key, val, null);
+        try { origSetItem(key, lightVal); } catch (e) { return; }
+
+        if (!initialGlobalLoaded && key === 'dnd_characters') return;
+        if (!isApplyingRemote && GLOBAL_SYNC_KEYS.includes(key) && dbGlobalStateRef) {
+            dbGlobalStateRef.child(key).set({
+                v: lightVal,
+                by: MY_CLIENT_ID,
+                t: Date.now()
+            });
+        }
+    };
+
+    localStorage.removeItem = function(key) {
+        if (IS_ROOM_KEY(key)) {
+            const rc = window.GET_ACTIVE_ROOM_CODE();
+            if (!rc) return;
+            origRemoveItem(ROOM_LS_KEY(rc, key));
+            if (!isApplyingRemote && ROOM_SYNC_KEYS.includes(key) && loadedRooms[rc] && dbRootRef) {
+                dbRootRef.child('rooms').child(rc).child('state').child(key).set({
+                    v: "",
+                    by: MY_CLIENT_ID,
+                    t: Date.now()
+                });
+            }
+            return;
+        }
+
+        origRemoveItem(key);
+        if (!initialGlobalLoaded) return;
+        if (!isApplyingRemote && GLOBAL_SYNC_KEYS.includes(key) && dbGlobalStateRef) {
+            dbGlobalStateRef.child(key).set({
+                v: "",
+                by: MY_CLIENT_ID,
+                t: Date.now()
+            });
+        }
+    };
+
+    function RESET_EPHEMERAL_ROOM_UI() {
+        window._unreadSysCount = 0;
+        window._bg3CombatLogBanner = '';
+        window._lastCombatBanner = '';
+        window._gmPinPlacementMode = false;
+        window._gmFogEraserMode = false;
+        window._bg3SelectedTargetIdx = 0;
+        window._mbData = null;
+        if (window._mapCam) {
+            window._mapCam.zoom = 1;
+            window._mapCam.panX = 0;
+            window._mapCam.panY = 0;
+            window._mapCam.panMode = false;
+        }
+        ['player-skill-check-popup', 'player-gm-perm-popup', 'party-rest-vote-popup'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.remove();
+        });
+        const shopBtn = document.getElementById('player-left-shop-btn');
+        if (shopBtn) shopBtn.style.display = 'none';
+    }
+
+    function REFRESH_ROOM_UI_NOW() {
+        const sess = GET_SESSION();
+        if (!sess) return;
+        if (typeof ENSURE_ALL_CHARS_VALID === 'function') ENSURE_ALL_CHARS_VALID();
+        if (typeof SYNC_MY_PLAYER_INDEX === 'function') SYNC_MY_PLAYER_INDEX();
+        RMC();
+        RPL();
+        LDT();
+        RCH();
+        RENDER_MAP_AREA();
+        RENDER_CUSTOM_LORE();
+        if (sess.role === 'gm') {
+            RENDER_GM_LEFT_COLUMN();
+        } else {
+            CHECK_AND_RENDER_REST_POPUP();
+            CHECK_AND_RENDER_PERMISSION_POPUP();
+            CHECK_AND_RENDER_SKILL_ROLL_POPUP();
+            CHECK_UNSEEN_GM_EVENT();
+            CHECK_UNSEEN_SHOP_OPEN();
+        }
+    }
+
+    function DETACH_ACTIVE_ROOM_LISTENERS() {
+        if (activeRoomStateRef) {
+            ROOM_SYNC_KEYS.forEach(k => activeRoomStateRef.child(k).off());
+            activeRoomStateRef = null;
+        }
+        if (activeRoomMediaRef) {
+            activeRoomMediaRef.off();
+            activeRoomMediaRef = null;
+        }
+        activeFbRoom = null;
+    }
+
+    function APPLY_REMOTE_ROOM_PACKET(roomCode, key, remoteVal) {
+        if (window.GET_ACTIVE_ROOM_CODE() !== roomCode) return;
+        if (key === 'dnd_map_state' && window._draggingMapObj) return;
+
+        const lsKey = ROOM_LS_KEY(roomCode, key);
+        const currentLocal = origGetItem(lsKey);
+        if (currentLocal === remoteVal) return;
+
+        isApplyingRemote = true;
+        if (remoteVal === "" || remoteVal === null || remoteVal === undefined) origRemoveItem(lsKey);
+        else { try { origSetItem(lsKey, remoteVal); } catch (e) {} }
+        isApplyingRemote = false;
+
+        const sess = GET_SESSION();
+        const activeTag = document.activeElement ? document.activeElement.tagName : '';
+        const isTyping = (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT');
+
+        if (key === 'dnd_map_state' || key === 'dnd_vn_dialog') {
+            RENDER_MAP_AREA();
+        } else if (key === 'dnd_chat' || key === 'dnd_sys_log') {
+            RCH();
+        } else if (key === 'dnd_rest_poll') {
+            CHECK_AND_RENDER_REST_POPUP();
+            if (document.getElementById('rest-modal')?.classList.contains('active')) SLR();
+        } else if (key === 'dnd_gm_skill_check') {
+            CHECK_AND_RENDER_SKILL_ROLL_POPUP();
+        } else if (key === 'dnd_gm_edit_request') {
+            CHECK_AND_RENDER_PERMISSION_POPUP();
+            CHECK_GM_PERMISSION_RESPONSE();
+        } else if (key === 'dnd_gm_event') {
+            CHECK_UNSEEN_GM_EVENT();
+        } else if (key === 'dnd_gm_shop') {
+            RENDER_MAP_AREA();
+            CHECK_UNSEEN_SHOP_OPEN();
+            if (sess && sess.role === 'gm') RENDER_GM_LEFT_COLUMN();
+        } else if (key === 'dnd_tasks') {
+            LDT();
+            if (sess && sess.role === 'gm') RENDER_GM_LEFT_COLUMN();
+        } else if (key === 'dnd_custom_lore') {
+            RENDER_CUSTOM_LORE();
+        } else if (!isTyping) {
+            RENDER_MAP_AREA();
+            if (sess && sess.role === 'gm') RENDER_GM_LEFT_COLUMN();
+        }
+    }
+
+    window.SWITCH_FIREBASE_ROOM = function(roomCode) {
+        const nextCode = roomCode ? String(roomCode) : null;
+        if (nextCode === activeFbRoom && (nextCode === null || activeRoomStateRef)) {
+            return;
+        }
+
+        DETACH_ACTIVE_ROOM_LISTENERS();
+        RESET_EPHEMERAL_ROOM_UI();
+
+        if (!nextCode) {
+            pendingRoomCode = null;
+            return;
+        }
+
+        if (!dbRootRef) {
+            pendingRoomCode = nextCode;
+            return;
+        }
+
+        const myToken = ++roomSwitchToken;
+        activeFbRoom = nextCode;
+        loadedRooms[nextCode] = false;
+
+        const rStateRef = dbRootRef.child('rooms').child(nextCode).child('state');
+        const rMediaRef = dbRootRef.child('rooms').child(nextCode).child('media');
+        activeRoomStateRef = rStateRef;
+        activeRoomMediaRef = rMediaRef;
+
+        // 1. Слушаем медиа конкретной комнаты (карта и портрет NPC)
+        rMediaRef.on('value', (snap) => {
+            if (myToken !== roomSwitchToken) return;
+            roomMediaCache[nextCode] = snap.val() || {};
+            if (window.GET_ACTIVE_ROOM_CODE() === nextCode) {
+                RENDER_MAP_AREA();
+            }
+        });
+
+        // 2. Первичная загрузка всех данных этой комнаты
+        rStateRef.once('value', async (snap) => {
+            if (myToken !== roomSwitchToken) return;
+            let remoteState = snap.val();
+
+            // Однократная авто-миграция старых данных в комнату #1001, чтобы ничего не пропало
+            if (!remoteState && nextCode === '1001' && dbGlobalStateRef) {
+                try {
+                    const [legStateSnap, legMediaSnap] = await Promise.all([
+                        dbGlobalStateRef.once('value'),
+                        dbGlobalMediaRef ? dbGlobalMediaRef.once('value') : Promise.resolve(null)
+                    ]);
+                    if (myToken !== roomSwitchToken) return;
+
+                    const legState = legStateSnap ? legStateSnap.val() : null;
+                    const legMedia = legMediaSnap ? legMediaSnap.val() : null;
+                    const migratedState = {};
+                    if (legState) {
+                        ROOM_SYNC_KEYS.forEach(k => {
+                            if (legState[k] && legState[k].v !== undefined) {
+                                migratedState[k] = legState[k];
+                            }
+                        });
+                    }
+                    if (Object.keys(migratedState).length > 0) {
+                        remoteState = migratedState;
+                        rStateRef.update(migratedState);
+                    }
+                    if (legMedia && (legMedia.map_img || legMedia.vn_av)) {
+                        const migMedia = {};
+                        if (legMedia.map_img) migMedia.map_img = legMedia.map_img;
+                        if (legMedia.vn_av) migMedia.vn_av = legMedia.vn_av;
+                        roomMediaCache[nextCode] = Object.assign({}, roomMediaCache[nextCode] || {}, migMedia);
+                        rMediaRef.update(migMedia);
+                    }
+                } catch (e) {}
+            }
+
+            isApplyingRemote = true;
+            ROOM_SYNC_KEYS.forEach(k => {
+                const lsKey = ROOM_LS_KEY(nextCode, k);
+                if (remoteState && remoteState[k] && remoteState[k].v !== undefined && remoteState[k].v !== "") {
+                    try { origSetItem(lsKey, remoteState[k].v); } catch (e) {}
+                } else {
+                    origRemoveItem(lsKey);
+                }
+            });
+            isApplyingRemote = false;
+
+            loadedRooms[nextCode] = true;
+
+            // Если игрок только что вошёл в комнату и ждёт добавления фишки на уже готовую карту
+            if (window._pendingJoinTokenHero && String(window._pendingJoinTokenHero.roomCode) === nextCode) {
+                const info = window._pendingJoinTokenHero;
+                window._pendingJoinTokenHero = null;
+                const cs = GC();
+                const hero = cs[info.charIdx];
+                const st = GET_MAP_STATE();
+                if (hero && st.tokens && st.tokens.length > 0 && !st.tokens.some(t => t.isPlayer && t.charIdx === info.charIdx)) {
+                    const hView = (typeof GET_CHAR_FOR_ROOM === 'function') ? GET_CHAR_FOR_ROOM(hero, nextCode) : hero;
+                    st.tokens.push({
+                        id: Date.now(),
+                        isPlayer: true,
+                        charIdx: info.charIdx,
+                        name: hView.name || 'Герой',
+                        icon: '🛡️',
+                        avatar: '',
+                        x: 25 + (info.charIdx * 12) % 55,
+                        y: 72,
+                        hp: hView.hp ?? 10,
+                        maxHp: hView.maxHp || 10,
+                        ac: CAC(hView),
+                        init: 10
+                    });
+                    SAVE_MAP_STATE(st);
+                }
+            }
+
+            REFRESH_ROOM_UI_NOW();
+
+            // 3. Подписка на мгновенные обновления ТОЛЬКО этой комнаты
+            ROOM_SYNC_KEYS.forEach(k => {
+                rStateRef.child(k).on('value', (s) => {
+                    if (myToken !== roomSwitchToken) return;
+                    const packet = s.val();
+                    if (!packet || packet.v === undefined) return;
+                    if (packet.by === MY_CLIENT_ID) return;
+                    APPLY_REMOTE_ROOM_PACKET(nextCode, k, packet.v);
+                });
+            });
+        });
+    };
+
+    // Перехватываем SAVE_SESSION, чтобы смена/выход из комнаты сразу переключали синхронизацию
+    const _ORIG_SAVE_SESSION_SYNC = SAVE_SESSION;
+    SAVE_SESSION = function(sess) {
+        _ORIG_SAVE_SESSION_SYNC(sess);
+        window.SWITCH_FIREBASE_ROOM(sess && sess.roomCode ? String(sess.roomCode) : null);
     };
 
     const script = document.createElement('script');
@@ -4138,11 +4490,12 @@ function RENDER_LOBBY_HTML() {
 
     function startWebSocketEngine() {
         firebase.initializeApp({ databaseURL: FIREBASE_DB_URL });
-        const dbRoot = firebase.database().ref('campaign_v2');
-        const dbStateRef = dbRoot.child('state');
-        const dbMediaRef = dbRoot.child('media');
-        const dbAccountsRef = dbRoot.child('accounts');
+        dbRootRef = firebase.database().ref('campaign_v2');
+        dbGlobalStateRef = dbRootRef.child('state');
+        dbGlobalMediaRef = dbRootRef.child('media');
+        const dbAccountsRef = dbRootRef.child('accounts');
         window._firebaseAccountsRef = dbAccountsRef;
+
         dbAccountsRef.on('value', (snap) => {
             const remoteAccs = snap.val();
             if (remoteAccs && typeof remoteAccs === 'object') {
@@ -4151,14 +4504,14 @@ function RENDER_LOBBY_HTML() {
             }
         });
 
-        const dbPresenceRef = dbRoot.child('presence');
+        const dbPresenceRef = dbRootRef.child('presence');
         const myPresenceRef = dbPresenceRef.child(MY_CLIENT_ID);
 
         function GET_MY_PRESENCE_LABEL() {
             const sess = GET_SESSION();
             const authUser = (typeof GET_CURRENT_USER === 'function') ? GET_CURRENT_USER() : null;
             if (sess && sess.role === 'gm') {
-                return `👑 ${GET_GM_NAME()} (Мастер)`;
+                return `👑 ${GET_GM_NAME()} (Мастер • #${sess.roomCode || '1001'})`;
             }
             if (sess && sess.role === 'player') {
                 const cs = GC();
@@ -4183,7 +4536,6 @@ function RENDER_LOBBY_HTML() {
         firebase.database().ref('.info/connected').on('value', (snap) => {
             if (snap.val() === true) {
                 _isCloudOnline = true;
-                // При закрытии вкладки или потере сети Firebase сам удалит запись игрока
                 myPresenceRef.onDisconnect().remove().then(() => {
                     myPresenceRef.set({
                         label: GET_MY_PRESENCE_LABEL(),
@@ -4203,92 +4555,64 @@ function RENDER_LOBBY_HTML() {
             UPDATE_CLOUD_BADGE_UI();
         });
 
-        dbMediaRef.on('value', (snap) => {
+        // Глобальные аватарки персонажей
+        dbGlobalMediaRef.on('value', (snap) => {
             const m = snap.val();
             if (m) {
-                mediaCache = m;
+                globalMediaCache = m;
                 RMC(); RPL(); RENDER_MAP_AREA();
             }
         });
 
-        localStorage.setItem = function(key, val) {
-            const lightVal = stripHeavyImages(key, val, dbMediaRef);
-            try { origSetItem(key, lightVal); } catch (e) { return; }
-
-            // Не отправляем дефолтный массив из 1 пустого героя до того, как скачали актуальный отряд из облака!
-            if (!initialCloudLoaded && key === 'dnd_characters') return;
-
-            if (!isApplyingRemote && SYNC_KEYS.includes(key)) {
-                dbStateRef.child(key).set({
-                    v: lightVal,
-                    by: MY_CLIENT_ID,
-                    t: Date.now()
-                });
-            }
-        };
-
-        localStorage.removeItem = function(key) {
-            origRemoveItem(key);
-            if (!initialCloudLoaded) return;
-            if (!isApplyingRemote && SYNC_KEYS.includes(key)) {
-                dbStateRef.child(key).set({
-                    v: "",
-                    by: MY_CLIENT_ID,
-                    t: Date.now()
-                });
-            }
-        };
-
-        // Первичная загрузка всего состояния с сервера перед разрешением записи
-        dbStateRef.once('value', (snap) => {
+        // Первичная загрузка глобальных ключей (аккаунты, комнаты, герои, шаблоны)
+        dbGlobalStateRef.once('value', (snap) => {
             const allRemote = snap.val();
             if (!allRemote) {
-                initialCloudLoaded = true;
+                initialGlobalLoaded = true;
                 window._cloudConnecting = false;
                 if (origGetItem('dnd_rooms') || origGetItem('dnd_characters')) {
                     const dump = {};
-                    SYNC_KEYS.forEach(k => {
+                    GLOBAL_SYNC_KEYS.forEach(k => {
                         const raw = origGetItem(k);
                         if (raw !== null) {
-                            const light = stripHeavyImages(k, raw, dbMediaRef);
+                            const light = stripHeavyImages(k, raw, null);
                             origSetItem(k, light);
                             dump[k] = { v: light, by: MY_CLIENT_ID, t: Date.now() };
                         }
                     });
-                    dbStateRef.update(dump);
+                    dbGlobalStateRef.update(dump);
                 }
             } else {
                 isApplyingRemote = true;
-                SYNC_KEYS.forEach(k => {
+                GLOBAL_SYNC_KEYS.forEach(k => {
                     if (allRemote[k] && allRemote[k].v !== undefined) {
                         if (allRemote[k].v === "") origRemoveItem(k);
                         else { try { origSetItem(k, allRemote[k].v); } catch (e) {} }
                     }
                 });
                 isApplyingRemote = false;
-                initialCloudLoaded = true;
+                initialGlobalLoaded = true;
                 window._cloudConnecting = false;
-                ENSURE_ALL_CHARS_VALID();
+                if (typeof ENSURE_ALL_CHARS_VALID === 'function') ENSURE_ALL_CHARS_VALID();
                 APPLY_ROLE_VIEW();
             }
 
-            // После первичной синхронизации включаем мгновенные слушатели на каждый ключ
-            attachRealtimeListeners();
-        });
+            // Если пользователь уже внутри комнаты (например, после F5) — подключаем эту комнату
+            const curRc = pendingRoomCode || window.GET_ACTIVE_ROOM_CODE();
+            pendingRoomCode = null;
+            if (curRc) window.SWITCH_FIREBASE_ROOM(curRc);
 
-        function attachRealtimeListeners() {
-            SYNC_KEYS.forEach(key => {
-                dbStateRef.child(key).on('value', (snap) => {
-                    const packet = snap.val();
+            // Слушатели только на глобальные ключи
+            GLOBAL_SYNC_KEYS.forEach(key => {
+                dbGlobalStateRef.child(key).on('value', (s) => {
+                    const packet = s.val();
                     if (!packet || packet.v === undefined) return;
                     if (packet.by === MY_CLIENT_ID) return;
-                    if (key === 'dnd_map_state' && window._draggingMapObj) return;
 
                     let remoteVal = packet.v;
                     const currentLocal = origGetItem(key);
                     if (currentLocal === remoteVal) return;
 
-                    // Защита от потери персонажа: если мы играем за героя, которого ещё нет в пришедшем пакете, сохраняем его!
                     if (key === 'dnd_characters' && remoteVal && currentLocal) {
                         try {
                             const sess = GET_SESSION();
@@ -4311,59 +4635,32 @@ function RENDER_LOBBY_HTML() {
                     else { try { origSetItem(key, remoteVal); } catch (e) {} }
                     isApplyingRemote = false;
 
-                    ENSURE_ALL_CHARS_VALID();
-                    SYNC_MY_PLAYER_INDEX();
+                    if (typeof ENSURE_ALL_CHARS_VALID === 'function') ENSURE_ALL_CHARS_VALID();
+                    if (typeof SYNC_MY_PLAYER_INDEX === 'function') SYNC_MY_PLAYER_INDEX();
 
                     const sess = GET_SESSION();
                     const activeTag = document.activeElement ? document.activeElement.tagName : '';
                     const isTyping = (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT');
 
-                    if (key === 'dnd_map_state' || key === 'dnd_vn_dialog') {
-                        RENDER_MAP_AREA();
-                    } else if (key === 'dnd_chat' || key === 'dnd_sys_log') {
-                        RCH();
-                    } else if (key === 'dnd_rest_poll') {
-                        CHECK_AND_RENDER_REST_POPUP();
-                        if (document.getElementById('rest-modal')?.classList.contains('active')) SLR();
-                    } else if (key === 'dnd_gm_skill_check') {
-                        CHECK_AND_RENDER_SKILL_ROLL_POPUP();
-                    } else if (key === 'dnd_gm_edit_request') {
-                        CHECK_AND_RENDER_PERMISSION_POPUP();
-                        CHECK_GM_PERMISSION_RESPONSE();
-                    } else if (key === 'dnd_gm_event') {
-                        CHECK_UNSEEN_GM_EVENT();
-                    } else if (key === 'dnd_gm_shop') {
-                        RENDER_MAP_AREA();
-                        CHECK_UNSEEN_SHOP_OPEN();
-                        if (sess && sess.role === 'gm') RENDER_GM_LEFT_COLUMN();
-                    } else if (key === 'dnd_characters' || key === 'dnd_shared_templates' || key === 'dnd_accounts_db')  {
+                    if (!sess) {
+                        RENDER_LOBBY_HTML();
+                    } else if (key === 'dnd_characters') {
                         RMC();
                         RPL();
                         RENDER_MAP_AREA();
-                        if (sess && sess.role === 'gm') {
+                        if (sess.role === 'gm') {
                             RENDER_GM_LEFT_COLUMN();
-                            const topBar = document.getElementById('role-status-bar');
-                            if (topBar) APPLY_ROLE_VIEW();
-                        } else if (!sess) {
-                            RENDER_LOBBY_HTML();
+                            const cntEl = document.getElementById('gm-room-party-count');
+                            if (cntEl && typeof GET_ROOM_PARTY_INDICES === 'function') {
+                                cntEl.textContent = String(GET_ROOM_PARTY_INDICES(sess.roomCode).length);
+                            }
                         }
-
-                        if (document.getElementById('attacks-modal')?.classList.contains('active') && !isTyping) {
-                            OAT();
-                        }
-                        if (document.getElementById('inventory-modal')?.classList.contains('active') && !isTyping) {
-                            OINV();
-                        }
-                        if (document.getElementById('char-sheet-modal')?.classList.contains('active') && !isTyping) {
-                            OCS();
-                        }
-                    } else if (!isTyping) {
-                        RMC(); RPL(); LDT(); RENDER_MAP_AREA(); RENDER_CUSTOM_LORE();
-                        if (sess && sess.role === 'gm') RENDER_GM_LEFT_COLUMN();
-                        else if (!sess) RENDER_LOBBY_HTML();
+                        if (document.getElementById('attacks-modal')?.classList.contains('active') && !isTyping) OAT();
+                        if (document.getElementById('inventory-modal')?.classList.contains('active') && !isTyping) OINV();
+                        if (document.getElementById('char-sheet-modal')?.classList.contains('active') && !isTyping) OCS();
                     }
                 });
             });
-        }
+        });
     }
 })();
