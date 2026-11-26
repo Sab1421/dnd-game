@@ -979,6 +979,7 @@
     };
 
     window.BG3_PLAYER_CAST_SPELL = function(spellName) {
+        if (typeof window._FEATS_EXEC_CAST_SPELL === 'function') return window._FEATS_EXEC_CAST_SPELL(spellName);
         const cs = GC();
         const c = cs[PI];
         const sp = gameData.spells.find(s => s.name === spellName);
@@ -1110,6 +1111,7 @@
     // 8. ФИКС ОРУЖИЯ В БОЮ BG3 (УНИВЕРСАЛЬНОЕ + БОЕПРИПАСЫ + МОНАХ)
     // ================================================================
     window.BG3_PLAYER_USE_WEAPON = function(invIdx) {
+        if (typeof window._FEATS_EXEC_WEAPON_ATTACK === 'function') return window._FEATS_EXEC_WEAPON_ATTACK(invIdx);
         const cs = GC();
         const c = cs[PI];
         const inv = c && c.inventory;
@@ -1162,6 +1164,7 @@
     };
 
     window.BG3_PLAYER_UNARMED = function() {
+        if (typeof window._FEATS_EXEC_UNARMED === 'function') return window._FEATS_EXEC_UNARMED();
         const cs = GC();
         const c = cs[PI];
         if (!c) return;
