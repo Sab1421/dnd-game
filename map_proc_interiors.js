@@ -800,3 +800,492 @@
         RENDER_GM_MAP_BUILDER_UI();
     };
 })();
+
+// ================================================================
+// ⛩️ ЧАСТЬ 2: ОТДЕЛЬНЫЙ ПРОЦЕДУРНЫЙ ГЕНЕРАТОР ВОСТОЧНОГО ХРАМА / ДОДЗЁ
+// ================================================================
+(function INSTALL_EASTERN_TEMPLE_V5() {
+    const _PREV_GEN = MB_GENERATE_RANDOM;
+
+    MB_GENERATE_RANDOM = function(biome) {
+        if (biome !== 'eastern') return _PREV_GEN(biome);
+
+        MB_PUSH_UNDO();
+        const cols = window._mbCols, rows = window._mbRows;
+
+        const T = {
+            grass:     Math.random() < 0.25 ? MB_PICK_TILE_FAMILY('moss', 'grass') : MB_PICK_TILE_FAMILY('grass', 'grass'),
+            wood:      MB_PICK_TILE_FAMILY('wood', 'wood'),
+            wall:      MB_PICK_TILE_FAMILY('wall', 'wall'),
+            flagstone: MB_PICK_TILE_FAMILY('flagstone', 'stone'),
+            sand:      'sand',
+            water:     'water',
+            leafR:     'leaves_red',
+            leafG:     'leaves_green'
+        };
+
+        window._mbLighting = MB_PICK(['day', 'sunset', 'sunset', 'night']);
+        const data = CREATE_EMPTY_MB_DATA(T.grass, cols, rows);
+        data.lighting = window._mbLighting;
+
+        const inB = (c, r) => c >= 0 && c < cols && r >= 0 && r < rows;
+        const getT = (c, r) => inB(c, r) ? data.cells[r * cols + c].t : null;
+        const setT = (c, r, t) => { if (inB(c, r)) data.cells[r * cols + c].t = t; };
+        const isWall = (c, r) => /^wall/.test(getT(c, r) || '');
+        const isWater = (c, r) => /^water/.test(getT(c, r) || '');
+
+        const fillRect = (x1, y1, x2, y2, t, onlyOn = null) => {
+            for (let r = Math.max(0, Math.floor(y1)); r <= Math.min(rows - 1, Math.floor(y2)); r++)
+                for (let c = Math.max(0, Math.floor(x1)); c <= Math.min(cols - 1, Math.floor(x2)); c++) {
+                    if (onlyOn && !onlyOn.includes(getT(c, r))) continue;
+                    setT(c, r, t);
+                }
+        };
+
+        const phase = MB_RAND_FLOAT(0, 6.28);
+        const paintDisc = (cx, cy, rx, ry, t, wob = 0.16, onlyOn = null) => {
+            for (let r = Math.max(0, Math.floor(cy - ry - 2)); r <= Math.min(rows - 1, Math.ceil(cy + ry + 2)); r++)
+                for (let c = Math.max(0, Math.floor(cx - rx - 2)); c <= Math.min(cols - 1, Math.ceil(cx + rx + 2)); c++) {
+                    if (onlyOn && !onlyOn.includes(getT(c, r))) continue;
+                    const ang = Math.atan2(r - cy, c - cx);
+                    const d = Math.hypot((c - cx) / Math.max(0.6, rx), (r - cy) / Math.max(0.6, ry));
+                    if (d <= 1.0 + Math.sin(ang * 3 + phase) * wob) setT(c, r, t);
+                }
+        };
+
+        const placedZones = [];
+        const doorSpots = [];
+        const canPlace = (x, y, minDist = 0.9, checkDoors = true, allowWall = false) => {
+            const gx = Math.floor(x), gy = Math.floor(y);
+            if (!inB(gx, gy)) return false;
+            if (!allowWall && isWall(gx, gy)) return false;
+            if (checkDoors && doorSpots.some(d => Math.hypot(d.x - x, d.y - y) < Math.max(1.3, minDist))) return false;
+            return !placedZones.some(z => Math.hypot(z.x - x, z.y - y) < Math.max(minDist, z.r));
+        };
+        const addObj = (poolOrId, x, y, scale = 1.0, rot = 0, reserve = 0) => {
+            const id = Array.isArray(poolOrId) ? MB_PICK(poolOrId) : poolOrId;
+            if (!id) return false;
+            const stObj = MB_FIND_STAMP_OBJ(id);
+            if (!stObj) return false;
+            if (stObj.img) MB_GET_LOADED_IMG(stObj.img, false);
+            data.objects.push({ id, x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100, scale, rot: Math.round(rot) });
+            if (reserve > 0) placedZones.push({ x, y, r: reserve });
+            return true;
+        };
+
+        // --- 100% ВОСТОЧНЫЕ ПУЛЫ СПРАЙТОВ ---
+        const E = {
+            shoji:       MB_GET_POOL(/^dungeon_door_shoji_[12]$|^furniture_door_tatami$/),
+            tatamiBig:   MB_GET_POOL(/^furniture_tatami_mat_large$/),
+            tatamiSmall: MB_GET_POOL(/^furniture_tatami_mat_(small|round_[12])$/),
+            shrines:     MB_GET_POOL(/^other_shrine_[12]$/),
+            screens:     MB_GET_POOL(/^other_paper_screen_[12]$/),
+            lanterns:    MB_GET_POOL(/^city_paper_lamp$|^city_paperlamp2?$|^other_paper_lantern_[123]$/),
+            tables:      MB_GET_POOL(/^furniture_table_(kotatsu|game|[1-4])$/),
+            cushions:    MB_GET_POOL(/^other_cushion_[1-4]$|^other_seat_[12]$/),
+            futons:      MB_GET_POOL(/^furniture_futon_bed$|^other_futon_matress$/),
+            hearths:     MB_GET_POOL(/^dungeon_cooking_pit_(small_[123]|medium)$/),
+            kettles:     MB_GET_POOL(/^other_kettle_[12]$/),
+            bonsai:      MB_GET_POOL(/^other_bonsai_[123]$/),
+            armor:       MB_GET_POOL(/^other_samurai_armor_([123]|rack)$/),
+            weapons:     MB_GET_POOL(/^camp_weapons_(katanas|daisho|sword_rack)$/),
+            drums:       MB_GET_POOL(/^other_taiko_drum(_big)?$/),
+            shelves:     MB_GET_POOL(/^other_shelves_[1-6]$/),
+            vases:       MB_GET_POOL(/^other_vase_(large|medium|small)$/),
+            kimono:      MB_GET_POOL(/^other_kimono_clothing_[123]$/),
+            props:       MB_GET_POOL(/^other_shamisen_instrument$|^other_scroll$|^other_hand_fan_[12]$/),
+            slippers:    MB_GET_POOL(/^other_slippers_[12]$/),
+            parasol:     MB_GET_POOL(/^other_parasol_open$/),
+
+            woodBridge:  MB_GET_POOL(/^nature_wooden_bridge_section_7x4$/),
+            stoneBridge: MB_GET_POOL(/^nature_stone_bridge_section_7x4$/),
+            waterDec:    MB_GET_POOL(/^other_lily_pad|^nature_river_rock_[123]$/),
+            trees:       MB_GET_POOL(/^nature_tree_(small_[12]|large_1|[123])$/),
+            redBushes:   MB_GET_POOL(/^nature_bush_1_red$|^nature_bush_9_yellow$/),
+            greenBushes: MB_GET_POOL(/^nature_bush_(2|4|5|7)_green|^nature_bush_shrub_[12]$/),
+            flowers:     MB_GET_POOL(/^nature_flower_[1-6]$|^nature_flowers_[1-4]$/),
+            zenRocks:    MB_GET_POOL(/^other_stone_[123]$|^nature_rocks_[1-4]$|^nature_rock_small_[12]$/)
+        };
+
+        const boxPavilion = (x1, y1, x2, y2) => {
+            for (let r = y1; r <= y2; r++) for (let c = x1; c <= x2; c++) {
+                setT(c, r, (r === y1 || r === y2 || c === x1 || c === x2) ? T.wall : T.wood);
+            }
+            return { x1, y1, x2, y2, iw: x2 - x1 - 1, ih: y2 - y1 - 1, cx: (x1 + x2 + 1) / 2, cy: (y1 + y2 + 1) / 2 };
+        };
+
+        const placeShojiDoor = (c, r, vert, inDx = 0, inDy = 0) => {
+            setT(c, r, T.wood);
+            doorSpots.push({ x: c + 0.5, y: r + 0.5 });
+            addObj(E.shoji, c + 0.5, r + 0.5, 0.96, vert ? 90 : 0, 0.85);
+            if ((inDx || inDy) && Math.random() < 0.75) {
+                addObj(E.slippers, c + 0.5 + inDx * 0.95, r + 0.5 + inDy * 0.95, 0.78, vert ? 90 : 0, 0);
+            }
+            // Пара бумажных фонарей по бокам входа снаружи
+            const outC = c - inDx, outR = r - inDy;
+            if ((inDx || inDy) && inB(outC, outR) && !isWall(outC, outR) && !isWater(outC, outR)) {
+                const px = vert ? 0 : 1.15, py = vert ? 1.15 : 0;
+                if (canPlace(outC + 0.5 - px, outR + 0.5 - py, 0.6, false)) addObj(E.lanterns, outC + 0.5 - px, outR + 0.5 - py, 0.85, 0, 0.6);
+                if (canPlace(outC + 0.5 + px, outR + 0.5 + py, 0.6, false)) addObj(E.lanterns, outC + 0.5 + px, outR + 0.5 + py, 0.85, 0, 0.6);
+            }
+        };
+
+        const placeBridgeSpan = (c1, r1, c2, r2, isStone = false) => {
+            const dx = c2 - c1, dy = r2 - r1;
+            const span = Math.hypot(dx, dy) + 1.8;
+            const deg = Math.atan2(dy, dx) * 180 / Math.PI;
+            const pool = isStone ? E.stoneBridge : E.woodBridge;
+            const segs = Math.max(1, Math.ceil(span / 3.3));
+            const sc = Math.max(0.76, (span / segs) / 3.4);
+            for (let i = 0; i < segs; i++) {
+                const f = (i + 0.5) / segs;
+                addObj(pool, c1 + 0.5 + dx * f, r1 + 0.5 + dy * f, sc, deg, 1.4);
+            }
+        };
+
+        // Прямая каменная дорожка от точки к точке (автоматически ставит мост, если пересекает воду!)
+        const layGardenPath = (x1, y1, x2, y2, isStoneBridge = false) => {
+            const steps = Math.max(Math.abs(x2 - x1), Math.abs(y2 - y1));
+            if (steps < 1) return;
+            let inW = false, ws = null, we = null;
+            for (let i = 0; i <= steps; i++) {
+                const c = Math.round(x1 + ((x2 - x1) * i) / steps);
+                const r = Math.round(y1 + ((y2 - y1) * i) / steps);
+                if (!inB(c, r) || isWall(c, r)) continue;
+                if (isWater(c, r)) {
+                    if (!inW) { inW = true; ws = { c, r }; }
+                    we = { c, r };
+                } else {
+                    if (inW && ws && we) {
+                        placeBridgeSpan(ws.c, ws.r, we.c, we.r, isStoneBridge);
+                        inW = false;
+                    }
+                    if (getT(c, r) === T.grass || getT(c, r) === T.leafR || getT(c, r) === T.sand) {
+                        setT(c, r, T.flagstone);
+                    }
+                }
+            }
+            if (inW && ws && we) placeBridgeSpan(ws.c, ws.r, we.c, we.r, isStoneBridge);
+        };
+
+        const getSolidWalls = (rm) => {
+            const sides = [];
+            const nearDoor = (x, y) => doorSpots.some(d => Math.hypot(d.x - x, d.y - y) < 1.8);
+            if (rm.iw >= 3) {
+                const mx = rm.cx;
+                if (!nearDoor(mx, rm.y1 + 0.5)) sides.push({ dir: 'N', x: mx, y: rm.y1 + 1.55, rot: 0 });
+                if (!nearDoor(mx, rm.y2 + 0.5)) sides.push({ dir: 'S', x: mx, y: rm.y2 - 0.55, rot: 180 });
+            }
+            if (rm.ih >= 3) {
+                const my = rm.cy;
+                if (!nearDoor(rm.x1 + 0.5, my)) sides.push({ dir: 'W', x: rm.x1 + 1.55, y: my, rot: 90 });
+                if (!nearDoor(rm.x2 + 0.5, my)) sides.push({ dir: 'E', x: rm.x2 - 0.55, y: my, rot: 270 });
+            }
+            return sides;
+        };
+
+        // Наполнение комнат ТОЛЬКО восточной мебелью и татами
+        const furnishEastRoom = (rm, role) => {
+            const { x1, y1, x2, y2, iw, ih, cx, cy } = rm;
+            const walls = getSolidWalls(rm);
+            const pickW = () => walls.length ? walls.splice(Math.floor(Math.random() * walls.length), 1)[0] : null;
+            const corners = [
+                { x: x1 + 1.5, y: y1 + 1.5 }, { x: x2 - 0.5, y: y1 + 1.5 },
+                { x: x1 + 1.5, y: y2 - 0.5 }, { x: x2 - 0.5, y: y2 - 0.5 }
+            ].filter(pt => canPlace(pt.x, pt.y, 0.75));
+
+            // Устилаем пол татами!
+            if (iw >= 5 && ih >= 4) {
+                addObj(E.tatamiBig, cx - 1.15, cy, 0.92, 0, 0);
+                addObj(E.tatamiBig, cx + 1.15, cy, 0.92, 0, 0);
+            } else {
+                addObj(iw >= 4 ? E.tatamiBig : E.tatamiSmall, cx, cy, Math.min(1.05, Math.min(iw, ih) * 0.28), 0, 0);
+            }
+
+            if (role === 'dojo') {
+                const sw = pickW();
+                if (sw) addObj(E.shrines, sw.x, sw.y, 1.18, sw.rot, 1.35);
+                const w2 = pickW();
+                if (w2 && canPlace(w2.x, w2.y, 0.9)) addObj(E.weapons, w2.x, w2.y, 0.95, w2.rot, 0.95);
+                const w3 = pickW();
+                if (w3 && canPlace(w3.x, w3.y, 0.9)) addObj(E.armor, w3.x, w3.y, 0.95, w3.rot, 0.95);
+                if (iw >= 6 && ih >= 5 && canPlace(cx, cy, 1.1)) {
+                    addObj(E.drums, cx, cy, 0.95, MB_PICK([0, 90]), 1.1);
+                }
+                corners.slice(0, 2).forEach(pt => addObj(E.lanterns, pt.x, pt.y, 0.85, 0, 0.7));
+                if (corners[2]) addObj(E.bonsai, corners[2].x, corners[2].y, 0.9, 0, 0.8);
+                if (corners[3]) addObj(E.armor, corners[3].x, corners[3].y, 0.88, 0, 0.8);
+            }
+            else if (role === 'tea_room') {
+                if (canPlace(cx, cy, 1.1)) {
+                    addObj(E.tables, cx, cy, 0.96, 0, 1.15);
+                    addObj(E.kettles, cx + 0.12, cy - 0.08, 0.72, 0, 0);
+                    if (canPlace(cx, cy - 0.95, 0.3, true)) addObj(E.cushions, cx, cy - 0.95, 0.85, 0, 0);
+                    if (canPlace(cx, cy + 0.95, 0.3, true)) addObj(E.cushions, cx, cy + 0.95, 0.85, 180, 0);
+                }
+                const w1 = pickW();
+                if (w1 && canPlace(w1.x, w1.y, 0.85)) addObj(E.screens, w1.x, w1.y, 0.95, w1.rot, 0.9);
+                if (corners[0]) addObj(E.bonsai, corners[0].x, corners[0].y, 0.92, 0, 0.75);
+                if (corners[1]) addObj(E.lanterns, corners[1].x, corners[1].y, 0.82, 0, 0.7);
+                if (corners[2]) addObj(E.props, corners[2].x, corners[2].y, 0.82, MB_RAND_INT(0, 359), 0.7);
+            }
+            else if (role === 'hearth_room') {
+                if (canPlace(cx, cy, 1.1)) {
+                    addObj(E.hearths, cx, cy, 1.02, 0, 1.2);
+                    addObj(E.kettles, cx + 0.25, cy, 0.74, 0, 0);
+                    if (canPlace(cx - 1.1, cy, 0.3, true)) addObj(E.cushions, cx - 1.1, cy, 0.85, 90, 0);
+                    if (canPlace(cx + 1.1, cy, 0.3, true)) addObj(E.cushions, cx + 1.1, cy, 0.85, 270, 0);
+                }
+                const w1 = pickW();
+                if (w1 && canPlace(w1.x, w1.y, 0.85)) addObj(E.shelves, w1.x, w1.y, 0.9, w1.rot, 0.9);
+                if (corners[0]) addObj(E.vases, corners[0].x, corners[0].y, 0.85, 0, 0.7);
+                if (corners[1]) addObj(E.lanterns, corners[1].x, corners[1].y, 0.82, 0, 0.7);
+            }
+            else { // monk_room
+                const w1 = pickW();
+                if (w1 && canPlace(w1.x, w1.y, 0.95)) addObj(E.futons, w1.x, w1.y, 0.98, w1.rot, 1.1);
+                else if (canPlace(cx, cy, 0.95)) addObj(E.futons, cx, cy, 0.95, 0, 1.1);
+                const w2 = pickW();
+                if (w2 && canPlace(w2.x, w2.y, 0.85)) addObj(Math.random() < 0.5 ? E.screens : E.shelves, w2.x, w2.y, 0.92, w2.rot, 0.85);
+                if (corners[0]) addObj(E.lanterns, corners[0].x, corners[0].y, 0.82, 0, 0.7);
+                if (corners[1]) addObj(Math.random() < 0.5 ? E.kimono : E.vases, corners[1].x, corners[1].y, 0.85, 0, 0.75);
+                if (corners[2]) addObj(E.props, corners[2].x, corners[2].y, 0.8, 0, 0.65);
+            }
+        };
+
+        // Открытая садовая беседка (татами на дереве + столик + зонт + фонари, без тяжёлых стен!)
+        const placeGardenTeaDeck = (cx, cy) => {
+            const x1 = Math.max(2, Math.floor(cx) - 2), y1 = Math.max(2, Math.floor(cy) - 2);
+            const x2 = Math.min(cols - 3, x1 + 3), y2 = Math.min(rows - 3, y1 + 3);
+            for (let r = y1; r <= y2; r++) for (let c = x1; c <= x2; c++) {
+                if (isWall(c, r) || isWater(c, r)) return false;
+            }
+            fillRect(x1, y1, x2, y2, T.wood);
+            const mx = (x1 + x2 + 1) / 2, my = (y1 + y2 + 1) / 2;
+            addObj(E.tatamiSmall, mx, my, 1.1, 0, 0);
+            addObj(E.tables, mx, my, 0.9, 0, 1.1);
+            addObj(E.kettles, mx + 0.1, my, 0.7, 0, 0);
+            addObj(E.parasol, mx - 1.15, my - 1.05, 1.05, MB_RAND_INT(0, 359), 0.9);
+            addObj(E.lanterns, x2 + 0.6, y1 + 0.4, 0.82, 0, 0.7);
+            addObj(E.bonsai, x1 + 0.4, y2 + 0.6, 0.85, 0, 0.7);
+            return true;
+        };
+
+        // Сад камней (карэсансуй): песок + аккуратно расставленные камни и бонсай
+        const placeZenRockGarden = (cx, cy, rx, ry) => {
+            paintDisc(cx, cy, rx, ry, T.sand, 0.14, [T.grass, T.leafR]);
+            const stones = MB_RAND_INT(3, 5);
+            for (let i = 0; i < stones; i++) {
+                const ang = (i / stones) * 6.28 + MB_RAND_FLOAT(-0.3, 0.3);
+                const sx = cx + Math.cos(ang) * MB_RAND_FLOAT(0.6, rx * 0.68);
+                const sy = cy + Math.sin(ang) * MB_RAND_FLOAT(0.5, ry * 0.65);
+                if (getT(Math.floor(sx), Math.floor(sy)) === T.sand && canPlace(sx, sy, 1.25)) {
+                    addObj(i === 0 ? E.bonsai : E.zenRocks, sx, sy, MB_RAND_FLOAT(0.85, 1.15), MB_RAND_INT(0, 359), 1.1);
+                }
+            }
+        };
+
+        // Осенние/сакуровые пятна листвы на траве
+        for (let i = 0; i < Math.floor((cols * rows) / 38); i++) {
+            paintDisc(MB_RAND_FLOAT(1.5, cols - 1.5), MB_RAND_FLOAT(1.5, rows - 1.5), MB_RAND_FLOAT(1.6, 3.0), MB_RAND_FLOAT(1.4, 2.5), T.leafR, 0.22, [T.grass]);
+        }
+
+        const style = MB_PICK_NEXT_VARIANT('eastern_v5', ['lake_sanctuary', 'zen_monastery', 'streamside_dojo']);
+        let genTitle = 'Восточный храм';
+
+        // ============================================================
+        // ВАРИАНТ 1: СВЯТИЛИЩЕ НА ОЗЕРЕ (ОСТРОВ + МОСТЫ + ЧАЙНАЯ БЕСЕДКА)
+        // ============================================================
+        if (style === 'lake_sanctuary') {
+            genTitle = MB_PICK(['Святилище на озере Лотосов', 'Островное додзё', 'Павильон Тихой Воды']);
+            const cx = Math.floor(cols * MB_RAND_FLOAT(0.42, 0.58));
+            const cy = Math.floor(rows * MB_RAND_FLOAT(0.42, 0.58));
+            const rx = Math.max(5.5, cols * MB_RAND_FLOAT(0.32, 0.38));
+            const ry = Math.max(4.5, rows * MB_RAND_FLOAT(0.36, 0.42));
+            paintDisc(cx, cy, rx, ry, T.water, 0.14);
+
+            const pw = Math.min(11, Math.max(7, Math.floor(cols * 0.29)));
+            const ph = Math.min(9, Math.max(6, Math.floor(rows * 0.40)));
+            const px1 = Math.max(3, Math.min(cols - pw - 3, cx - Math.floor(pw / 2)));
+            const py1 = Math.max(2, Math.min(rows - ph - 2, cy - Math.floor(ph / 2)));
+            const mainRm = boxPavilion(px1, py1, px1 + pw - 1, py1 + ph - 1);
+
+            // 2 или 3 моста с разных сторон острова!
+            const dirs = MB_PICK([['W', 'E'], ['W', 'E', 'S'], ['N', 'S', 'E'], ['W', 'N', 'S']]);
+            const isStoneBr = Math.random() < 0.45;
+            dirs.forEach(d => {
+                if (d === 'W') { placeShojiDoor(mainRm.x1, cy, true, 1, 0); layGardenPath(mainRm.x1 - 1, cy, 0, cy, isStoneBr); }
+                else if (d === 'E') { placeShojiDoor(mainRm.x2, cy, true, -1, 0); layGardenPath(mainRm.x2 + 1, cy, cols - 1, cy, isStoneBr); }
+                else if (d === 'N') { placeShojiDoor(cx, mainRm.y1, false, 0, 1); layGardenPath(cx, mainRm.y1 - 1, cx, 0, isStoneBr); }
+                else if (d === 'S') { placeShojiDoor(cx, mainRm.y2, false, 0, -1); layGardenPath(cx, mainRm.y2 + 1, cx, rows - 1, isStoneBr); }
+            });
+            furnishEastRoom(mainRm, 'dojo');
+
+            // На берегу: чайная беседка и сад камней (если хватает места)
+            if (cols >= 22) {
+                const corners = [[3, 2], [cols - 5, 2], [3, rows - 4], [cols - 5, rows - 4]];
+                let deckPlaced = false;
+                for (const [bx, by] of corners) {
+                    if (!deckPlaced && placeGardenTeaDeck(bx, by)) { deckPlaced = true; continue; }
+                    if (getT(bx, by) === T.grass) { placeZenRockGarden(bx, by, 2.4, 2.0); break; }
+                }
+            }
+        }
+
+        // ============================================================
+        // ВАРИАНТ 2: МОНАСТЫРЬ С ВНУТРЕННИМ САДОМ КАМНЕЙ И ПРУДОМ
+        // ============================================================
+        else if (style === 'zen_monastery') {
+            genTitle = MB_PICK(['Монастырь Сада Камней', 'Храм Сакуры', 'Обитель Тихого Лотоса']);
+            const flipH = Math.random() < 0.5;
+            const mainW = Math.min(12, Math.max(7, Math.floor(cols * 0.34)));
+            const mainH = Math.min(9, Math.max(6, Math.floor(rows * 0.44)));
+            const mx1 = flipH ? (cols - 2 - mainW) : 2;
+            const my1 = MB_RAND_INT(2, Math.max(2, Math.floor(rows * 0.24)));
+            const dojo = boxPavilion(mx1, my1, mx1 + mainW - 1, my1 + mainH - 1);
+
+            // Соседнее крыло (чайная или очаг ирори) пристыковано снизу или сбоку
+            const rooms = [dojo];
+            const wingW = Math.min(8, Math.max(5, Math.floor(cols * 0.22)));
+            const wingH = Math.min(7, Math.max(5, rows - dojo.y2 - 2));
+            if (wingH >= 5) {
+                const wx1 = flipH ? (dojo.x2 - wingW + 1) : dojo.x1;
+                const wing = boxPavilion(wx1, dojo.y2, wx1 + wingW - 1, dojo.y2 + wingH - 1);
+                placeShojiDoor(Math.floor((wing.x1 + wing.x2) / 2), dojo.y2, false, 0, 1);
+                const outX = flipH ? wing.x1 : wing.x2;
+                placeShojiDoor(outX, Math.floor((wing.y1 + wing.y2) / 2), true, flipH ? 1 : -1, 0);
+                rooms.push(wing);
+            }
+
+            // Главный вход из додзё в сад
+            const dojoExitX = flipH ? dojo.x1 : dojo.x2;
+            const dojoExitY = Math.floor((dojo.y1 + dojo.y2) / 2);
+            placeShojiDoor(dojoExitX, dojoExitY, true, flipH ? 1 : -1, 0);
+
+            // Садовая зона на свободной половине карты: сад камней + пруд с мостиком + павильон монаха
+            const yardX1 = flipH ? 2 : (dojo.x2 + 2);
+            const yardX2 = flipH ? (dojo.x1 - 2) : (cols - 3);
+            const yardCx = (yardX1 + yardX2) / 2;
+
+            // Пруд в одной части сада, сад камней в другой
+            const pondTop = Math.random() < 0.5;
+            const pondY = pondTop ? Math.max(3, Math.floor(rows * 0.28)) : Math.min(rows - 4, Math.floor(rows * 0.72));
+            const zenY  = pondTop ? Math.min(rows - 4, Math.floor(rows * 0.74)) : Math.max(3, Math.floor(rows * 0.28));
+
+            if (yardX2 - yardX1 >= 5) {
+                paintDisc(yardCx, pondY, Math.min(4.2, (yardX2 - yardX1) * 0.36), Math.min(3.2, rows * 0.22), T.water, 0.16);
+                placeZenRockGarden(yardCx, zenY, Math.min(3.8, (yardX2 - yardX1) * 0.34), Math.min(2.6, rows * 0.18));
+            }
+
+            // Отдельный домик-чайная или келья в дальнем углу на больших картах
+            if (cols >= 26 && yardX2 - yardX1 >= 10) {
+                const subW = 6, subH = 6;
+                const sx1 = flipH ? 2 : (cols - 2 - subW);
+                const sy1 = pondTop ? (rows - 2 - subH) : 2;
+                const clear = [sx1, sx1 + subW - 1].every(cx => !isWater(cx, sy1) && !isWater(cx, sy1 + subH - 1));
+                if (clear) {
+                    const sub = boxPavilion(sx1, sy1, sx1 + subW - 1, sy1 + subH - 1);
+                    const sdX = flipH ? sub.x2 : sub.x1;
+                    const sdY = Math.floor((sub.y1 + sub.y2) / 2);
+                    placeShojiDoor(sdX, sdY, true, flipH ? -1 : 1, 0);
+                    layGardenPath(dojoExitX + (flipH ? -1 : 1), dojoExitY, sdX + (flipH ? 1 : -1), sdY, false);
+                    furnishEastRoom(sub, Math.random() < 0.5 ? 'monk_room' : 'tea_room');
+                }
+            }
+
+            // Дорожка от входа к краю карты (через пруд — с мостом!)
+            const edgeX = flipH ? 0 : (cols - 1);
+            layGardenPath(dojoExitX + (flipH ? -1 : 1), dojoExitY, edgeX, dojoExitY, Math.random() < 0.5);
+
+            furnishEastRoom(rooms[0], 'dojo');
+            if (rooms[1]) furnishEastRoom(rooms[1], Math.random() < 0.5 ? 'hearth_room' : 'tea_room');
+        }
+
+        // ============================================================
+        // ВАРИАНТ 3: ДОДЗЁ У ГОРНОГО РУЧЬЯ + ТРЕНИРОВОЧНЫЙ ДВОР
+        // ============================================================
+        else {
+            genTitle = MB_PICK(['Додзё у горного ручья', 'Школа Клинка и Бамбука', 'Тренировочный двор самураев']);
+            const creekRight = Math.random() < 0.5;
+            let cx = creekRight ? Math.floor(cols * 0.72) : Math.floor(cols * 0.24);
+            const cw = cols >= 28 ? 3 : 2;
+            for (let r = 0; r < rows; r++) {
+                if (r % 3 === 0 && Math.random() < 0.65) {
+                    cx = Math.max(creekRight ? Math.floor(cols * 0.64) : 3, Math.min(creekRight ? cols - cw - 3 : Math.floor(cols * 0.34), cx + MB_RAND_INT(-1, 1)));
+                }
+                for (let w = 0; w < cw; w++) setT(cx + w, r, T.water);
+            }
+
+            // Главное додзё на широком берегу + примыкающая комната отдыха
+            const bankL = creekRight ? 2 : (cx + cw + 2);
+            const bankR = creekRight ? (cx - 2) : (cols - 3);
+            const bw = Math.min(11, Math.max(7, Math.floor((bankR - bankL) * 0.68)));
+            const bh = Math.min(8, Math.max(6, Math.floor(rows * 0.48)));
+            const px1 = creekRight ? bankL : Math.max(bankL, bankR - bw + 1);
+            const py1 = 2;
+            const dojo = boxPavilion(px1, py1, px1 + bw - 1, py1 + bh - 1);
+
+            const doorToCreekX = creekRight ? dojo.x2 : dojo.x1;
+            const doorY = Math.floor((dojo.y1 + dojo.y2) / 2);
+            placeShojiDoor(doorToCreekX, doorY, true, creekRight ? -1 : 1, 0);
+
+            // Вход вниз на открытый тренировочный двор (песок + стойки катаны + тайко + доспехи)
+            const yardTop = dojo.y2 + 1;
+            if (rows - yardTop >= 4) {
+                const yardMidX = Math.floor((dojo.x1 + dojo.x2) / 2);
+                placeShojiDoor(yardMidX, dojo.y2, false, 0, -1);
+                const yRadX = Math.max(2.6, bw * 0.42), yRadY = Math.max(1.8, (rows - yardTop - 1) * 0.45);
+                const yCy = yardTop + yRadY;
+                paintDisc(yardMidX + 0.5, yCy, yRadX, yRadY, T.sand, 0.12, [T.grass, T.leafR]);
+                addObj(E.weapons, dojo.x1 + 1.2, yCy, 0.96, 90, 1.0);
+                addObj(E.armor, dojo.x2 - 0.2, yCy, 0.96, 270, 1.0);
+                if (canPlace(yardMidX + 0.5, yCy + 0.8, 1.0)) addObj(E.drums, yardMidX + 0.5, yCy + 0.8, 1.0, 0, 1.1);
+                addObj(E.lanterns, dojo.x1 + 0.8, Math.min(rows - 1.5, yCy + yRadY * 0.7), 0.85, 0, 0.7);
+                addObj(E.lanterns, dojo.x2 + 0.2, Math.min(rows - 1.5, yCy + yRadY * 0.7), 0.85, 0, 0.7);
+            }
+
+            furnishEastRoom(dojo, 'dojo');
+
+            // Каменная тропа через ручей (авто-мост!) к чайной беседке на другом берегу
+            const farX = creekRight ? (cols - 1) : 0;
+            layGardenPath(doorToCreekX + (creekRight ? 1 : -1), doorY, farX, doorY, false);
+
+            const deckX = creekRight ? Math.min(cols - 3, cx + cw + 3) : Math.max(2, cx - 3);
+            const deckY = doorY > rows / 2 ? 3 : (rows - 4);
+            if (!placeGardenTeaDeck(deckX, deckY)) {
+                if (inB(deckX, deckY) && !isWater(deckX, deckY)) addObj(E.shrines, deckX + 0.5, deckY + 0.5, 1.1, 0, 1.2);
+            }
+        }
+
+        // Кувшинки и речные камни в воде
+        for (let r = 1; r < rows - 1; r++) for (let c = 1; c < cols - 1; c++) {
+            if (isWater(c, r) && canPlace(c + 0.5, r + 0.5, 1.45) && Math.random() < 0.17) {
+                addObj(E.waterDec, c + 0.5, r + 0.5, 0.92, MB_RAND_INT(0, 359), 0.9);
+            }
+        }
+
+        // Японский сад вокруг: рощи с красными/золотыми кустами, деревьями, бонсай и камнями
+        const groves = Math.max(4, Math.floor((cols * rows) / 60));
+        for (let g = 0; g < groves; g++) {
+            const gx = MB_RAND_FLOAT(1.5, cols - 1.5), gy = MB_RAND_FLOAT(1.5, rows - 1.5);
+            if (getT(Math.floor(gx), Math.floor(gy)) !== T.grass && getT(Math.floor(gx), Math.floor(gy)) !== T.leafR) continue;
+            for (let k = 0; k < MB_RAND_INT(3, 5); k++) {
+                const ox = gx + MB_RAND_FLOAT(-2.4, 2.4), oy = gy + MB_RAND_FLOAT(-2.1, 2.1);
+                const t = getT(Math.floor(ox), Math.floor(oy));
+                if (t !== T.grass && t !== T.leafR) continue;
+                if ([-1, 0, 1].some(dr => [-1, 0, 1].some(dc => isWall(Math.floor(ox) + dc, Math.floor(oy) + dr)))) continue;
+                if (!canPlace(ox, oy, 1.55)) continue;
+                if (k < 2) addObj(E.trees, ox, oy, MB_RAND_FLOAT(0.88, 1.24), MB_RAND_INT(0, 359), 1.6);
+                else if (k < 4) addObj(Math.random() < 0.6 ? E.redBushes : E.greenBushes, ox, oy, MB_RAND_FLOAT(0.82, 1.15), MB_RAND_INT(0, 359), 0.95);
+                else addObj(Math.random() < 0.5 ? E.zenRocks : E.flowers, ox, oy, 0.85, MB_RAND_INT(0, 359), 0.8);
+            }
+        }
+
+        const titleInp = document.getElementById('mb-map-title-inp');
+        if (titleInp) titleInp.value = genTitle;
+
+        window._mbData = data;
+        SAVE_MB_DATA(data);
+        RENDER_GM_MAP_BUILDER_UI();
+    };
+})();
