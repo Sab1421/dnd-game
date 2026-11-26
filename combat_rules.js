@@ -1,5 +1,5 @@
 // ================================================================
-// 🧱 НЕПРОХОДИМОСТЬ СТЕН, БЫСТРЫЙ ОБХОД ПРОЁМОВ (0 ЛАГОВ),
+// 🧱 НЕПРОХОДИМОСТЬ СТЕН, ПЛАВНЫЕ МАРШРУТЫ С ТОЧКАМИ ПОВОРОТА,
 // ЛИМИТ ДВИЖЕНИЯ В БОЮ (ФТ), ДАЛЬНОСТЬ АТАК И ВЫХОД ИЗ БОЯ (combat_rules.js)
 // ================================================================
 (function INIT_COMBAT_PHYSICS_AND_WALLS() {
@@ -84,7 +84,6 @@
         return Math.round(DIST_FT_DIMS(cols, rows, x1Pct, y1Pct, x2Pct, y2Pct));
     };
 
-    // Быстрая проверка отрезка по Uint8Array (без выделения объектов)
     function IS_SEG_CLEAR_FAST(blocked, cols, rows, x0, y0, x1, y1) {
         const sc = Math.max(0, Math.min(cols - 1, Math.floor((x0 / 100) * cols)));
         const sr = Math.max(0, Math.min(rows - 1, Math.floor((y0 / 100) * rows)));
@@ -114,7 +113,6 @@
         return true;
     }
 
-    // Поиск кратчайших путей от стартовой клетки (строится лениво 1 раз при встрече со стеной)
     function BUILD_NAV_FIELD(blocked, cols, rows, startC, startR) {
         const total = cols * rows;
         const dist = new Float32Array(total);
@@ -237,11 +235,11 @@
         return { pts: res, totalFt: Math.round(acc), clamped: false };
     }
 
-    // Расчёт позиции фишки целиком в памяти (0 localStorage, < 0.1 мс)
-    function RESOLVE_DRAG_FAST(info, rawX, rawY) {
-        const { cols, rows, blocked, hasWalls, moveLeft } = info;
+    // Расчёт текущего отрезка пути от активной опорной точки (anchor) к курсору
+    function RESOLVE_SEGMENT_FAST(info, anchor, rawX, rawY, remFt) {
+        const { cols, rows, blocked, hasWalls } = info;
         if (!hasWalls) {
-            const clipped = CLIP_PATH_FAST(null, cols, rows, [{ x: info.x, y: info.y }, { x: rawX, y: rawY }], moveLeft);
+            const clipped = CLIP_PATH_FAST(null, cols, rows, [{ x: anchor.x, y: anchor.y }, { x: rawX, y: rawY }], remFt);
             const end = clipped.pts[clipped.pts.length - 1];
             return { x: end.x, y: end.y, pts: clipped.pts, totalFt: clipped.totalFt, clamped: clipped.clamped, hitWall: false };
         }
@@ -249,21 +247,19 @@
         const curCell = PCT_TO_CELL_DIMS(cols, rows, rawX, rawY);
         const curBlocked = blocked[curCell.r * cols + curCell.c] === 1;
 
-        // Быстрый путь: курсор на полу и прямая линия свободна — поиск пути даже не нужен!
         if (!curBlocked) {
             const endPt = CLAMP_IN_CELL_DIMS(cols, rows, curCell.c, curCell.r, rawX, rawY);
-            if (IS_SEG_CLEAR_FAST(blocked, cols, rows, info.x, info.y, endPt.x, endPt.y)) {
-                const clipped = CLIP_PATH_FAST(blocked, cols, rows, [{ x: info.x, y: info.y }, endPt], moveLeft);
+            if (IS_SEG_CLEAR_FAST(blocked, cols, rows, anchor.x, anchor.y, endPt.x, endPt.y)) {
+                const clipped = CLIP_PATH_FAST(blocked, cols, rows, [{ x: anchor.x, y: anchor.y }, endPt], remFt);
                 const end = clipped.pts[clipped.pts.length - 1];
                 return { x: end.x, y: end.y, pts: clipped.pts, totalFt: clipped.totalFt, clamped: clipped.clamped, hitWall: false };
             }
         }
 
-        // Стена на пути — лениво строим навигационную карту 1 раз за перетаскивание
-        if (!info.nav) {
-            info.nav = BUILD_NAV_FIELD(blocked, cols, rows, info.startC, info.startR);
+        if (!anchor.nav) {
+            anchor.nav = BUILD_NAV_FIELD(blocked, cols, rows, anchor.c, anchor.r);
         }
-        const nav = info.nav;
+        const nav = anchor.nav;
         const curIdx = curCell.r * cols + curCell.c;
 
         let goalC = curCell.c, goalR = curCell.r;
@@ -283,7 +279,7 @@
 
                         const clampedPt = CLAMP_IN_CELL_DIMS(cols, rows, nc, nr, rawX, rawY);
                         const dCursor = DIST_FT_DIMS(cols, rows, clampedPt.x, clampedPt.y, rawX, rawY);
-                        const overPen = (nav.dist[nIdx] > moveLeft + 3) ? 12 : 0;
+                        const overPen = (nav.dist[nIdx] > remFt + 3) ? 12 : 0;
                         const score = dCursor + overPen;
                         if (!best || score < best.score) best = { c: nc, r: nr, pt: clampedPt, score };
                     }
@@ -295,8 +291,8 @@
                 endPt = best.pt;
             } else {
                 return {
-                    x: info.lastValidX, y: info.lastValidY,
-                    pts: info.lastValidPts, totalFt: info.lastValidFt,
+                    x: info.lastCurX, y: info.lastCurY,
+                    pts: info.lastCurPts, totalFt: info.lastCurFt,
                     clamped: false, hitWall: true
                 };
             }
@@ -305,8 +301,8 @@
         }
 
         let pathPts;
-        if (IS_SEG_CLEAR_FAST(blocked, cols, rows, info.x, info.y, endPt.x, endPt.y)) {
-            pathPts = [{ x: info.x, y: info.y }, endPt];
+        if (IS_SEG_CLEAR_FAST(blocked, cols, rows, anchor.x, anchor.y, endPt.x, endPt.y)) {
+            pathPts = [{ x: anchor.x, y: anchor.y }, endPt];
         } else {
             const chain = [];
             let cur = goalR * cols + goalC;
@@ -318,13 +314,13 @@
                 cur = nav.parent[cur];
             }
             chain.reverse();
-            const rawPts = [{ x: info.x, y: info.y }].concat(chain);
+            const rawPts = [{ x: anchor.x, y: anchor.y }].concat(chain);
             rawPts[rawPts.length - 1] = endPt;
             pathPts = SMOOTH_PATH_FAST(blocked, cols, rows, rawPts);
         }
 
-        const clipped = CLIP_PATH_FAST(blocked, cols, rows, pathPts, moveLeft);
-        const finalPt = clipped.pts[clipped.pts.length - 1] || { x: info.x, y: info.y };
+        const clipped = CLIP_PATH_FAST(blocked, cols, rows, pathPts, remFt);
+        const finalPt = clipped.pts[clipped.pts.length - 1] || { x: anchor.x, y: anchor.y };
         return {
             x: Math.round(finalPt.x * 10) / 10,
             y: Math.round(finalPt.y * 10) / 10,
@@ -333,6 +329,98 @@
             clamped: clipped.clamped,
             hitWall
         };
+    }
+
+    // Собирает полную цепочку точек из всех закреплённых отрезков + текущего
+    function COMBINE_ALL_PATH_PTS(pinnedSegs, curPts) {
+        const out = [];
+        const append = (arr) => {
+            if (!arr) return;
+            for (let i = 0; i < arr.length; i++) {
+                const p = arr[i];
+                if (out.length === 0 || Math.hypot(out[out.length - 1].x - p.x, out[out.length - 1].y - p.y) > 0.05) {
+                    out.push(p);
+                }
+            }
+        };
+        for (let i = 0; i < pinnedSegs.length; i++) append(pinnedSegs[i].pts);
+        append(curPts);
+        return out;
+    }
+
+    // Строит плавную SVG-кривую с мягкими скруглёнными углами (без резких изломов)
+    function BUILD_ROUNDED_SVG_PATH(pts, vpW, vpH) {
+        if (!pts || pts.length < 2) return '';
+        const px = [];
+        for (let i = 0; i < pts.length; i++) {
+            const x = (pts[i].x / 100) * vpW;
+            const y = (pts[i].y / 100) * vpH;
+            if (!px.length || Math.hypot(px[px.length - 1].x - x, px[px.length - 1].y - y) > 0.6) {
+                px.push({ x, y });
+            }
+        }
+        if (px.length < 2) return '';
+        if (px.length === 2) {
+            return `M ${px[0].x.toFixed(1)} ${px[0].y.toFixed(1)} L ${px[1].x.toFixed(1)} ${px[1].y.toFixed(1)}`;
+        }
+
+        let d = `M ${px[0].x.toFixed(1)} ${px[0].y.toFixed(1)}`;
+        for (let i = 1; i < px.length - 1; i++) {
+            const prev = px[i - 1], cur = px[i], next = px[i + 1];
+            const v1x = prev.x - cur.x, v1y = prev.y - cur.y;
+            const v2x = next.x - cur.x, v2y = next.y - cur.y;
+            const l1 = Math.hypot(v1x, v1y);
+            const l2 = Math.hypot(v2x, v2y);
+            if (l1 < 1 || l2 < 1) {
+                d += ` L ${cur.x.toFixed(1)} ${cur.y.toFixed(1)}`;
+                continue;
+            }
+            const r = Math.min(20, l1 * 0.36, l2 * 0.36);
+            const inX = cur.x + (v1x / l1) * r;
+            const inY = cur.y + (v1y / l1) * r;
+            const outX = cur.x + (v2x / l2) * r;
+            const outY = cur.y + (v2y / l2) * r;
+            d += ` L ${inX.toFixed(1)} ${inY.toFixed(1)} Q ${cur.x.toFixed(1)} ${cur.y.toFixed(1)} ${outX.toFixed(1)} ${outY.toFixed(1)}`;
+        }
+        const last = px[px.length - 1];
+        d += ` L ${last.x.toFixed(1)} ${last.y.toFixed(1)}`;
+        return d;
+    }
+
+    function UPDATE_DRAG_PATH_SVG(pts, anchors, vpW, vpH) {
+        const pathEl = document.getElementById('cr-drag-path');
+        const dotEl = document.getElementById('cr-drag-start');
+        const pinsG = document.getElementById('cr-drag-pins');
+        if (!pathEl || !dotEl) return;
+
+        if (!pts || pts.length < 2) {
+            pathEl.style.display = 'none';
+            dotEl.style.display = 'none';
+            if (pinsG) pinsG.innerHTML = '';
+            return;
+        }
+
+        const dStr = BUILD_ROUNDED_SVG_PATH(pts, vpW, vpH);
+        pathEl.setAttribute('d', dStr);
+        pathEl.style.display = 'block';
+
+        dotEl.setAttribute('cx', ((pts[0].x / 100) * vpW).toFixed(1));
+        dotEl.setAttribute('cy', ((pts[0].y / 100) * vpH).toFixed(1));
+        dotEl.style.display = 'block';
+
+        if (pinsG) {
+            if (anchors && anchors.length > 1) {
+                let html = '';
+                for (let i = 1; i < anchors.length; i++) {
+                    const ax = ((anchors[i].x / 100) * vpW).toFixed(1);
+                    const ay = ((anchors[i].y / 100) * vpH).toFixed(1);
+                    html += `<circle cx="${ax}" cy="${ay}" r="5" fill="#facc15" stroke="#141312" stroke-width="1.6"/>`;
+                }
+                pinsG.innerHTML = html;
+            } else if (pinsG.innerHTML) {
+                pinsG.innerHTML = '';
+            }
+        }
     }
 
     function HAS_LINE_OF_SIGHT(st, x0, y0, x1, y1) {
@@ -373,25 +461,7 @@
         wallWarningTimer = setTimeout(() => {
             if (box) box.style.display = 'none';
             lastHintText = '';
-        }, 2200);
-    }
-
-    // Быстрое обновление только линии маршрута в SVG (без пересборки всего SVG и без localStorage!)
-    function UPDATE_DRAG_PATH_SVG(pts, vpW, vpH) {
-        const line = document.getElementById('cr-drag-line');
-        const dot = document.getElementById('cr-drag-start');
-        if (!line || !dot) return;
-        if (!pts || pts.length < 2) {
-            line.style.display = 'none';
-            dot.style.display = 'none';
-            return;
-        }
-        const str = pts.map(p => `${((p.x / 100) * vpW).toFixed(1)},${((p.y / 100) * vpH).toFixed(1)}`).join(' ');
-        line.setAttribute('points', str);
-        line.style.display = 'block';
-        dot.setAttribute('cx', ((pts[0].x / 100) * vpW).toFixed(1));
-        dot.setAttribute('cy', ((pts[0].y / 100) * vpH).toFixed(1));
-        dot.style.display = 'block';
+        }, 2400);
     }
 
     // --- 2. АВТО-ЭКСПОРТ СТЕН ИЗ СТУДИИ КАРТ ---
@@ -521,9 +591,9 @@
             }
         }
 
-        // Постоянные элементы для быстрой отрисовки маршрута перетаскивания
-        parts.push(`<polyline id="cr-drag-line" points="" fill="none" stroke="#86efac" stroke-width="2.6" stroke-dasharray="6 4" stroke-linecap="round" stroke-linejoin="round" opacity="0.9" style="display:none;"/>`);
-        parts.push(`<circle id="cr-drag-start" cx="0" cy="0" r="4" fill="#86efac" opacity="0.85" style="display:none;"/>`);
+        parts.push(`<path id="cr-drag-path" d="" fill="none" stroke="#86efac" stroke-width="2.8" stroke-dasharray="7 4" stroke-linecap="round" stroke-linejoin="round" opacity="0.92" style="display:none;"/>`);
+        parts.push(`<g id="cr-drag-pins"></g>`);
+        parts.push(`<circle id="cr-drag-start" cx="0" cy="0" r="4" fill="#86efac" stroke="#141312" stroke-width="1.2" opacity="0.9" style="display:none;"/>`);
 
         svg.innerHTML = parts.join('');
     }
@@ -836,7 +906,76 @@
         };
     });
 
-    // --- 7. БЫСТРОЕ ПЕРЕТАСКИВАНИЕ ФИШЕК (КЭШ НА MOUSEDOWN + rAF, 0 localStorage В MOUSEMOVE) ---
+    // --- 7. БЫСТРОЕ ПЕРЕТАСКИВАНИЕ + ТОЧКИ ПОВОРОТА (ПКМ / ПРОБЕЛ / BACKSPACE / ESC) ---
+    function PIN_DRAG_WAYPOINT() {
+        if (!dragInfo || !window._draggingMapObj) return;
+        if (dragInfo.lastCurFt < 2) return; // Не дублируем точку в одном и том же месте
+
+        dragInfo.pinnedSegs.push({
+            pts: dragInfo.lastCurPts.slice(),
+            ft: dragInfo.lastCurFt
+        });
+        dragInfo.pinnedFt += dragInfo.lastCurFt;
+
+        const cell = PCT_TO_CELL_DIMS(dragInfo.cols, dragInfo.rows, dragInfo.lastCurX, dragInfo.lastCurY);
+        dragInfo.anchors.push({
+            x: dragInfo.lastCurX,
+            y: dragInfo.lastCurY,
+            c: cell.c,
+            r: cell.r,
+            nav: null
+        });
+
+        dragInfo.lastCurPts = [{ x: dragInfo.lastCurX, y: dragInfo.lastCurY }];
+        dragInfo.lastCurFt = 0;
+
+        const allPts = COMBINE_ALL_PATH_PTS(dragInfo.pinnedSegs, dragInfo.lastCurPts);
+        UPDATE_DRAG_PATH_SVG(allPts, dragInfo.anchors, dragInfo.vpW, dragInfo.vpH);
+
+        const turns = dragInfo.anchors.length - 1;
+        if (dragInfo.inCombat) {
+            const rem = Math.max(0, dragInfo.moveLeft - dragInfo.pinnedFt);
+            SHOW_MAP_RULE_HINT(`📍 Точка #${turns} закреплена (${dragInfo.pinnedFt} фт • осталось ${rem} фт)`);
+        } else {
+            SHOW_MAP_RULE_HINT(`📍 Точка поворота #${turns} (${dragInfo.pinnedFt} фт) • Backspace — убрать`);
+        }
+    }
+
+    function UNDO_LAST_DRAG_WAYPOINT() {
+        if (!dragInfo || dragInfo.anchors.length <= 1) return;
+        dragInfo.anchors.pop();
+        const removed = dragInfo.pinnedSegs.pop();
+        dragInfo.pinnedFt = Math.max(0, dragInfo.pinnedFt - (removed ? removed.ft : 0));
+
+        const topA = dragInfo.anchors[dragInfo.anchors.length - 1];
+        dragInfo.lastCurX = topA.x;
+        dragInfo.lastCurY = topA.y;
+        dragInfo.lastCurPts = [{ x: topA.x, y: topA.y }];
+        dragInfo.lastCurFt = 0;
+
+        if (dragInfo.lastClientX !== null && dragInfo.lastClientY !== null) {
+            pendingMoveEvt = { clientX: dragInfo.lastClientX, clientY: dragInfo.lastClientY };
+            PROCESS_PLAYER_DRAG_FRAME();
+        } else {
+            const allPts = COMBINE_ALL_PATH_PTS(dragInfo.pinnedSegs, dragInfo.lastCurPts);
+            UPDATE_DRAG_PATH_SVG(allPts, dragInfo.anchors, dragInfo.vpW, dragInfo.vpH);
+        }
+    }
+
+    function CANCEL_ACTIVE_DRAG() {
+        if (!dragInfo) return;
+        if (dragRafId) { cancelAnimationFrame(dragRafId); dragRafId = null; }
+        if (dragInfo.el) {
+            dragInfo.el.style.left = dragInfo.origX + '%';
+            dragInfo.el.style.top = dragInfo.origY + '%';
+        }
+        window._draggingMapObj = null;
+        dragInfo = null;
+        pendingMoveEvt = null;
+        UPDATE_DRAG_PATH_SVG(null, null, 0, 0);
+        SHOW_MAP_RULE_HINT('↩️ Перемещение отменено');
+    }
+
     const _ORIG_START_DRAG_CR = window.START_DRAG_MAP_OBJ;
     if (typeof _ORIG_START_DRAG_CR === 'function') {
         window.START_DRAG_MAP_OBJ = function(type, index, domId) {
@@ -874,26 +1013,28 @@
                     const rect = vp ? vp.getBoundingClientRect() : { left: 0, top: 0, width: 800, height: 500 };
 
                     dragInfo = {
-                        x: tok.x,
-                        y: tok.y,
+                        origX: tok.x,
+                        origY: tok.y,
                         index,
                         cols,
                         rows,
                         hasWalls,
                         blocked: hasWalls ? MASK_TO_UINT8(st.collisionMask, cols, rows) : null,
-                        startC: sCell.c,
-                        startR: sCell.r,
-                        nav: null, // Построится лениво только при встрече со стеной
+                        anchors: [{ x: tok.x, y: tok.y, c: sCell.c, r: sCell.r, nav: null }],
+                        pinnedSegs: [],
+                        pinnedFt: 0,
                         inCombat,
                         moveLeft,
                         rect,
                         vpW: Math.max(100, (vp && vp.clientWidth) || 800),
                         vpH: Math.max(100, (vp && vp.clientHeight) || 500),
                         el: document.getElementById(domId),
-                        lastValidX: tok.x,
-                        lastValidY: tok.y,
-                        lastValidPts: [{ x: tok.x, y: tok.y }],
-                        lastValidFt: 0
+                        lastCurX: tok.x,
+                        lastCurY: tok.y,
+                        lastCurPts: [{ x: tok.x, y: tok.y }],
+                        lastCurFt: 0,
+                        lastClientX: null,
+                        lastClientY: null
                     };
                 }
             }
@@ -910,17 +1051,24 @@
 
         const { clientX, clientY } = pendingMoveEvt;
         pendingMoveEvt = null;
+        dragInfo.lastClientX = clientX;
+        dragInfo.lastClientY = clientY;
 
         const r = dragInfo.rect;
         const rawX = Math.max(2, Math.min(98, ((clientX - r.left) / Math.max(1, r.width)) * 100));
         const rawY = Math.max(2, Math.min(98, ((clientY - r.top) / Math.max(1, r.height)) * 100));
 
-        const resolved = RESOLVE_DRAG_FAST(dragInfo, rawX, rawY);
+        const activeAnchor = dragInfo.anchors[dragInfo.anchors.length - 1];
+        const remForSeg = Math.max(0, dragInfo.moveLeft - dragInfo.pinnedFt);
+        const resolved = RESOLVE_SEGMENT_FAST(dragInfo, activeAnchor, rawX, rawY, remForSeg);
 
-        dragInfo.lastValidX = resolved.x;
-        dragInfo.lastValidY = resolved.y;
-        dragInfo.lastValidPts = resolved.pts;
-        dragInfo.lastValidFt = resolved.totalFt;
+        dragInfo.lastCurX = resolved.x;
+        dragInfo.lastCurY = resolved.y;
+        dragInfo.lastCurPts = resolved.pts;
+        dragInfo.lastCurFt = resolved.totalFt;
+
+        const allPts = COMBINE_ALL_PATH_PTS(dragInfo.pinnedSegs, resolved.pts);
+        const allFt = dragInfo.pinnedFt + resolved.totalFt;
 
         if (dragInfo.el) {
             dragInfo.el.style.left = resolved.x + '%';
@@ -928,16 +1076,20 @@
         }
         window._draggingMapObj.lastX = resolved.x;
         window._draggingMapObj.lastY = resolved.y;
-        window._draggingMapObj.walkedFt = resolved.totalFt;
+        window._draggingMapObj.walkedFt = allFt;
         window._draggingMapObj.moved = true;
 
-        UPDATE_DRAG_PATH_SVG(resolved.pts, dragInfo.vpW, dragInfo.vpH);
+        UPDATE_DRAG_PATH_SVG(allPts, dragInfo.anchors, dragInfo.vpW, dragInfo.vpH);
 
+        const turns = dragInfo.anchors.length - 1;
+        const tip = turns > 0 ? 'ПКМ/Пробел — ещё поворот • Backspace — убрать' : 'ПКМ / Пробел — точка поворота';
         if (dragInfo.inCombat) {
-            const rem = Math.max(0, dragInfo.moveLeft - resolved.totalFt);
-            SHOW_MAP_RULE_HINT(`👣 Путь: ${resolved.totalFt} фт | Останется: ${rem} фт${resolved.clamped ? ' (предел хода)' : ''}`);
-        } else if (resolved.hitWall && resolved.totalFt === 0) {
+            const rem = Math.max(0, dragInfo.moveLeft - allFt);
+            SHOW_MAP_RULE_HINT(`👣 ${allFt} фт (осталось ${rem} фт)${resolved.clamped ? ' • предел' : ''} • ${tip}`);
+        } else if (resolved.hitWall && allFt === 0) {
             SHOW_MAP_RULE_HINT('🧱 Непроходимая стена', true);
+        } else if (allFt >= 5 || turns > 0) {
+            SHOW_MAP_RULE_HINT(`👣 Путь: ${allFt} фт • ${tip}`);
         }
     }
 
@@ -988,6 +1140,8 @@
 
         const origUp = mapArea.onmouseup;
         mapArea.onmouseup = function(e) {
+            if (e && e.button === 2 && dragInfo) return;
+
             if (isPaintingWalls) {
                 isPaintingWalls = false;
                 if (wallPaintCache && wallPaintCache.dirty) {
@@ -1008,7 +1162,7 @@
             const snapInCombat = !!(dragInfo && dragInfo.inCombat);
             dragInfo = null;
             pendingMoveEvt = null;
-            UPDATE_DRAG_PATH_SVG(null, 0, 0);
+            UPDATE_DRAG_PATH_SVG(null, null, 0, 0);
 
             if (origUp) origUp.call(this, e);
 
@@ -1023,21 +1177,67 @@
         };
     }
 
-    window.addEventListener('mouseup', () => {
-        if (isPaintingWalls) {
-            isPaintingWalls = false;
-            if (wallPaintCache && wallPaintCache.dirty) {
-                SAVE_MAP_STATE(wallPaintCache.st);
+    // Глобальные перехватчики для ПКМ, Пробела, Backspace и Esc во время перетаскивания (в capture-фазе)
+    if (!window._crGlobalListenersBound) {
+        window._crGlobalListenersBound = true;
+
+        window.addEventListener('mousedown', (e) => {
+            if (e.button === 2 && dragInfo && window._draggingMapObj) {
+                e.preventDefault();
+                e.stopPropagation();
+                if (dragRafId) { cancelAnimationFrame(dragRafId); dragRafId = null; }
+                if (pendingMoveEvt) PROCESS_PLAYER_DRAG_FRAME();
+                PIN_DRAG_WAYPOINT();
             }
-            wallPaintCache = null;
-        }
-        if (dragRafId) {
-            cancelAnimationFrame(dragRafId);
-            dragRafId = null;
-        }
-        pendingMoveEvt = null;
-        UPDATE_DRAG_PATH_SVG(null, 0, 0);
-    });
+        }, true);
+
+        window.addEventListener('mouseup', (e) => {
+            if (e.button === 2 && dragInfo && window._draggingMapObj) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                return;
+            }
+            if (isPaintingWalls) {
+                isPaintingWalls = false;
+                if (wallPaintCache && wallPaintCache.dirty) {
+                    SAVE_MAP_STATE(wallPaintCache.st);
+                }
+                wallPaintCache = null;
+            }
+            if (dragRafId) {
+                cancelAnimationFrame(dragRafId);
+                dragRafId = null;
+            }
+            pendingMoveEvt = null;
+            if (!window._draggingMapObj) {
+                dragInfo = null;
+                UPDATE_DRAG_PATH_SVG(null, null, 0, 0);
+            }
+        }, true);
+
+        window.addEventListener('contextmenu', (e) => {
+            if (dragInfo && window._draggingMapObj) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        }, true);
+
+        window.addEventListener('keydown', (e) => {
+            if (!dragInfo || !window._draggingMapObj) return;
+            if (e.code === 'Space') {
+                e.preventDefault();
+                if (dragRafId) { cancelAnimationFrame(dragRafId); dragRafId = null; }
+                if (pendingMoveEvt) PROCESS_PLAYER_DRAG_FRAME();
+                PIN_DRAG_WAYPOINT();
+            } else if (e.key === 'Backspace') {
+                e.preventDefault();
+                UNDO_LAST_DRAG_WAYPOINT();
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                CANCEL_ACTIVE_DRAG();
+            }
+        }, true);
+    }
 
     // --- 8. ХУКИ В RENDER_MAP_AREA И БОЕВОЙ HUD ---
     const _ORIG_RENDER_MAP_CR = window.RENDER_MAP_AREA;
