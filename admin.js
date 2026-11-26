@@ -395,7 +395,6 @@
 
 
     window.RENDER_ADMIN_PANEL_MODAL = function() {
-    function RENDER_ADMIN_PANEL_MODAL() {
         const cont = document.getElementById('admin-panel-content');
         if (!cont) return;
         const tab = window._adminTab || 'updates';
