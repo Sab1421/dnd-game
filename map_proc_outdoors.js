@@ -1,8 +1,8 @@
 // ================================================================
-// 🌍 БЛОК 2: ПРОЦЕДУРНЫЙ ГЕНЕРАТОР УЛИЧНЫХ ЛОКАЦИЙ (100% РАНДОМ + ЛОГИКА)
-// Покрывает: Город, Поле битвы, Лес, Пираты, Пустыня, Фейский лес, Лагерь, Снег
+// 🌍 ПРОЦЕДУРНЫЙ ГЕНЕРАТОР УЛИЧНЫХ ЛОКАЦИЙ V6 (БЕЗ ШАБЛОНОВ, СЛОИ + ЛОГИКА)
+// Покрывает: Город, Снег, Поле битвы, Лес, Пираты, Пустыня, Фейский лес, Лагерь
 // ================================================================
-(function INSTALL_PROCEDURAL_OUTDOORS_V4() {
+(function INSTALL_TRUE_PROCEDURAL_OUTDOORS_V6() {
     const _PREV_GEN = MB_GENERATE_RANDOM;
     const TARGETS = ['city', 'battlefield', 'forest', 'pirate', 'desert', 'fey', 'warcamp', 'snow'];
 
@@ -14,13 +14,13 @@
         MB_PUSH_UNDO();
         const cols = window._mbCols, rows = window._mbRows;
 
+        // Гармоничная палитра покрытий для текущего клика
         const T = {
             grass:     Math.random() < 0.25 ? MB_PICK_TILE_FAMILY('moss', 'grass') : MB_PICK_TILE_FAMILY('grass', 'grass'),
             dirt:      MB_PICK_TILE_FAMILY('dirt', 'dirt'),
             stone:     MB_PICK_TILE_FAMILY('stone', 'stone'),
             flagstone: MB_PICK_TILE_FAMILY('flagstone', 'stone'),
-            cobble:    Math.random() < 0.55 ? MB_PICK_TILE_FAMILY('cobble', 'flagstone') : MB_PICK_TILE_FAMILY('flagstone', 'stone'),
-            wood:      MB_PICK_TILE_FAMILY('wood', 'wood'),
+            cobble:    MB_PICK_TILE_FAMILY('cobble', 'stone'),
             wall:      MB_PICK_TILE_FAMILY('wall', 'wall'),
             snow:      MB_PICK_TILE_FAMILY('snow', 'snow'),
             ice:       MB_PICK_TILE_FAMILY('ice', 'snow'),
@@ -29,6 +29,7 @@
             leafG:     'leaves_green',
             leafR:     'leaves_red'
         };
+        if (T.flagstone === T.cobble) T.flagstone = T.stone;
 
         const baseMap = {
             city: T.cobble, battlefield: T.grass, forest: T.grass,
@@ -38,11 +39,11 @@
             city:        ['day', 'day', 'sunset', 'night'],
             battlefield: ['sunset', 'day', 'sunset'],
             forest:      ['day', 'day', 'sunset'],
-            pirate:      ['day', 'sunset'],
+            pirate:      ['day', 'day', 'sunset'],
             desert:      ['day', 'sunset'],
             fey:         ['night', 'night', 'sunset'],
             warcamp:     ['sunset', 'night', 'day'],
-            snow:        ['day', 'night', 'day']
+            snow:        ['day', 'day', 'night']
         };
         window._mbLighting = MB_PICK(lightMap[picked] || ['day']);
         const data = CREATE_EMPTY_MB_DATA(baseMap[picked] || T.grass, cols, rows);
@@ -54,6 +55,14 @@
         const isWall = (c, r) => /^wall/.test(getT(c, r) || '');
         const isWater = (c, r) => /^water/.test(getT(c, r) || '');
 
+        const fillRect = (x1, y1, x2, y2, t, onlyOn = null) => {
+            for (let r = Math.max(0, Math.floor(y1)); r <= Math.min(rows - 1, Math.floor(y2)); r++)
+                for (let c = Math.max(0, Math.floor(x1)); c <= Math.min(cols - 1, Math.floor(x2)); c++) {
+                    if (onlyOn && !onlyOn.includes(getT(c, r))) continue;
+                    setT(c, r, t);
+                }
+        };
+
         const placedZones = [];
         const canPlace = (x, y, minDist = 1.0) => {
             if (!inB(Math.floor(x), Math.floor(y))) return false;
@@ -64,23 +73,25 @@
             if (!id) return false;
             const stObj = MB_FIND_STAMP_OBJ(id);
             if (!stObj) return false;
-            if (stObj.img) MB_GET_LOADED_IMG(stObj.img);
+            if (stObj.img) MB_GET_LOADED_IMG(stObj.img, false);
             data.objects.push({ id, x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100, scale, rot: Math.round(rot) });
             if (reserve > 0) placedZones.push({ x, y, r: reserve });
             return true;
         };
 
-        // --- ЧИСТЫЕ ПУЛЫ РАБОЧИХ СПРАЙТОВ ---
+        // --- ЧИСТЫЕ ПРОВЕРЕННЫЕ ПУЛЫ СПРАЙТОВ (БЕЗ ЛИШНИХ И БИТЫХ ЭЛЕМЕНТОВ) ---
         const P = {
             trees:        MB_GET_POOL(/^nature_tree_(large|small|big|bigger|[123])$|^nature_tree_(large|small)_[12]$/),
             bushes:       MB_GET_POOL(/^nature_bush_(2|3|4|5|6|7|8)_green|^nature_bush_shrub_|^nature_bush_[12]$|^nature_thick_foliage_|^other_fern_/),
             autumnBushes: MB_GET_POOL(/^nature_bush_1_red$|^nature_bush_9_yellow$|^other_leaf_litter_/),
-            flowers:      MB_GET_POOL(/^nature_flower_|^nature_flowers_|^other_clovers_/),
+            flowers:      MB_GET_POOL(/^nature_flower_[1-7]|^nature_flowers_[1-6]|^other_clovers_/),
             rocks:        MB_GET_POOL(/^nature_mossy_boulder_|^nature_rock(_small)?_[123]$|^nature_rocks_[1-5]$|^nature_boulder$/),
-            rockBig:      MB_GET_POOL(/^nature_rock_formation_[2-6]$|^nature_rocks_1_2x2$|^nature_rocks_5_2x2$|^nature_rock_outcrop$/),
-            logs:         MB_GET_POOL(/^nature_fallen_tree_|^nature_stump_|^nature_tree_stump_[1-5]_cut$|^nature_log_/),
+            cliffs:       MB_GET_POOL(/^nature_cliff_[123]$|^nature_rock_formation_[2-6]$|^nature_rock_outcrop$/),
+            logs:         MB_GET_POOL(/^nature_fallen_tree_|^nature_stump_[123]$|^nature_tree_stump_[1-5]_cut$|^nature_log_fallen_tree$/),
+            deadwood:     MB_GET_POOL(/^other_deadwood3$|^nature_fallen_tree_[12]$|^nature_stump_[123]$|^nature_log_fallen_tree$/),
             fungi:        MB_GET_POOL(/^nature_mushrooms_[123]$|^nature_fungi_(1|3|5|14)_brown$|^nature_mushroom_(6|7)_brown$|^nature_mushroom_11_red$/),
             waterDec:     MB_GET_POOL(/^other_lily_pad|^nature_submerged_rocks_|^nature_river_rock_|^other_current_/),
+            waterRocks:   MB_GET_POOL(/^nature_submerged_rocks_[1-4]$|^nature_river_rock_[123]$/),
             woodBridge:   MB_GET_POOL(/^nature_wooden_bridge_section_7x4$/),
             stoneBridge:  MB_GET_POOL(/^nature_stone_bridge_section_7x4$/),
 
@@ -100,7 +111,7 @@
             campfires:    MB_GET_POOL(/^camp_campfire(_fire|_pot_cooking)?$/),
             campBigTents: MB_GET_POOL(/^camp_tent_round_large_pavillion$|^camp_tent_large_9x5$|^camp_tentlarge$/),
             campTents:    MB_GET_POOL(/^camp_tent_(round_small|square_[123]|narrow_[12])$|^camp_tent_small_5x4$/),
-            campGear:     MB_GET_POOL(/^furniture_bedroll_[123]$|^camp_backpack_|^other_firewood_pile$|^nature_log_seat_[12]$/),
+            campGear:     MB_GET_POOL(/^furniture_bedroll_[123]$|^camp_backpack_|^other_firewood_pile$|^nature_log_seat_[12]$|^nature_stump_axe_chopping$/),
 
             siege:        MB_GET_POOL(/^camp_ballista$|^camp_weapon_ballista_2x2$|^camp_cannon$|^other_catapult$|^effects_acidcauldron$|^dungeon_pitchcauldron$/),
             siegeAmmo:    MB_GET_POOL(/^camp_cannonballs2?$|^effects_ballistabolts$/),
@@ -113,6 +124,7 @@
             pillars:      MB_GET_POOL(/^dungeon_pillar_(round|square)_1x1$|^dungeon_stone_pillar_[12]$|^dungeon_pillar_base_2$/),
             altars:       MB_GET_POOL(/^dungeon_feature_altar_gold$|^dungeon_tomb_(1|open)$/),
             chests:       MB_GET_POOL(/^dungeon_chest_[12]_(steel|gold)$|^dungeon_chest2$/),
+            braziers:     MB_GET_POOL(/^dungeon_light_brazier_[123]_[abc]$|^other_light_stand_lit_iron$/),
 
             palms:        MB_GET_POOL(/^nature_palmtree2?$|^nature_tree_(large|small)_palm_/),
             pirateLoot:   MB_GET_POOL(/^dungeon_chestoctopus$|^other_coinbag$|^other_coinlarge4$|^camp_pirateflag$|^other_anchor2$|^city_shipswheel$|^furniture_messagebottle$|^other_largerope$/),
@@ -132,22 +144,23 @@
             orcTents:     MB_GET_POOL(/^other_shelter$|^camp_tentsmallround$|^camp_tent_square_[123]$/),
             orcProps:     MB_GET_POOL(/^camp_totemlarge$|^dungeon_giantskull$|^dungeon_skullstake$|^other_meatrack$|^other_tanningrack2$|^camp_weaponrack$|^other_warhorn$|^camp_(beaver|wolf|small)pelt$|^camp_campfire_hog$|^dungeon_campfire_cooking_spit$/),
 
-            snowRocks:    MB_GET_POOL(/^nature_rock_[123]$|^nature_boulder$|^nature_rocks_[1-5]$/),
-            snowPelts:    MB_GET_POOL(/^camp_(wolf|beaver)pelt$|^camp_peltwolf$|^furniture_bedroll_[12]$/)
+            snowRocks:    MB_GET_POOL(/^nature_rock_[123]$|^nature_rock_small_[12]$|^nature_boulder$|^nature_rocks_[1-5]$/),
+            snowPelts:    MB_GET_POOL(/^camp_(wolf|beaver)pelt$|^camp_pelt(wolf|fox)$|^furniture_bedroll_[123]$|^other_firewood_pile$|^nature_stump_axe_chopping$|^nature_log_seat_[12]$/),
+            iceCrystals:  MB_GET_POOL(/^dungeon_crystalblue$|^dungeon_crystal_vertical_2x2$/)
         };
 
         // ============================================================
-        // 🧩 ПРИМИТИВЫ ПРОЦЕДУРНОГО РЕЛЬЕФА (БЕЗ ШАБЛОНОВ!)
+        // 🧩 УНИВЕРСАЛЬНЫЕ ПРОЦЕДУРНЫЕ ИНСТРУМЕНТЫ
         // ============================================================
         const phaseA = MB_RAND_FLOAT(0, 6.28), phaseB = MB_RAND_FLOAT(0, 6.28);
 
-        function paintBlob(cx, cy, rx, ry, tile, wob = 0.18, onlyOn = null) {
+        function paintBlob(cx, cy, rx, ry, tile, wob = 0.17, onlyOn = null) {
             const rMin = Math.max(0, Math.floor(cy - ry - 3)), rMax = Math.min(rows - 1, Math.ceil(cy + ry + 3));
             const cMin = Math.max(0, Math.floor(cx - rx - 3)), cMax = Math.min(cols - 1, Math.ceil(cx + rx + 3));
             for (let r = rMin; r <= rMax; r++) for (let c = cMin; c <= cMax; c++) {
                 if (onlyOn && !onlyOn.includes(getT(c, r))) continue;
                 const ang = Math.atan2(r - cy, c - cx);
-                const noise = Math.sin(ang * 3 + phaseA) * wob + Math.cos(ang * 5 + phaseB) * (wob * 0.5);
+                const noise = Math.sin(ang * 3 + phaseA) * wob + Math.cos(ang * 5 + phaseB) * (wob * 0.45);
                 const d = Math.hypot((c - cx) / Math.max(0.6, rx), (r - cy) / Math.max(0.6, ry));
                 if (d <= 1.0 + noise) setT(c, r, tile);
             }
@@ -168,16 +181,12 @@
             return [randomEdgePoint(s1), randomEdgePoint(s2)];
         }
 
-        // Прокладывает плавную кривую Безье с органическим изгибом и возвращает точки + углы
         function carveSpline(p0, p1, radius, tile, opts = {}) {
-            const bend = (opts.bend !== undefined ? opts.bend : MB_RAND_FLOAT(-0.28, 0.28));
+            const bend = (opts.bend !== undefined ? opts.bend : MB_RAND_FLOAT(-0.26, 0.26));
             const dx = p1.x - p0.x, dy = p1.y - p0.y;
             const len = Math.max(1, Math.hypot(dx, dy));
             const nx = -dy / len, ny = dx / len;
-            const ctrl = {
-                x: (p0.x + p1.x) / 2 + nx * len * bend,
-                y: (p0.y + p1.y) / 2 + ny * len * bend
-            };
+            const ctrl = { x: (p0.x + p1.x) / 2 + nx * len * bend, y: (p0.y + p1.y) / 2 + ny * len * bend };
             const steps = Math.max(24, Math.ceil(len * 3));
             const pts = [];
             for (let i = 0; i <= steps; i++) {
@@ -189,7 +198,7 @@
                 const tLen = Math.max(0.01, Math.hypot(tx, ty));
                 pts.push({ x, y, ux: tx / tLen, uy: ty / tLen, nx: -ty / tLen, ny: tx / tLen });
 
-                if (opts.skipRange && t > opts.skipRange[0] && t < opts.skipRange[1]) continue;
+                if (opts.skipRanges && opts.skipRanges.some(([a, b]) => t > a && t < b)) continue;
 
                 const rr = Math.ceil(radius + 0.5);
                 for (let dr = -rr; dr <= rr; dr++) for (let dc = -rr; dc <= rr; dc++) {
@@ -198,6 +207,7 @@
                     if (Math.hypot(cx + 0.5 - x, cy + 0.5 - y) <= radius) {
                         if (opts.keepWater && isWater(cx, cy)) continue;
                         if (opts.keepWall && isWall(cx, cy)) continue;
+                        if (opts.onlyOn && !opts.onlyOn.includes(getT(cx, cy))) continue;
                         setT(cx, cy, tile);
                     }
                 }
@@ -205,7 +215,6 @@
             return pts;
         }
 
-        // Автоматический мост под точным углом в любом месте пересечения дороги и воды!
         function autoPlaceBridges(roadPts, isStone = false) {
             const pool = isStone ? P.stoneBridge : P.woodBridge;
             let inW = false, startIdx = 0;
@@ -215,84 +224,92 @@
                 if (wet && !inW) { inW = true; startIdx = i; }
                 else if ((!wet || i === roadPts.length - 1) && inW) {
                     inW = false;
-                    const endIdx = wet ? i : i - 1;
-                    const a = roadPts[startIdx], b = roadPts[endIdx];
-                    const span = Math.hypot(b.x - a.x, b.y - a.y) + 1.8;
-                    if (span < 1.6) continue;
+                    const a = roadPts[startIdx], b = roadPts[wet ? i : i - 1];
+                    const span = Math.hypot(b.x - a.x, b.y - a.y) + 1.85;
+                    if (span < 1.5) continue;
                     const deg = Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI;
-                    const segs = Math.max(1, Math.ceil(span / 3.4));
-                    const segLen = span / segs;
-                    const sc = Math.max(0.76, segLen / 3.45);
+                    const segs = Math.max(1, Math.ceil(span / 3.35));
+                    const sc = Math.max(0.76, (span / segs) / 3.4);
                     for (let s = 0; s < segs; s++) {
-                        const frac = (s + 0.5) / segs;
-                        const bx = a.x + (b.x - a.x) * frac;
-                        const by = a.y + (b.y - a.y) * frac;
-                        addObj(pool, bx, by, sc, deg, 1.45);
+                        const f = (s + 0.5) / segs;
+                        addObj(pool, a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f, sc, deg, 1.4);
                     }
                 }
             }
         }
 
-        // Универсальный блок: уютный лагерь (костёр + палатки лицом к огню + спальники)
+        function findDrySpot(allowedTiles, margin = 3.5, clearR = 4.0) {
+            for (let tries = 0; tries < 36; tries++) {
+                const x = MB_RAND_FLOAT(margin, cols - margin);
+                const y = MB_RAND_FLOAT(margin, rows - margin);
+                const gx = Math.floor(x), gy = Math.floor(y);
+                if (!allowedTiles.includes(getT(gx, gy)) || !canPlace(x, y, clearR)) continue;
+                const ok = [-2, 0, 2].every(dy => [-2, 0, 2].every(dx => {
+                    const t = getT(gx + dx, gy + dy);
+                    return t && !isWater(gx + dx, gy + dy) && !isWall(gx + dx, gy + dy);
+                }));
+                if (ok) return { x, y };
+            }
+            return null;
+        }
+
         function placeCampCluster(cx, cy, opts = {}) {
-            const rad = opts.radius || 3.2;
-            if (opts.groundTile) paintBlob(cx, cy, rad, rad * 0.85, opts.groundTile, 0.15);
-            const firePool = opts.firePool || P.campfires;
-            const tentPool = opts.tentPool || P.campTents;
-            const propPool = opts.propPool || P.campGear;
-            addObj(firePool, cx, cy, opts.fireScale || 1.1, 0, 1.5);
+            const rad = opts.radius || 3.0;
+            if (opts.groundTile) paintBlob(cx, cy, rad, rad * 0.85, opts.groundTile, 0.15, opts.onlyGround || null);
+            addObj(opts.firePool || P.campfires, cx, cy, opts.fireScale || 1.12, 0, 1.45);
             const nTents = opts.tents || MB_RAND_INT(2, 4);
             const startAng = MB_RAND_FLOAT(0, 6.28);
             for (let i = 0; i < nTents; i++) {
                 const ang = startAng + (i / nTents) * 6.28 + MB_RAND_FLOAT(-0.25, 0.25);
-                const dist = MB_RAND_FLOAT(rad * 0.72, rad * 1.02);
+                const dist = MB_RAND_FLOAT(rad * 0.72, rad * 1.0);
                 const tx = cx + Math.cos(ang) * dist, ty = cy + Math.sin(ang) * dist;
                 if (!inB(Math.floor(tx), Math.floor(ty)) || isWater(Math.floor(tx), Math.floor(ty)) || isWall(Math.floor(tx), Math.floor(ty))) continue;
-                if (!canPlace(tx, ty, 2.0)) continue;
-                const faceFire = (ang * 180 / Math.PI) + 90;
-                addObj(i === 0 && opts.bigTentPool ? opts.bigTentPool : tentPool, tx, ty, i === 0 && opts.bigTentPool ? 0.88 : 1.05, faceFire, 2.0);
+                if (!canPlace(tx, ty, 1.85)) continue;
+                const useBig = (i === 0 && opts.bigTentPool);
+                addObj(useBig ? opts.bigTentPool : (opts.tentPool || P.campTents), tx, ty, useBig ? 0.86 : 1.02, (ang * 180 / Math.PI) + 90, 1.9);
             }
             for (let i = 0; i < (opts.props || 3); i++) {
                 const ang = MB_RAND_FLOAT(0, 6.28);
-                const px = cx + Math.cos(ang) * MB_RAND_FLOAT(1.6, rad * 0.85);
-                const py = cy + Math.sin(ang) * MB_RAND_FLOAT(1.6, rad * 0.85);
-                if (canPlace(px, py, 1.1) && !isWater(Math.floor(px), Math.floor(py))) {
-                    addObj(propPool, px, py, 0.92, MB_RAND_INT(0, 359), 1.0);
+                const px = cx + Math.cos(ang) * MB_RAND_FLOAT(1.4, rad * 0.85);
+                const py = cy + Math.sin(ang) * MB_RAND_FLOAT(1.4, rad * 0.85);
+                if (canPlace(px, py, 1.0) && !isWater(Math.floor(px), Math.floor(py)) && !isWall(Math.floor(px), Math.floor(py))) {
+                    addObj(opts.propPool || P.campGear, px, py, 0.9, MB_RAND_INT(0, 359), 0.9);
                 }
             }
         }
 
-        // Универсальный блок: древние руины (каменная площадка + алтарь/сундук + колонны + обломки)
-        function placeRuinsCluster(cx, cy, floorT = T.stone) {
-            const rad = MB_RAND_FLOAT(3.2, 4.6);
-            paintBlob(cx, cy, rad, rad * 0.82, floorT, 0.2);
-            addObj(P.altars, cx, cy, 1.15, MB_PICK([0, 90, 180, 270]), 1.5);
-            if (canPlace(cx + 1.8, cy - 0.6, 1.0)) addObj(P.chests, cx + 1.8, cy - 0.6, 0.88, MB_RAND_INT(0, 359), 0.9);
-            const pillarsN = MB_RAND_INT(4, 6);
-            for (let i = 0; i < pillarsN; i++) {
-                const ang = (i / pillarsN) * 6.28 + 0.3;
+        function placeRuinsCluster(cx, cy, floorT = T.stone, extraPool = null) {
+            const rad = MB_RAND_FLOAT(2.8, 4.2);
+            paintBlob(cx, cy, rad, rad * 0.82, floorT, 0.18);
+            addObj(P.altars, cx, cy, 1.12, MB_PICK([0, 90, 180, 270]), 1.4);
+            if (canPlace(cx + 1.6, cy - 0.6, 0.9)) addObj(P.chests, cx + 1.6, cy - 0.6, 0.88, MB_RAND_INT(0, 359), 0.85);
+            const nP = MB_RAND_INT(4, 6);
+            for (let i = 0; i < nP; i++) {
+                const ang = (i / nP) * 6.28 + 0.35;
                 const px = cx + Math.cos(ang) * (rad * 0.78), py = cy + Math.sin(ang) * (rad * 0.68);
-                if (canPlace(px, py, 1.1)) addObj(Math.random() < 0.7 ? P.pillars : P.rubble, px, py, 0.98, MB_RAND_INT(0, 359), 1.0);
+                if (inB(Math.floor(px), Math.floor(py)) && canPlace(px, py, 1.0)) {
+                    const pool = (i % 2 === 0) ? P.pillars : (extraPool && Math.random() < 0.5 ? extraPool : P.rubble);
+                    addObj(pool, px, py, 0.94, MB_RAND_INT(0, 359), 0.95);
+                }
             }
         }
 
-        // Естественные рощи растительности и камней (избегают дорог/воды/стен)
         function scatterGroves(allowedTiles, treePool, bushPool, accentPool, density = 1.0) {
-            const groves = Math.max(4, Math.floor((cols * rows) / 52 * density));
+            const groves = Math.max(4, Math.floor((cols * rows) / 54 * density));
             for (let g = 0; g < groves; g++) {
                 const gx = MB_RAND_FLOAT(1.5, cols - 1.5), gy = MB_RAND_FLOAT(1.5, rows - 1.5);
                 if (!allowedTiles.includes(getT(Math.floor(gx), Math.floor(gy)))) continue;
                 const count = MB_RAND_INT(3, 6);
                 for (let k = 0; k < count; k++) {
-                    const ox = gx + MB_RAND_FLOAT(-2.9, 2.9), oy = gy + MB_RAND_FLOAT(-2.5, 2.5);
+                    const ox = gx + MB_RAND_FLOAT(-2.7, 2.7), oy = gy + MB_RAND_FLOAT(-2.3, 2.3);
                     if (!inB(Math.floor(ox), Math.floor(oy))) continue;
                     if (!allowedTiles.includes(getT(Math.floor(ox), Math.floor(oy)))) continue;
                     if (!canPlace(ox, oy, 1.55)) continue;
-                    if (k < 3) addObj(treePool, ox, oy, MB_RAND_FLOAT(0.92, 1.38), MB_RAND_INT(0, 359), 1.7);
-                    else addObj(bushPool, ox, oy, MB_RAND_FLOAT(0.82, 1.18), MB_RAND_INT(0, 359), 0.95);
+                    if (k < 3) addObj(treePool, ox, oy, MB_RAND_FLOAT(0.9, 1.32), MB_RAND_INT(0, 359), 1.65);
+                    else addObj(bushPool, ox, oy, MB_RAND_FLOAT(0.82, 1.15), MB_RAND_INT(0, 359), 0.95);
                 }
             }
-            const accents = Math.floor((cols * rows) / 16 * density);
+            const accents = Math.floor((cols * rows) / 18 * density);
             for (let i = 0; i < accents; i++) {
                 const ox = MB_RAND_FLOAT(1.2, cols - 1.2), oy = MB_RAND_FLOAT(1.2, rows - 1.2);
                 if (!allowedTiles.includes(getT(Math.floor(ox), Math.floor(oy)))) continue;
@@ -301,10 +318,10 @@
             }
         }
 
-        function scatterWaterDetails(prob = 0.14) {
+        function scatterWaterDetails(pool = P.waterDec, prob = 0.14) {
             for (let r = 1; r < rows - 1; r++) for (let c = 1; c < cols - 1; c++) {
-                if (isWater(c, r) && canPlace(c + 0.5, r + 0.5, 1.55) && Math.random() < prob) {
-                    addObj(P.waterDec, c + 0.5, r + 0.5, 0.92, MB_RAND_INT(0, 359), 0.9);
+                if (isWater(c, r) && canPlace(c + 0.5, r + 0.5, 1.5) && Math.random() < prob) {
+                    addObj(pool, c + 0.5, r + 0.5, 0.9, MB_RAND_INT(0, 359), 0.85);
                 }
             }
         }
@@ -312,165 +329,455 @@
         let genTitle = 'Локация';
 
         // ============================================================
-        // 1. 👑 ГОРОД (ПРОЦЕДУРНЫЕ УЛИЦЫ, КАНАЛЫ, ПЛОЩАДИ И КВАРТАЛЫ)
+        // 1. 👑 ГОРОД (КОМПОЗИЦИОННАЯ СЕТЬ УЛИЦ + КАНАЛЫ/СТЕНЫ + УМНАЯ ЗАСТРОЙКА)
         // ============================================================
         if (picked === 'city') {
-            const hasCanal = Math.random() < 0.36;
-            const hasWallGate = !hasCanal && cols >= 22 && Math.random() < 0.30;
-            const useThatchMix = Math.random() < 0.45 ? 0.35 : 0.10;
-            const roads = [];
+            const occ = Array.from({ length: rows }, () => new Uint8Array(cols));
+            const markOcc = (x1, y1, x2, y2, val = 1) => {
+                for (let r = Math.max(0, Math.floor(y1)); r <= Math.min(rows - 1, Math.floor(y2)); r++)
+                    for (let c = Math.max(0, Math.floor(x1)); c <= Math.min(cols - 1, Math.floor(x2)); c++) occ[r][c] = val;
+            };
 
-            // 1. Опциональный извилистый городской канал с каменной набережной
-            let canalPts = null;
+            const thatchProb = MB_PICK([0.05, 0.18, 0.35]);
+            const hasWall = cols >= 20 && Math.random() < 0.32;
+            const hasCanal = Math.random() < (hasWall ? 0.25 : 0.42);
+            const hStreets = []; // { y, w, x1, x2 }
+            const vStreets = []; // { x, w, y1, y2 }
+            let canal = null;    // { horiz, pos, w }
+            let wall = null;     // { side, cut, gate }
+
+            // Слой А: Городская стена и зелёный пригород с любой из 4 сторон!
+            if (hasWall) {
+                const side = MB_PICK(['W', 'E', 'N', 'S']);
+                const isVert = (side === 'W' || side === 'E');
+                const cut = isVert
+                    ? (side === 'W' ? MB_RAND_INT(Math.floor(cols * 0.28), Math.floor(cols * 0.42)) : MB_RAND_INT(Math.floor(cols * 0.56), Math.floor(cols * 0.70)))
+                    : (side === 'N' ? MB_RAND_INT(Math.floor(rows * 0.28), Math.floor(rows * 0.40)) : MB_RAND_INT(Math.floor(rows * 0.56), Math.floor(rows * 0.68)));
+                const gate = isVert
+                    ? MB_RAND_INT(Math.floor(rows * 0.26), Math.floor(rows * 0.74))
+                    : MB_RAND_INT(Math.floor(cols * 0.26), Math.floor(cols * 0.74));
+                wall = { side, isVert, cut, gate };
+
+                if (side === 'W') { fillRect(0, 0, cut - 1, rows - 1, T.grass); markOcc(0, 0, cut + 1, rows - 1, 2); }
+                else if (side === 'E') { fillRect(cut + 2, 0, cols - 1, rows - 1, T.grass); markOcc(cut, 0, cols - 1, rows - 1, 2); }
+                else if (side === 'N') { fillRect(0, 0, cols - 1, cut - 1, T.grass); markOcc(0, 0, cols - 1, cut + 1, 2); }
+                else { fillRect(0, cut + 2, cols - 1, rows - 1, T.grass); markOcc(0, cut, cols - 1, rows - 1, 2); }
+            }
+
+            // Слой Б: Опциональный городской канал (горизонтальный или вертикальный в случайной позиции)
             if (hasCanal) {
-                const [c0, c1] = randomEdgePair(false);
-                carveSpline(c0, c1, 2.8, T.flagstone, { bend: MB_RAND_FLOAT(-0.22, 0.22) });
-                canalPts = carveSpline(c0, c1, 1.55, T.water, { bend: MB_RAND_FLOAT(-0.22, 0.22) });
-                // Лодки вдоль канала
-                for (let i = 8; i < canalPts.length - 8; i += 16) {
-                    const pt = canalPts[i];
-                    if (isWater(Math.floor(pt.x), Math.floor(pt.y)) && canPlace(pt.x, pt.y, 1.8)) {
-                        const deg = Math.atan2(pt.uy, pt.ux) * 180 / Math.PI;
-                        addObj(P.boats, pt.x, pt.y, 1.0, deg, 1.5);
-                    }
+                const horiz = wall ? !wall.isVert : (Math.random() < (cols >= rows ? 0.68 : 0.32));
+                const cW = (horiz ? rows : cols) >= 18 ? 3 : 2;
+                const pos = horiz
+                    ? MB_RAND_INT(Math.max(4, Math.floor(rows * 0.28)), Math.min(rows - cW - 4, Math.floor(rows * 0.68)))
+                    : MB_RAND_INT(Math.max(4, Math.floor(cols * 0.28)), Math.min(cols - cW - 4, Math.floor(cols * 0.68)));
+                canal = { horiz, pos, w: cW };
+                if (horiz) {
+                    fillRect(0, pos - 1, cols - 1, pos + cW, T.flagstone, [T.cobble]);
+                    fillRect(0, pos, cols - 1, pos + cW - 1, T.water);
+                    markOcc(0, pos - 1, cols - 1, pos + cW, 2);
+                } else {
+                    fillRect(pos - 1, 0, pos + cW, rows - 1, T.flagstone, [T.cobble]);
+                    fillRect(pos, 0, pos + cW - 1, rows - 1, T.water);
+                    markOcc(pos - 1, 0, pos + cW, rows - 1, 2);
                 }
             }
 
-            // 2. Главная улица (произвольный угол/кривизна) + 1–2 поперечных переулка
-            const [r0, r1] = randomEdgePair(true);
-            roads.push(carveSpline(r0, r1, 1.35, T.flagstone, { keepWater: true, bend: MB_RAND_FLOAT(-0.2, 0.2) }));
-            const sideCount = cols >= 28 ? 2 : 1;
-            for (let s = 0; s < sideCount; s++) {
-                const anchor = roads[0][Math.floor(roads[0].length * MB_RAND_FLOAT(0.25, 0.75))];
-                const targetEdge = randomEdgePoint(MB_PICK(['N', 'S', 'E', 'W']));
-                roads.push(carveSpline(anchor, targetEdge, 1.15, T.flagstone, { keepWater: true, bend: MB_RAND_FLOAT(-0.18, 0.18) }));
+            // Слой В: Процедурная сеть улиц (1–3 горизонтальные и 1–3 вертикальные со случайными ответвлениями)
+            const addStreet = (isHoriz, pos, w, a = 0, b = null) => {
+                const lim = b !== null ? b : (isHoriz ? cols - 1 : rows - 1);
+                if (isHoriz) {
+                    for (let c = a; c <= lim; c++) for (let dy = 0; dy < w; dy++) {
+                        const r = pos + dy;
+                        if (!inB(c, r) || isWater(c, r)) continue;
+                        setT(c, r, getT(c, r) === T.grass ? T.dirt : T.flagstone);
+                    }
+                    markOcc(a, pos, lim, pos + w - 1, 2);
+                    hStreets.push({ y: pos, w, x1: a, x2: lim });
+                } else {
+                    for (let r = a; r <= lim; r++) for (let dx = 0; dx < w; dx++) {
+                        const c = pos + dx;
+                        if (!inB(c, r) || isWater(c, r)) continue;
+                        setT(c, r, getT(c, r) === T.grass ? T.dirt : T.flagstone);
+                    }
+                    markOcc(pos, a, pos + w - 1, lim, 2);
+                    vStreets.push({ x: pos, w, y1: a, y2: lim });
+                }
+            };
+
+            const mainW = cols >= 28 ? 3 : 2;
+            if (wall) {
+                if (wall.isVert) addStreet(true, Math.max(2, Math.min(rows - 4, wall.gate - 1)), 3);
+                else addStreet(false, Math.max(2, Math.min(cols - 4, wall.gate - 1)), 3);
+            } else {
+                if (!canal || !canal.horiz) addStreet(true, MB_RAND_INT(Math.floor(rows * 0.25), Math.floor(rows * 0.65)), mainW);
+                if (!canal || canal.horiz) addStreet(false, MB_RAND_INT(Math.floor(cols * 0.25), Math.floor(cols * 0.65)), mainW);
             }
 
-            // 3. Если город с крепостной стеной — отсекаем пригород травой и возводим стену с воротами!
-            if (hasWallGate) {
-                const vertical = Math.random() < 0.65;
-                const cut = vertical ? Math.floor(cols * MB_RAND_FLOAT(0.35, 0.65)) : Math.floor(rows * MB_RAND_FLOAT(0.35, 0.65));
-                const greenSide = Math.random() < 0.5 ? -1 : 1;
-                const gatePos = vertical ? Math.floor(rows * MB_RAND_FLOAT(0.3, 0.7)) : Math.floor(cols * MB_RAND_FLOAT(0.3, 0.7));
-                for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
-                    const val = vertical ? c : r;
-                    const dist = val - cut;
-                    if (Math.abs(dist) <= 0) {
-                        const along = vertical ? r : c;
-                        if (Math.abs(along - gatePos) > 2) {
-                            setT(c, r, T.wall);
-                            if (vertical && inB(c + 1, r)) setT(c + 1, r, T.wall);
-                            if (!vertical && inB(c, r + 1)) setT(c, r + 1, T.wall);
-                        } else {
-                            setT(c, r, T.flagstone);
+            // Добавляем 1–3 случайных переулка (или полные, или Т-образные до существующей улицы!)
+            const extraCount = cols >= 30 ? MB_RAND_INT(2, 3) : MB_RAND_INT(1, 2);
+            for (let i = 0; i < extraCount; i++) {
+                const makeH = Math.random() < 0.5;
+                if (makeH) {
+                    const py = MB_RAND_INT(3, rows - 5);
+                    if (hStreets.some(s => Math.abs(s.y - py) < 5)) continue;
+                    if (canal && canal.horiz && Math.abs(canal.pos - py) < 5) continue;
+                    const tCut = (vStreets.length && Math.random() < 0.45) ? MB_PICK(vStreets) : null;
+                    const x1 = tCut && Math.random() < 0.5 ? tCut.x : 0;
+                    const x2 = tCut && x1 === 0 ? (tCut.x + tCut.w - 1) : cols - 1;
+                    addStreet(true, py, 2, x1, x2);
+                } else {
+                    const px = MB_RAND_INT(4, cols - 6);
+                    if (vStreets.some(s => Math.abs(s.x - px) < 6)) continue;
+                    if (canal && !canal.horiz && Math.abs(canal.pos - px) < 6) continue;
+                    const tCut = (hStreets.length && Math.random() < 0.45) ? MB_PICK(hStreets) : null;
+                    const y1 = tCut && Math.random() < 0.5 ? tCut.y : 0;
+                    const y2 = tCut && y1 === 0 ? (tCut.y + tCut.w - 1) : rows - 1;
+                    addStreet(false, px, 2, y1, y2);
+                }
+            }
+
+            // Строим саму крепостную стену с воротами и башнями (поверх улиц)
+            if (wall) {
+                const { side, isVert, cut, gate } = wall;
+                if (isVert) {
+                    for (let r = 0; r < rows; r++) if (Math.abs(r - gate) > 1 && !isWater(cut, r)) { setT(cut, r, T.wall); setT(cut + 1, r, T.wall); }
+                    const outS = (side === 'W') ? -1 : 1;
+                    addObj(P.watchpost, cut + 1.0, Math.max(1.5, gate - 3.0), 1.08, 0, 1.8);
+                    addObj(P.watchpost, cut + 1.0, Math.min(rows - 1.5, gate + 3.6), 1.08, 0, 1.8);
+                    addObj(P.flags, cut + (side === 'W' ? -0.3 : 2.3), Math.max(1.2, gate - 2.3), 1.0, 0, 0.7);
+                    addObj(P.flags, cut + (side === 'W' ? -0.3 : 2.3), Math.min(rows - 1.2, gate + 2.9), 1.0, 0, 0.7);
+                    const cartX = Math.max(2.2, Math.min(cols - 2.2, cut + outS * 4.0));
+                    if (!isWater(Math.floor(cartX), gate)) {
+                        addObj(P.carts, cartX, gate + 0.5, 0.96, side === 'W' ? 0 : 180, 1.6);
+                        addObj(P.horses, Math.max(1.2, Math.min(cols - 1.2, cartX - outS * 2.0)), gate + 0.5, 0.9, side === 'W' ? 0 : 180, 1.0);
+                    }
+                } else {
+                    for (let c = 0; c < cols; c++) if (Math.abs(c - gate) > 1 && !isWater(c, cut)) { setT(c, cut, T.wall); setT(c, cut + 1, T.wall); }
+                    const outS = (side === 'N') ? -1 : 1;
+                    addObj(P.watchpost, Math.max(1.5, gate - 3.0), cut + 1.0, 1.08, 0, 1.8);
+                    addObj(P.watchpost, Math.min(cols - 1.5, gate + 3.6), cut + 1.0, 1.08, 0, 1.8);
+                    const cartY = Math.max(2.2, Math.min(rows - 2.2, cut + outS * 3.8));
+                    if (!isWater(gate, Math.floor(cartY))) addObj(P.carts, gate + 0.5, cartY, 0.96, side === 'N' ? 90 : 270, 1.6);
+                }
+            }
+
+            // Слой Г: Автоматические каменные мосты на КАЖДОМ пересечении улицы с каналом + лодки в воде!
+            if (canal) {
+                const placeCityBridge = (x1, y1, x2, y2) => {
+                    const horiz = Math.abs(x2 - x1) >= Math.abs(y2 - y1);
+                    const span = (horiz ? (x2 - x1 + 1) : (y2 - y1 + 1)) + 1.3;
+                    const segs = Math.max(1, Math.ceil(span / 3.4));
+                    const sc = Math.max(0.76, (span / segs) / 3.45);
+                    for (let i = 0; i < segs; i++) {
+                        const f = (i + 0.5) / segs;
+                        const bx = horiz ? (x1 - 0.15 + (x2 - x1 + 1.3) * f) : (x1 + 0.5);
+                        const by = horiz ? (y1 + 0.5) : (y1 - 0.15 + (y2 - y1 + 1.3) * f);
+                        addObj(P.stoneBridge, bx, by, sc, horiz ? 0 : 90, 1.4);
+                    }
+                };
+                if (canal.horiz) {
+                    vStreets.forEach(vs => {
+                        if (vs.y1 <= canal.pos && vs.y2 >= canal.pos + canal.w - 1) {
+                            placeCityBridge(vs.x + (vs.w - 1) / 2, canal.pos, vs.x + (vs.w - 1) / 2, canal.pos + canal.w - 1);
+                            addObj(P.lamps, vs.x - 0.4, canal.pos - 0.5, 0.84, 0, 0.7);
+                            addObj(P.lamps, vs.x + vs.w + 0.4, canal.pos + canal.w + 0.5, 0.84, 0, 0.7);
                         }
-                    } else if (dist * greenSide > 1 && getT(c, r) === T.cobble) {
-                        setT(c, r, T.grass);
-                    }
-                }
-                const gx = vertical ? cut + 0.5 : gatePos + 0.5;
-                const gy = vertical ? gatePos + 0.5 : cut + 0.5;
-                addObj(P.watchpost, gx + (vertical ? 0 : -3.4), gy + (vertical ? -3.4 : 0), 1.1, 0, 2.0);
-                addObj(P.watchpost, gx + (vertical ? 0 : 3.4), gy + (vertical ? 3.4 : 0), 1.1, 0, 2.0);
-                addObj(P.flags, gx + (vertical ? -1.4 : -2.6), gy + (vertical ? -2.6 : -1.4), 1.0, 0, 0.7);
-                addObj(P.carts, gx + (vertical ? greenSide * 3.5 : 0), gy + (vertical ? 0 : greenSide * 3.5), 1.0, vertical ? 0 : 90, 1.7);
-            }
-
-            // 4. Авто-мосты через канал + повозки и фонари вдоль улиц
-            roads.forEach(rPts => {
-                if (hasCanal) autoPlaceBridges(rPts, true);
-                for (let i = 8; i < rPts.length - 8; i += 14) {
-                    const pt = rPts[i];
-                    if (isWater(Math.floor(pt.x), Math.floor(pt.y)) || isWall(Math.floor(pt.x), Math.floor(pt.y))) continue;
-                    const lx = pt.x + pt.nx * 1.9, ly = pt.y + pt.ny * 1.9;
-                    if (canPlace(lx, ly, 1.0) && !isWater(Math.floor(lx), Math.floor(ly)) && !isWall(Math.floor(lx), Math.floor(ly))) {
-                        addObj(P.lamps, lx, ly, 0.85, 0, 0.8);
-                    }
-                }
-            });
-
-            // 5. Случайная площадь или городской сквер на пересечении улиц
-            const hub = roads[0][Math.floor(roads[0].length * MB_RAND_FLOAT(0.32, 0.68))];
-            if (!isWater(Math.floor(hub.x), Math.floor(hub.y)) && !isWall(Math.floor(hub.x), Math.floor(hub.y))) {
-                const isPark = Math.random() < 0.35;
-                const pRad = Math.min(4.8, Math.max(3.0, cols * 0.14));
-                paintBlob(hub.x, hub.y, pRad, pRad * 0.85, isPark ? T.grass : T.stone, 0.12, [T.cobble, T.flagstone]);
-                addObj(P.cityCenter, hub.x, hub.y, 1.25, 0, 2.0);
-                for (let a = 0; a < 4; a++) {
-                    const ang = a * 1.57 + 0.78;
-                    const sx = hub.x + Math.cos(ang) * (pRad * 0.68), sy = hub.y + Math.sin(ang) * (pRad * 0.62);
-                    if (!canPlace(sx, sy, 1.3) || isWater(Math.floor(sx), Math.floor(sy))) continue;
-                    if (isPark) {
-                        addObj(a % 2 === 0 ? P.trees : P.gardens, sx, sy, 0.95, MB_RAND_INT(0, 359), 1.2);
-                    } else {
-                        addObj(P.tables, sx, sy, 0.9, a % 2 === 0 ? 0 : 90, 1.2);
-                        addObj(P.market, sx + 0.5, sy + 0.5, 0.74, MB_RAND_INT(0, 359), 0);
-                    }
-                }
-            }
-
-            // 6. Плотная умная застройка всех свободных мощёных кварталов домами!
-            for (let y = 2.4; y <= rows - 2.4; y += 4.3) {
-                for (let x = 2.6; x <= cols - 2.6; x += 5.1) {
-                    const jx = x + MB_RAND_FLOAT(-0.5, 0.5), jy = y + MB_RAND_FLOAT(-0.4, 0.4);
-                    let ok = true;
-                    for (let dy = -1; dy <= 1 && ok; dy++) for (let dx = -2; dx <= 2 && ok; dx++) {
-                        if (getT(Math.floor(jx) + dx, Math.floor(jy) + dy) !== T.cobble) ok = false;
-                    }
-                    if (!ok || !canPlace(jx, jy, 3.0)) continue;
-
-                    if (Math.random() < 0.82) {
-                        const rot = Math.random() < 0.62 ? MB_PICK([0, 180]) : MB_PICK([90, 270]);
-                        const sc = MB_RAND_FLOAT(0.92, 1.15);
-                        addObj(Math.random() < useThatchMix ? P.roofThatch : P.roofTile, jx, jy, sc, rot, 2.75 * sc);
-                        if (Math.random() < 0.78) addObj('other_misc_chimney_1x1', jx + 0.65, jy - 0.35, 0.88, 0, 0);
-                        const px = jx + MB_PICK([-2.2, 2.2]), py = jy + MB_PICK([-1.7, 1.7]);
-                        if (getT(Math.floor(px), Math.floor(py)) === T.cobble && canPlace(px, py, 0.8)) {
-                            addObj(Math.random() < 0.6 ? P.market : P.gardens, px, py, 0.76, MB_RAND_INT(0, 359), 0.7);
+                    });
+                    for (let x = 3; x <= cols - 4; x += 8) {
+                        if (canPlace(x, canal.pos + canal.w / 2, 2.2) && isWater(Math.floor(x), canal.pos)) {
+                            addObj(P.boats, x, canal.pos + canal.w / 2, 0.98, MB_PICK([0, 180]), 1.4);
                         }
-                    } else {
-                        paintBlob(jx, jy, 1.8, 1.5, T.grass, 0.14, [T.cobble]);
-                        addObj(P.trees, jx - 0.4, jy, 1.0, MB_RAND_INT(0, 359), 1.3);
-                        addObj(P.gardens, jx + 0.9, jy + 0.4, 0.88, MB_RAND_INT(0, 359), 0.7);
+                    }
+                } else {
+                    hStreets.forEach(hs => {
+                        if (hs.x1 <= canal.pos && hs.x2 >= canal.pos + canal.w - 1) {
+                            placeCityBridge(canal.pos, hs.y + (hs.w - 1) / 2, canal.pos + canal.w - 1, hs.y + (hs.w - 1) / 2);
+                            addObj(P.lamps, canal.pos - 0.5, hs.y - 0.4, 0.84, 0, 0.7);
+                            addObj(P.lamps, canal.pos + canal.w + 0.5, hs.y + hs.w + 0.4, 0.84, 0, 0.7);
+                        }
+                    });
+                    for (let y = 3; y <= rows - 4; y += 7) {
+                        if (canPlace(canal.pos + canal.w / 2, y, 2.2) && isWater(canal.pos, Math.floor(y))) {
+                            addObj(P.boats, canal.pos + canal.w / 2, y, 0.98, MB_PICK([90, 270]), 1.4);
+                        }
                     }
                 }
             }
-            if (hasWallGate) scatterGroves([T.grass], P.trees, P.bushes, P.flowers, 0.95);
-            genTitle = hasCanal ? MB_PICK(['Речной квартал', 'Набережная каналов', 'Мосты Купцов'])
-                     : (hasWallGate ? MB_PICK(['Городские ворота', 'Застава Столицы', 'Въезд в Притишье'])
-                     : MB_PICK(['Торговый квартал', 'Улочки Старого города', 'Ярмарочная площадь', 'Ремесленная слобода']));
+
+            // Слой Д: Случайная площадь или городской парк на реальном перекрёстке улиц!
+            const intersections = [];
+            hStreets.forEach(hs => vStreets.forEach(vs => {
+                if (vs.x >= hs.x1 && vs.x <= hs.x2 && hs.y >= vs.y1 && hs.y <= vs.y2) {
+                    const ix = vs.x + Math.floor(vs.w / 2), iy = hs.y + Math.floor(hs.w / 2);
+                    if (getT(ix, iy) === T.flagstone && (!wall || Math.abs((wall.isVert ? ix : iy) - wall.cut) > 4)) {
+                        intersections.push({ x: ix, y: iy });
+                    }
+                }
+            }));
+            if (intersections.length && Math.random() < 0.82) {
+                const hub = MB_PICK(intersections);
+                const isPark = Math.random() < 0.30;
+                const pRx = Math.min(4, Math.max(2, Math.floor(cols * 0.13)));
+                const pRy = Math.min(3, Math.max(2, Math.floor(rows * 0.17)));
+                const px1 = Math.max(2, hub.x - pRx), px2 = Math.min(cols - 3, hub.x + pRx);
+                const py1 = Math.max(2, hub.y - pRy), py2 = Math.min(rows - 3, hub.y + pRy);
+                // Не залезаем площадью в воду или стену
+                let areaClear = true;
+                for (let r = py1; r <= py2 && areaClear; r++) for (let c = px1; c <= px2 && areaClear; c++) {
+                    if (isWater(c, r) || isWall(c, r) || getT(c, r) === T.grass) areaClear = false;
+                }
+                if (areaClear) {
+                    fillRect(px1, py1, px2, py2, isPark ? T.grass : T.stone);
+                    markOcc(px1, py1, px2, py2, 2);
+                    const pcx = (px1 + px2 + 1) / 2, pcy = (py1 + py2 + 1) / 2;
+                    addObj(P.cityCenter, pcx, pcy, 1.18, 0, 1.85);
+                    [[px1 + 0.7, py1 + 0.7], [px2 + 0.3, py1 + 0.7], [px1 + 0.7, py2 + 0.3], [px2 + 0.3, py2 + 0.3]].forEach(([lx, ly]) => {
+                        addObj(P.lamps, lx, ly, 0.84, 0, 0.7);
+                    });
+                    if (!isPark) {
+                        [[px1 + 1.4, py1 + 1.3], [px2 - 0.4, py1 + 1.3], [px1 + 1.4, py2 - 0.3], [px2 - 0.4, py2 - 0.3]].forEach(([sx, sy]) => {
+                            if (Math.hypot(sx - pcx, sy - pcy) > 2.2 && canPlace(sx, sy, 1.2)) {
+                                addObj(P.tables, sx, sy, 0.86, 0, 1.15);
+                                addObj(P.market, sx + (sx < pcx ? -0.45 : 0.45), sy + (sy < pcy ? 0.5 : -0.5), 0.72, MB_RAND_INT(0, 359), 0);
+                            }
+                        });
+                    } else {
+                        [[px1 + 1.3, py1 + 1.3], [px2 - 0.3, py2 - 0.3]].forEach(([tx, ty]) => {
+                            if (canPlace(tx, ty, 1.4)) addObj(P.trees, tx, ty, 0.92, MB_RAND_INT(0, 359), 1.3);
+                        });
+                        addObj(P.gardens, px2 - 0.6, py1 + 1.2, 0.85, 0, 0.7);
+                        addObj(P.gardens, px1 + 1.2, py2 - 0.6, 0.85, 90, 0.7);
+                    }
+                }
+            }
+
+            // Повозка на свободной улице, ориентированная строго вдоль движения
+            if (hStreets.length && !wall) {
+                const st = MB_PICK(hStreets);
+                for (let tries = 0; tries < 12; tries++) {
+                    const cx = MB_RAND_FLOAT(st.x1 + 2, st.x2 - 2), cy = st.y + st.w / 2;
+                    if (getT(Math.floor(cx), Math.floor(cy)) === T.flagstone && canPlace(cx, cy, 2.0)) {
+                        addObj(P.carts, cx, cy, 0.96, MB_PICK([0, 180]), 1.6);
+                        break;
+                    }
+                }
+            }
+
+            // Слой Е: Умный упаковщик домов по свободным кварталам (со случайным направлением обхода!)
+            const rectFree = (x1, y1, w, h) => {
+                if (x1 < 0 || y1 < 0 || x1 + w > cols || y1 + h > rows) return false;
+                for (let r = y1; r < y1 + h; r++) for (let c = x1; c < x1 + w; c++) {
+                    if (occ[r][c] !== 0 || getT(c, r) !== T.cobble) return false;
+                }
+                return true;
+            };
+            const trySizes = cols <= 18
+                ? [{ w: 4, h: 3, sc: 0.84, horiz: true }, { w: 3, h: 4, sc: 0.84, horiz: false }]
+                : [
+                    { w: 5, h: 3, sc: 0.98, horiz: true }, { w: 3, h: 5, sc: 0.98, horiz: false },
+                    { w: 4, h: 3, sc: 0.84, horiz: true }, { w: 3, h: 4, sc: 0.84, horiz: false }
+                ];
+
+            const revR = Math.random() < 0.5, revC = Math.random() < 0.5;
+            const rList = Array.from({ length: rows - 2 }, (_, i) => revR ? (rows - 3 - i) : i);
+            const cList = Array.from({ length: cols - 2 }, (_, i) => revC ? (cols - 3 - i) : i);
+
+            for (const r of rList) {
+                for (const c of cList) {
+                    if (occ[r][c] !== 0 || getT(c, r) !== T.cobble) continue;
+                    const nearV = getT(c - 1, r) === T.flagstone || getT(c + 3, r) === T.flagstone || getT(c + 4, r) === T.flagstone;
+                    const nearH = getT(c, r - 1) === T.flagstone || getT(c, r + 3) === T.flagstone;
+                    const preferVert = nearV && !nearH;
+                    const ordered = trySizes.slice().sort((a, b) => (a.horiz === !preferVert ? -1 : 1));
+
+                    for (const sz of ordered) {
+                        if (!rectFree(c, r, sz.w, sz.h)) continue;
+                        if (Math.random() < 0.14 && sz.w >= 4 && sz.h >= 3) {
+                            fillRect(c, r, c + sz.w - 1, r + sz.h - 1, T.grass);
+                            markOcc(c, r, c + sz.w - 1, r + sz.h - 1, 3);
+                            addObj(P.trees, c + sz.w / 2 - 0.5, r + sz.h / 2 - 0.1, 0.94, MB_RAND_INT(0, 359), 1.1);
+                            addObj(P.gardens, c + sz.w / 2 + 0.8, r + sz.h / 2 + 0.3, 0.82, MB_RAND_INT(0, 359), 0.6);
+                            break;
+                        }
+                        const cx = c + sz.w / 2, cy = r + sz.h / 2;
+                        const rot = sz.horiz ? MB_PICK([0, 180]) : MB_PICK([90, 270]);
+                        addObj(Math.random() < thatchProb ? P.roofThatch : P.roofTile, cx, cy, sz.sc, rot, 0);
+                        if (Math.random() < 0.78) addObj('other_misc_chimney_1x1', cx + (sz.horiz ? 0.8 : 0.2), cy - (sz.horiz ? 0.35 : 0.7), 0.82, 0, 0);
+                        markOcc(c, r, c + sz.w - 1, r + sz.h - 1, 1);
+                        markOcc(c + sz.w, r, c + sz.w, r + sz.h - 1, 4);
+                        markOcc(c, r + sz.h, c + sz.w - 1, r + sz.h, 4);
+                        const decX = sz.horiz ? (c + sz.w + 0.5) : (c + 0.5);
+                        const decY = sz.horiz ? (r + sz.h / 2) : (r + sz.h + 0.5);
+                        if (inB(Math.floor(decX), Math.floor(decY)) && getT(Math.floor(decX), Math.floor(decY)) === T.cobble && canPlace(decX, decY, 0.8)) {
+                            addObj(Math.random() < 0.55 ? P.market : P.gardens, decX, decY, 0.72, MB_RAND_INT(0, 359), 0.65);
+                        }
+                        if ((nearH || nearV) && Math.random() < 0.35) {
+                            const lx = c + (nearV ? -0.35 : 0.2), ly = r + (nearH ? -0.35 : 0.2);
+                            if (inB(Math.floor(lx), Math.floor(ly)) && getT(Math.floor(lx), Math.floor(ly)) === T.flagstone && canPlace(lx, ly, 3.2)) {
+                                addObj(P.lamps, lx, ly, 0.82, 0, 0.7);
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+
+            if (wall) {
+                for (let r = 1; r < rows - 1; r++) for (let c = 1; c < cols - 1; c++) {
+                    if (getT(c, r) !== T.grass) continue;
+                    if ([-2, -1, 0, 1, 2].some(d => isWall(c + d, r) || isWall(c, r + d))) continue;
+                    if (!canPlace(c + 0.5, r + 0.5, 1.7)) continue;
+                    const rnd = Math.random();
+                    if (rnd < 0.18) addObj(P.trees, c + 0.5, r + 0.5, MB_RAND_FLOAT(0.9, 1.25), MB_RAND_INT(0, 359), 1.65);
+                    else if (rnd < 0.28) addObj(P.bushes, c + 0.5, r + 0.5, 0.88, MB_RAND_INT(0, 359), 0.95);
+                    else if (rnd < 0.33) addObj(P.flowers, c + 0.5, r + 0.5, 0.8, MB_RAND_INT(0, 359), 0.7);
+                }
+            }
+
+            genTitle = (hasWall && hasCanal) ? 'Речные ворота Столицы'
+                     : (hasCanal ? MB_PICK(['Речной квартал', 'Набережная каналов', 'Мосты Купцов'])
+                     : (hasWall ? MB_PICK(['Городские ворота', 'Застава Столицы', 'Въезд в Притишье'])
+                     : MB_PICK(['Торговый квартал', 'Улочки Старого города', 'Ярмарочная площадь', 'Ремесленная слобода'])));
         }
 
         // ============================================================
-        // 2. ⚔️ ПОЛЕ БИТВЫ / ОСАДА (ПРОЦЕДУРНЫЙ ФРОНТ, БАРРИКАДЫ, ОСАДА)
+        // 2. ❄️ СНЕЖНЫЙ ПЕРЕВАЛ (СКАЛЫ + ЛЁД/РЕКИ + ГЛАДКИЕ ТРОПЫ + ЗИМНИЕ ТОЧКИ)
         // ============================================================
-        else if (picked === 'battlefield') {
-            const style = MB_PICK(['frontline', 'breach', 'ambush', 'encirclement']);
-            // Случайные грязевые пятна и воронки от снарядов
-            for (let i = 0; i < Math.floor((cols * rows) / 38); i++) {
-                paintBlob(MB_RAND_FLOAT(2, cols - 2), MB_RAND_FLOAT(2, rows - 2), MB_RAND_FLOAT(1.8, 3.6), MB_RAND_FLOAT(1.5, 3.0), T.dirt, 0.22);
+        else if (picked === 'snow') {
+            // 1) Независимый слой воды/льда: 0 = сухие горы, 1 = замёрзшая река, 2 = ледяное озеро с полыньёй
+            const hydro = MB_PICK([0, 1, 2]);
+            if (hydro === 1) {
+                const [r0, r1] = randomEdgePair(true);
+                const bend = MB_RAND_FLOAT(-0.24, 0.24);
+                carveSpline(r0, r1, cols >= 26 ? 2.5 : 2.0, T.ice, { bend });
+                carveSpline(r0, r1, cols >= 26 ? 1.25 : 1.0, T.water, { bend });
+            } else if (hydro === 2) {
+                const lx = cols * MB_RAND_FLOAT(0.28, 0.72), ly = rows * MB_RAND_FLOAT(0.28, 0.72);
+                const rx = MB_RAND_FLOAT(3.4, Math.min(7.2, cols * 0.26)), ry = MB_RAND_FLOAT(2.6, Math.min(5.2, rows * 0.30));
+                paintBlob(lx, ly, rx, ry, T.ice, 0.18);
+                paintBlob(lx + MB_RAND_FLOAT(-1.0, 1.0), ly + MB_RAND_FLOAT(-0.8, 0.8), rx * 0.45, ry * 0.45, T.water, 0.16, [T.ice]);
             }
 
-            if (style === 'ambush') {
+            // 2) Независимый слой дорог: 1 или 2 плавные грунтовые тропы (без ступенчатого камня!) + авто-мосты
+            let mainRoad = null;
+            if (Math.random() < 0.82 || hydro === 0) {
+                const [t0, t1] = randomEdgePair(true);
+                mainRoad = carveSpline(t0, t1, 1.15, T.dirt, { keepWater: true, bend: MB_RAND_FLOAT(-0.22, 0.22) });
+                autoPlaceBridges(mainRoad, Math.random() < 0.4);
+                if (cols >= 26 && Math.random() < 0.38) {
+                    const anc = mainRoad[Math.floor(mainRoad.length * MB_RAND_FLOAT(0.3, 0.7))];
+                    const br = carveSpline(anc, randomEdgePoint(MB_PICK(['N', 'S', 'E', 'W'])), 1.0, T.dirt, { keepWater: true });
+                    autoPlaceBridges(br, false);
+                }
+            }
+
+            // 3) Независимый слой скальных гряд (из реальных скал, никогда из кирпичных стен!)
+            const hasPassRidges = (hydro === 0) || (Math.random() < 0.45);
+            if (hasPassRidges && mainRoad) {
+                const ridgeDist = Math.max(3.6, Math.min(cols, rows) * MB_RAND_FLOAT(0.30, 0.38));
+                for (let i = 2; i < mainRoad.length - 2; i += 4) {
+                    const pt = mainRoad[i];
+                    for (const side of [-1, 1]) {
+                        const rx = pt.x + pt.nx * side * (ridgeDist + MB_RAND_FLOAT(-0.5, 1.3));
+                        const ry = pt.y + pt.ny * side * (ridgeDist + MB_RAND_FLOAT(-0.5, 1.3));
+                        if (getT(Math.floor(rx), Math.floor(ry)) === T.snow && canPlace(rx, ry, 1.65)) {
+                            addObj(P.cliffs, rx, ry, MB_RAND_FLOAT(1.0, 1.42), MB_RAND_INT(0, 359), 1.75);
+                        }
+                    }
+                }
+            } else if (Math.random() < 0.65) {
+                // Случайные скальные массивы по краям/углам карты
+                const nOutcrops = MB_RAND_INT(2, 4);
+                for (let i = 0; i < nOutcrops; i++) {
+                    const ox = MB_RAND_FLOAT(1.5, cols - 1.5), oy = MB_RAND_FLOAT(1.5, rows - 1.5);
+                    if (getT(Math.floor(ox), Math.floor(oy)) !== T.snow) continue;
+                    for (let k = 0; k < MB_RAND_INT(2, 4); k++) {
+                        const cx = ox + MB_RAND_FLOAT(-2.0, 2.0), cy = oy + MB_RAND_FLOAT(-1.8, 1.8);
+                        if (getT(Math.floor(cx), Math.floor(cy)) === T.snow && canPlace(cx, cy, 1.65)) {
+                            addObj(P.cliffs, cx, cy, MB_RAND_FLOAT(0.95, 1.35), MB_RAND_INT(0, 359), 1.65);
+                        }
+                    }
+                }
+            }
+
+            // 4) 1–2 случайные точки интереса: лагерь экспедиции, застава на тракте, заснеженные руины
+            const poiDeck = ['camp', 'outpost', 'ruins'].sort(() => Math.random() - 0.5);
+            const poiCount = cols >= 26 ? 2 : 1;
+            let poiTitle = '';
+            for (let p = 0; p < poiCount; p++) {
+                const kind = poiDeck[p];
+                if (kind === 'outpost' && mainRoad) {
+                    const mid = mainRoad[Math.floor(mainRoad.length * MB_RAND_FLOAT(0.35, 0.65))];
+                    if (mid && !isWater(Math.floor(mid.x), Math.floor(mid.y)) && canPlace(mid.x, mid.y, 2.2)) {
+                        const rDeg = Math.atan2(mid.uy, mid.ux) * 180 / Math.PI;
+                        addObj(P.watchpost, mid.x + mid.nx * 2.4, mid.y + mid.ny * 2.4, 1.06, 0, 1.75);
+                        addObj(P.flags, mid.x + mid.nx * 1.4, mid.y + mid.ny * 1.4, 0.98, 0, 0.7);
+                        addObj(P.barricades, mid.x + mid.ux * 2.1 - mid.nx * 0.9, mid.y + mid.uy * 2.1 - mid.ny * 0.9, 1.05, rDeg + 90, 1.1);
+                        addObj(P.barricades, mid.x + mid.ux * 2.1 + mid.nx * 1.3, mid.y + mid.uy * 2.1 + mid.ny * 1.3, 1.05, rDeg + 90, 1.1);
+                        addObj(P.braziers, mid.x + mid.ux * 1.0 + mid.nx * 1.5, mid.y + mid.uy * 1.0 + mid.ny * 1.5, 0.84, 0, 0.7);
+                        addObj(P.braziers, mid.x + mid.ux * 1.0 - mid.nx * 1.5, mid.y + mid.uy * 1.0 - mid.ny * 1.5, 0.84, 0, 0.7);
+                        poiTitle = 'Северная застава';
+                        continue;
+                    }
+                }
+                const spot = findDrySpot([T.snow], 3.5, 4.0);
+                if (!spot) continue;
+                if (kind === 'ruins') {
+                    placeRuinsCluster(spot.x, spot.y, T.flagstone, P.iceCrystals);
+                    addObj(P.braziers, spot.x - 1.5, spot.y + 1.2, 0.84, 0, 0.7);
+                    poiTitle = poiTitle || 'Заснеженные руины';
+                } else {
+                    placeCampCluster(spot.x, spot.y, {
+                        groundTile: T.dirt, onlyGround: [T.snow], radius: 2.8,
+                        tents: MB_RAND_INT(2, 3), bigTentPool: cols >= 24 && Math.random() < 0.5 ? P.campBigTents : null,
+                        propPool: P.snowPelts, props: 3
+                    });
+                    poiTitle = poiTitle || 'Привал на перевале';
+                }
+            }
+
+            if (mainRoad && Math.random() < 0.45) {
+                const cp = mainRoad[Math.floor(mainRoad.length * MB_PICK([0.18, 0.82]))];
+                if (cp && !isWater(Math.floor(cp.x), Math.floor(cp.y)) && canPlace(cp.x, cp.y, 1.6)) {
+                    addObj(P.carts, cp.x, cp.y, 0.94, Math.atan2(cp.uy, cp.ux) * 180 / Math.PI, 1.55);
+                }
+            }
+
+            scatterWaterDetails(P.waterRocks, 0.12);
+            scatterGroves([T.snow], P.trees, P.snowRocks, P.deadwood, 0.88);
+            genTitle = poiTitle || (hydro === 1 ? 'Ледяная переправа' : (hydro === 2 ? 'Замёрзшее озеро' : 'Снежный перевал'));
+        }
+
+        // ============================================================
+        // 3. ⚔️ ПОЛЕ БИТВЫ / ОСАДА (ПРОЦЕДУРНЫЙ ФРОНТ / РЕДУТ / ЗАСАДА)
+        // ============================================================
+        else if (picked === 'battlefield') {
+            for (let i = 0; i < Math.floor((cols * rows) / 36); i++) {
+                paintBlob(MB_RAND_FLOAT(2, cols - 2), MB_RAND_FLOAT(2, rows - 2), MB_RAND_FLOAT(1.8, 3.5), MB_RAND_FLOAT(1.4, 2.9), T.dirt, 0.22);
+            }
+
+            const mode = MB_PICK(['frontline', 'breach', 'ambush', 'redoubt']);
+            if (mode === 'ambush') {
                 const [p0, p1] = randomEdgePair(true);
-                const roadPts = carveSpline(p0, p1, 1.45, T.dirt, { bend: MB_RAND_FLOAT(-0.28, 0.28) });
+                const roadPts = carveSpline(p0, p1, 1.4, T.dirt, { bend: MB_RAND_FLOAT(-0.28, 0.28) });
                 const nWagons = Math.min(4, Math.max(2, Math.floor(cols / 9)));
                 for (let w = 0; w < nWagons; w++) {
-                    const pt = roadPts[Math.floor(roadPts.length * (0.24 + (w / Math.max(1, nWagons - 1)) * 0.52))];
+                    const pt = roadPts[Math.floor(roadPts.length * (0.22 + (w / Math.max(1, nWagons - 1)) * 0.54))];
                     const deg = Math.atan2(pt.uy, pt.ux) * 180 / Math.PI + MB_RAND_INT(-24, 24);
-                    addObj(P.carts, pt.x, pt.y, 1.12, deg, 1.85);
-                    if (w === 1) addObj(P.battleFire, pt.x + pt.nx * 1.4, pt.y + pt.ny * 1.4, 0.92, 0, 1.1);
-                    addObj(w % 2 === 0 ? P.crates : P.barrels, pt.x - pt.nx * 1.6, pt.y - pt.ny * 1.6, 0.88, MB_RAND_INT(0, 359), 0.8);
+                    addObj(P.carts, pt.x, pt.y, 1.1, deg, 1.8);
+                    if (w === 1) addObj(P.battleFire, pt.x + pt.nx * 1.3, pt.y + pt.ny * 1.3, 0.9, 0, 1.05);
+                    addObj(w % 2 === 0 ? P.crates : P.barrels, pt.x - pt.nx * 1.5, pt.y - pt.ny * 1.5, 0.86, MB_RAND_INT(0, 359), 0.78);
                 }
-                const blockPt = roadPts[Math.floor(roadPts.length * 0.82)];
-                addObj(P.logs, blockPt.x, blockPt.y, 1.35, Math.atan2(blockPt.uy, blockPt.ux) * 180 / Math.PI + 90, 1.6);
+                const blockPt = roadPts[Math.floor(roadPts.length * 0.83)];
+                addObj(P.logs, blockPt.x, blockPt.y, 1.32, Math.atan2(blockPt.uy, blockPt.ux) * 180 / Math.PI + 90, 1.55);
                 scatterGroves([T.grass], P.trees, P.bushes, P.rocks, 1.15);
                 genTitle = MB_PICK(['Засада на обоз', 'Разгромленный караван', 'Бой на лесном тракте']);
             }
-            else if (style === 'encirclement') {
-                const hx = MB_RAND_FLOAT(cols * 0.34, cols * 0.66), hy = MB_RAND_FLOAT(rows * 0.34, rows * 0.66);
-                const rx = Math.min(8.5, cols * 0.26), ry = Math.min(6.0, rows * 0.29);
-                paintBlob(hx, hy, rx + 2.0, ry + 2.0, T.dirt, 0.16);
+            else if (mode === 'redoubt') {
+                const hx = cols * MB_RAND_FLOAT(0.32, 0.68), hy = rows * MB_RAND_FLOAT(0.32, 0.68);
+                const rx = Math.min(8.2, cols * MB_RAND_FLOAT(0.22, 0.28)), ry = Math.min(5.8, rows * MB_RAND_FLOAT(0.26, 0.32));
+                paintBlob(hx, hy, rx + 2.0, ry + 1.8, T.dirt, 0.16);
                 paintBlob(hx, hy, rx - 1.2, ry - 1.2, T.stone, 0.12);
                 const ringN = Math.max(10, Math.floor((rx + ry) * 1.3));
                 const gapA = MB_RAND_INT(0, ringN - 1), gapB = (gapA + Math.floor(ringN / 2)) % ringN;
@@ -478,88 +785,85 @@
                     if (i === gapA || i === gapB) continue;
                     const ang = (i / ringN) * 6.28;
                     const bx = hx + Math.cos(ang) * rx, by = hy + Math.sin(ang) * ry;
-                    if (inB(Math.floor(bx), Math.floor(by))) addObj(P.barricades, bx, by, 1.08, ang * 180 / Math.PI + 90, 1.1);
+                    if (inB(Math.floor(bx), Math.floor(by))) addObj(P.barricades, bx, by, 1.06, ang * 180 / Math.PI + 90, 1.1);
                 }
-                placeCampCluster(hx, hy, { radius: rx * 0.48, tents: 2, bigTentPool: P.campBigTents, props: 2 });
-                addObj(P.flags, hx + 1.8, hy - 1.6, 1.12, 0, 0.8);
-                // Штурмовые орудия снаружи, направленные точно на центр редута!
+                placeCampCluster(hx, hy, { radius: rx * 0.46, tents: 2, bigTentPool: P.campBigTents, props: 2 });
+                addObj(P.flags, hx + 1.6, hy - 1.4, 1.1, 0, 0.8);
                 for (let s = 0; s < 3; s++) {
-                    const ang = (s / 3) * 6.28 + MB_RAND_FLOAT(-0.3, 0.3);
-                    const sx = hx + Math.cos(ang) * (rx + 4.2), sy = hy + Math.sin(ang) * (ry + 3.4);
+                    const ang = (s / 3) * 6.28 + MB_RAND_FLOAT(-0.35, 0.35);
+                    const sx = hx + Math.cos(ang) * (rx + 4.0), sy = hy + Math.sin(ang) * (ry + 3.2);
                     if (inB(Math.floor(sx), Math.floor(sy)) && canPlace(sx, sy, 2.0)) {
-                        const aimDeg = Math.atan2(hy - sy, hx - sx) * 180 / Math.PI;
-                        addObj(P.siege, sx, sy, 1.2, aimDeg, 1.9);
-                        addObj(P.siegeAmmo, sx - Math.cos(ang) * 1.4, sy - Math.sin(ang) * 1.4, 0.9, 0, 0.8);
+                        addObj(P.siege, sx, sy, 1.18, Math.atan2(hy - sy, hx - sx) * 180 / Math.PI, 1.85);
+                        addObj(P.siegeAmmo, sx - Math.cos(ang) * 1.3, sy - Math.sin(ang) * 1.3, 0.88, 0, 0.78);
                     }
                 }
-                scatterGroves([T.grass], P.trees, P.bushes, P.rocks, 0.7);
+                scatterGroves([T.grass], P.trees, P.bushes, P.rocks, 0.72);
                 genTitle = MB_PICK(['Оборона высоты', 'Укреплённый редут', 'Последний рубеж']);
             }
             else {
-                // Линия фронта (река ИЛИ крепостная стена с проломом) под случайным направлением!
-                const isBreach = (style === 'breach');
+                const isBreach = (mode === 'breach');
                 const [f0, f1] = randomEdgePair(false);
-                const linePts = carveSpline(f0, f1, isBreach ? 1.05 : 1.55, isBreach ? T.wall : T.water, {
-                    bend: MB_RAND_FLOAT(-0.2, 0.2),
-                    skipRange: isBreach ? [0.40, 0.58] : null
-                });
-                const midPt = linePts[Math.floor(linePts.length * 0.49)];
+                const skipRanges = isBreach
+                    ? (Math.random() < 0.45 && cols >= 28 ? [[0.24, 0.36], [0.64, 0.76]] : [[0.41, 0.59]])
+                    : null;
+                const linePts = carveSpline(f0, f1, isBreach ? 1.05 : 1.5, isBreach ? T.wall : T.water, { bend: MB_RAND_FLOAT(-0.2, 0.2), skipRanges });
+                const midPt = linePts[Math.floor(linePts.length * 0.5)];
                 const normalDeg = Math.atan2(midPt.ny, midPt.nx) * 180 / Math.PI;
 
                 if (isBreach) {
-                    const bA = linePts[Math.floor(linePts.length * 0.39)], bB = linePts[Math.floor(linePts.length * 0.59)];
-                    addObj(P.collapsed, bA.x, bA.y, 1.15, normalDeg, 1.4);
-                    addObj(P.collapsed, bB.x, bB.y, 1.15, normalDeg + 180, 1.4);
-                    addObj(P.battleFire, midPt.x, midPt.y, 1.0, 0, 1.2);
-                    addObj('camp_batteringrambroken', midPt.x - midPt.nx * 3.4, midPt.y - midPt.ny * 3.4, 1.2, normalDeg, 1.8);
+                    skipRanges.forEach(([a, b]) => {
+                        const pA = linePts[Math.floor(linePts.length * a)], pB = linePts[Math.floor(linePts.length * b)];
+                        const pM = linePts[Math.floor(linePts.length * ((a + b) / 2))];
+                        addObj(P.collapsed, pA.x, pA.y, 1.12, normalDeg, 1.35);
+                        addObj(P.collapsed, pB.x, pB.y, 1.12, normalDeg + 180, 1.35);
+                        addObj(P.battleFire, pM.x, pM.y, 0.95, 0, 1.1);
+                    });
+                    addObj('camp_batteringrambroken', midPt.x - midPt.nx * 3.3, midPt.y - midPt.ny * 3.3, 1.18, normalDeg, 1.75);
                 } else {
-                    const rA = { x: midPt.x - midPt.nx * 10, y: midPt.y - midPt.ny * 10 };
-                    const rB = { x: midPt.x + midPt.nx * 10, y: midPt.y + midPt.ny * 10 };
-                    const crossPts = carveSpline(rA, rB, 1.3, T.dirt, { keepWater: true, bend: 0 });
-                    autoPlaceBridges(crossPts, Math.random() < 0.5);
+                    const nCross = (cols >= 28 && Math.random() < 0.55) ? [0.30, 0.70] : [0.50];
+                    nCross.forEach(frac => {
+                        const mp = linePts[Math.floor(linePts.length * frac)];
+                        const crossPts = carveSpline({ x: mp.x - mp.nx * 9, y: mp.y - mp.ny * 9 }, { x: mp.x + mp.nx * 9, y: mp.y + mp.ny * 9 }, 1.25, T.dirt, { keepWater: true, bend: 0 });
+                        autoPlaceBridges(crossPts, Math.random() < 0.5);
+                    });
                 }
 
-                // Плотные баррикады защитников вдоль линии фронта
                 for (let i = 6; i < linePts.length - 6; i += 7) {
                     const pt = linePts[i];
                     const bx = pt.x + pt.nx * 2.8, by = pt.y + pt.ny * 2.8;
                     if (canPlace(bx, by, 1.3) && !isWater(Math.floor(bx), Math.floor(by)) && !isWall(Math.floor(bx), Math.floor(by))) {
-                        addObj(P.barricades, bx, by, 1.08, Math.atan2(pt.ny, pt.nx) * 180 / Math.PI + 180, 1.15);
+                        addObj(P.barricades, bx, by, 1.06, Math.atan2(pt.ny, pt.nx) * 180 / Math.PI + 180, 1.15);
                     }
                 }
-                // Осадные орудия и лагеря по обе стороны фронта
                 for (const side of [-1, 1]) {
                     for (const frac of [0.28, 0.72]) {
                         const pt = linePts[Math.floor(linePts.length * frac)];
-                        const sx = pt.x + pt.nx * side * 6.2, sy = pt.y + pt.ny * side * 6.2;
+                        const sx = pt.x + pt.nx * side * 6.0, sy = pt.y + pt.ny * side * 6.0;
                         if (canPlace(sx, sy, 2.0) && !isWater(Math.floor(sx), Math.floor(sy)) && !isWall(Math.floor(sx), Math.floor(sy))) {
-                            const aim = Math.atan2(-pt.ny * side, -pt.nx * side) * 180 / Math.PI;
-                            addObj(P.siege, sx, sy, 1.2, aim, 1.9);
-                            addObj(P.siegeAmmo, sx + pt.nx * side * 1.4, sy + pt.ny * side * 1.4, 0.9, 0, 0.8);
+                            addObj(P.siege, sx, sy, 1.18, Math.atan2(-pt.ny * side, -pt.nx * side) * 180 / Math.PI, 1.85);
+                            addObj(P.siegeAmmo, sx + pt.nx * side * 1.4, sy + pt.ny * side * 1.4, 0.88, 0, 0.78);
                         }
                     }
-                    const cx = midPt.x + midPt.nx * side * 8.5, cy = midPt.y + midPt.ny * side * 8.5;
-                    if (inB(Math.floor(cx), Math.floor(cy))) {
-                        addObj(P.campTents, cx, cy, 1.1, normalDeg + (side > 0 ? 180 : 0), 2.0);
-                        addObj(P.flags, cx - midPt.nx * side * 1.8, cy - midPt.ny * side * 1.8, 1.1, 0, 0.8);
+                    const cx = midPt.x + midPt.nx * side * 8.2, cy = midPt.y + midPt.ny * side * 8.2;
+                    if (inB(Math.floor(cx), Math.floor(cy)) && canPlace(cx, cy, 2.0)) {
+                        addObj(P.campTents, cx, cy, 1.08, normalDeg + (side > 0 ? 180 : 0), 1.95);
+                        addObj(P.flags, cx - midPt.nx * side * 1.8, cy - midPt.ny * side * 1.8, 1.08, 0, 0.8);
                     }
                 }
-                addObj(P.battleFire, midPt.x - midPt.nx * 2.5 + midPt.ux * 3.0, midPt.y - midPt.ny * 2.5 + midPt.uy * 3.0, 0.92, 0, 1.1);
                 genTitle = isBreach ? MB_PICK(['Пролом в стене', 'Осада цитадели', 'Штурм бастиона'])
                                     : MB_PICK(['Штурм переправы', 'Битва у реки', 'Кровавый брод']);
             }
 
-            // Боевые следы (мечи, щиты, обломки) по всей карте
             for (let i = 0; i < Math.floor((cols * rows) / 28); i++) {
                 const fx = MB_RAND_FLOAT(2, cols - 2), fy = MB_RAND_FLOAT(2, rows - 2);
-                if (!isWater(Math.floor(fx), Math.floor(fy)) && !isWall(Math.floor(fx), Math.floor(fy)) && canPlace(fx, fy, 1.3)) {
-                    addObj(Math.random() < 0.62 ? P.battleLoot : P.rubble, fx, fy, 0.88, MB_RAND_INT(0, 359), 0.9);
+                if (!isWater(Math.floor(fx), Math.floor(fy)) && !isWall(Math.floor(fx), Math.floor(fy)) && canPlace(fx, fy, 1.25)) {
+                    addObj(Math.random() < 0.62 ? P.battleLoot : P.rubble, fx, fy, 0.86, MB_RAND_INT(0, 359), 0.88);
                 }
             }
         }
 
         // ============================================================
-        // 3. 🌲 ДИКИЙ ЛЕС (СЛУЧАЙНЫЕ РЕКИ, ТРОПЫ, РУИНЫ, ЛАГЕРЯ И РОЩИ)
+        // 4. 🌲 ДИКИЙ ЛЕС (СЕЗОНЫ + ВОДА + ВЕТВЯЩИЕСЯ ТРОПЫ + ПОЛЯНЫ)
         // ============================================================
         else if (picked === 'forest') {
             const isAutumn = Math.random() < 0.30;
@@ -567,217 +871,226 @@
             if (isAutumn) { window._mbLighting = 'sunset'; data.lighting = 'sunset'; }
 
             for (let i = 0; i < Math.floor((cols * rows) / 36); i++) {
-                paintBlob(MB_RAND_FLOAT(2, cols - 2), MB_RAND_FLOAT(2, rows - 2), MB_RAND_FLOAT(1.8, 3.6), MB_RAND_FLOAT(1.5, 3.0), leafT, 0.22);
+                paintBlob(MB_RAND_FLOAT(2, cols - 2), MB_RAND_FLOAT(2, rows - 2), MB_RAND_FLOAT(1.8, 3.6), MB_RAND_FLOAT(1.4, 2.9), leafT, 0.22);
             }
 
-            // 65% шанс на воду: либо извилистая река, либо лесное озеро (иногда с островком)
-            const waterRoll = Math.random();
-            if (waterRoll < 0.42) {
+            const hydro = MB_PICK([0, 1, 1, 2]);
+            if (hydro === 1) {
                 const [w0, w1] = randomEdgePair(true);
-                carveSpline(w0, w1, cols >= 26 ? 1.85 : 1.45, T.water, { bend: MB_RAND_FLOAT(-0.3, 0.3) });
-            } else if (waterRoll < 0.68) {
-                const lx = MB_RAND_FLOAT(cols * 0.28, cols * 0.72), ly = MB_RAND_FLOAT(rows * 0.28, rows * 0.72);
-                const rx = MB_RAND_FLOAT(3.5, Math.min(7.5, cols * 0.28)), ry = MB_RAND_FLOAT(2.8, Math.min(5.5, rows * 0.32));
+                carveSpline(w0, w1, cols >= 26 ? 1.8 : 1.4, T.water, { bend: MB_RAND_FLOAT(-0.3, 0.3) });
+            } else if (hydro === 2) {
+                const lx = cols * MB_RAND_FLOAT(0.28, 0.72), ly = rows * MB_RAND_FLOAT(0.28, 0.72);
+                const rx = MB_RAND_FLOAT(3.4, Math.min(7.2, cols * 0.28)), ry = MB_RAND_FLOAT(2.6, Math.min(5.2, rows * 0.32));
                 paintBlob(lx, ly, rx, ry, T.water, 0.18);
-                if (rx >= 4.8 && Math.random() < 0.5) paintBlob(lx, ly, rx * 0.42, ry * 0.42, T.grass, 0.15);
+                if (rx >= 4.6 && Math.random() < 0.52) paintBlob(lx, ly, rx * 0.42, ry * 0.42, T.grass, 0.14);
             }
 
-            // 1 или 2 извилистые лесные тропы + автоматические мосты через любую воду!
-            const trails = Math.random() < 0.45 ? 2 : 1;
-            const mainPair = randomEdgePair(true);
-            const mainTrail = carveSpline(mainPair[0], mainPair[1], 1.15, T.dirt, { keepWater: true, bend: MB_RAND_FLOAT(-0.25, 0.25) });
+            const [t0, t1] = randomEdgePair(true);
+            const mainTrail = carveSpline(t0, t1, 1.15, T.dirt, { keepWater: true, bend: MB_RAND_FLOAT(-0.25, 0.25) });
             autoPlaceBridges(mainTrail, Math.random() < 0.35);
-            if (trails === 2) {
-                const branchStart = mainTrail[Math.floor(mainTrail.length * MB_RAND_FLOAT(0.3, 0.7))];
-                const branchTrail = carveSpline(branchStart, randomEdgePoint(MB_PICK(['N', 'S', 'E', 'W'])), 1.0, T.dirt, { keepWater: true });
-                autoPlaceBridges(branchTrail, false);
+            if (Math.random() < 0.48) {
+                const anc = mainTrail[Math.floor(mainTrail.length * MB_RAND_FLOAT(0.28, 0.72))];
+                const br = carveSpline(anc, randomEdgePoint(MB_PICK(['N', 'S', 'E', 'W'])), 1.0, T.dirt, { keepWater: true });
+                autoPlaceBridges(br, false);
             }
 
-            // 1–2 случайные точки интереса на сухой поляне (лагерь путников или древние руины)
             const poiCount = cols >= 28 ? 2 : 1;
-            const poiTypes = ['camp', 'ruins'];
+            const poiTypes = ['camp', 'ruins', 'woodsman'].sort(() => Math.random() - 0.5);
             for (let p = 0; p < poiCount; p++) {
-                for (let tries = 0; tries < 25; tries++) {
-                    const px = MB_RAND_FLOAT(4, cols - 4), py = MB_RAND_FLOAT(4, rows - 4);
-                    if (isWater(Math.floor(px), Math.floor(py)) || !canPlace(px, py, 4.5)) continue;
-                    const dry = [-2, 0, 2].every(dy => [-2, 0, 2].every(dx => !isWater(Math.floor(px) + dx, Math.floor(py) + dy)));
-                    if (!dry) continue;
-                    const pType = poiTypes[p % poiTypes.length];
-                    if (pType === 'camp') placeCampCluster(px, py, { groundTile: T.dirt, radius: 2.8, tents: MB_RAND_INT(1, 3) });
-                    else placeRuinsCluster(px, py, T.stone);
-                    break;
+                const spot = findDrySpot([T.grass, leafT], 3.8, 4.4);
+                if (!spot) continue;
+                const kind = poiTypes[p];
+                if (kind === 'camp') placeCampCluster(spot.x, spot.y, { groundTile: T.dirt, radius: 2.8, tents: MB_RAND_INT(1, 3) });
+                else if (kind === 'ruins') placeRuinsCluster(spot.x, spot.y, T.stone);
+                else {
+                    paintBlob(spot.x, spot.y, 2.6, 2.2, T.dirt, 0.16);
+                    addObj(P.carts, spot.x - 1.0, spot.y, 0.96, MB_RAND_INT(0, 359), 1.6);
+                    addObj('other_firewood_pile', spot.x + 1.3, spot.y - 0.7, 0.95, 20, 1.0);
+                    addObj('nature_stump_axe_chopping', spot.x + 1.1, spot.y + 1.0, 0.92, 0, 0.9);
+                    addObj(P.campfires, spot.x - 0.3, spot.y + 1.4, 1.0, 0, 1.3);
                 }
             }
 
-            scatterWaterDetails(0.15);
-            scatterGroves([T.grass, leafT], P.trees, isAutumn ? P.autumnBushes : P.bushes, Math.random() < 0.5 ? P.flowers : P.rocks, 1.18);
-            scatterGroves([T.grass, leafT], P.logs, P.fungi, P.rocks, 0.32);
+            scatterWaterDetails(P.waterDec, 0.15);
+            scatterGroves([T.grass, leafT], P.trees, isAutumn ? P.autumnBushes : P.bushes, Math.random() < 0.5 ? P.flowers : P.rocks, 1.15);
+            scatterGroves([T.grass, leafT], P.logs, P.fungi, P.rocks, 0.30);
             genTitle = isAutumn ? MB_PICK(['Осенний тракт', 'Золотая чаща', 'Осенняя переправа'])
                                 : MB_PICK(['Дикая чаща', 'Лесная переправа', 'Тропа через руины', 'Поляна путников']);
         }
 
         // ============================================================
-        // 4. 🏴‍☠️ ПИРАТСКАЯ БУХТА (СЛУЧАЙНЫЙ БЕРЕГ, ОСТРОВА, ПИРС И КЛАД)
+        // 5. 🏴‍☠️ ПИРАТСКАЯ БУХТА (АРХИПЕЛАГ ИЛИ БЕРЕГ С ЛЮБОЙ СТОРОНЫ + ПИРС)
         // ============================================================
         else if (picked === 'pirate') {
-            const isIsland = Math.random() < 0.45;
-            if (isIsland) {
-                for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) setT(c, r, T.water);
-                const mainX = MB_RAND_FLOAT(cols * 0.40, cols * 0.60), mainY = MB_RAND_FLOAT(rows * 0.40, rows * 0.60);
-                paintBlob(mainX, mainY, cols * 0.34, rows * 0.36, T.sand, 0.2);
-                paintBlob(mainX, mainY, cols * 0.19, rows * 0.21, T.grass, 0.18);
-                // Опциональный второй маленький островок с сундуком
-                if (cols >= 26 && Math.random() < 0.55) {
-                    const sx = mainX > cols / 2 ? 4.5 : cols - 4.5, sy = mainY > rows / 2 ? 4.0 : rows - 4.0;
-                    paintBlob(sx, sy, 3.2, 2.8, T.sand, 0.18);
-                    addObj(P.pirateLoot, sx, sy, 1.05, 25, 1.1);
+            const isArchipelago = Math.random() < 0.45;
+            if (isArchipelago) {
+                fillRect(0, 0, cols - 1, rows - 1, T.water);
+                const mx = cols * MB_RAND_FLOAT(0.36, 0.64), my = rows * MB_RAND_FLOAT(0.36, 0.64);
+                paintBlob(mx, my, cols * MB_RAND_FLOAT(0.30, 0.36), rows * MB_RAND_FLOAT(0.32, 0.38), T.sand, 0.2);
+                paintBlob(mx, my, cols * 0.18, rows * 0.20, T.grass, 0.18);
+
+                // 0–2 дополнительных островка / отмели с кладом
+                const extraIsles = cols >= 26 ? MB_RAND_INT(1, 2) : (Math.random() < 0.5 ? 1 : 0);
+                for (let k = 0; k < extraIsles; k++) {
+                    const ix = (mx > cols / 2 ? MB_RAND_FLOAT(3.2, cols * 0.24) : MB_RAND_FLOAT(cols * 0.76, cols - 3.2));
+                    const iy = k === 0 ? MB_RAND_FLOAT(3.0, rows * 0.36) : MB_RAND_FLOAT(rows * 0.64, rows - 3.0);
+                    paintBlob(ix, iy, MB_RAND_FLOAT(2.4, 3.5), MB_RAND_FLOAT(2.0, 3.0), T.sand, 0.18);
+                    addObj(P.pirateLoot, ix, iy, 1.05, MB_RAND_INT(0, 359), 1.1);
                 }
-                placeCampCluster(mainX, mainY, { radius: 2.8, tents: 2, propPool: P.pirateLoot, props: 3 });
-                addObj('camp_pirateflag', mainX + 1.8, mainY - 1.6, 1.12, 0, 0.8);
-                genTitle = MB_PICK(['Остров Сокровищ', 'Атолл Корсаров', 'Лагуна Черепа']);
+
+                placeCampCluster(mx, my, { radius: 2.7, tents: 2, propPool: P.pirateLoot, props: 3 });
+                addObj('camp_pirateflag', mx + 1.6, my - 1.5, 1.1, 0, 0.8);
+                for (let tries = 0; tries < 28; tries++) {
+                    const bx = MB_RAND_INT(2, cols - 3), by = MB_RAND_INT(2, rows - 3);
+                    if (isWater(bx, by) && [-2, 0, 2].some(d => getT(bx + d, by) === T.sand || getT(bx, by + d) === T.sand) && canPlace(bx, by, 2.2)) {
+                        addObj(P.boats, bx + 0.5, by + 0.5, 1.12, MB_RAND_INT(0, 359), 1.6);
+                        break;
+                    }
+                }
+                genTitle = MB_PICK(['Остров Сокровищ', 'Атолл Корсаров', 'Архипелаг Черепа']);
             } else {
-                // Случайный берег с любой из 4 сторон карты!
                 const seaSide = MB_PICK(['W', 'E', 'N', 'S']);
-                const curveFreq = MB_RAND_FLOAT(0.14, 0.26);
+                const freq = MB_RAND_FLOAT(0.14, 0.26), seaFrac = MB_RAND_FLOAT(0.32, 0.44);
                 for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
-                    const depth = (seaSide === 'W') ? (c - cols * 0.38 - Math.sin(r * curveFreq + phaseA) * 3.0)
-                                : (seaSide === 'E') ? (cols * 0.62 - c - Math.sin(r * curveFreq + phaseA) * 3.0)
-                                : (seaSide === 'N') ? (r - rows * 0.38 - Math.sin(c * curveFreq + phaseA) * 2.5)
-                                : (rows * 0.62 - r - Math.sin(c * curveFreq + phaseA) * 2.5);
+                    const depth = (seaSide === 'W') ? (c - cols * seaFrac - Math.sin(r * freq + phaseA) * 2.8)
+                                : (seaSide === 'E') ? (cols * (1 - seaFrac) - c - Math.sin(r * freq + phaseA) * 2.8)
+                                : (seaSide === 'N') ? (r - rows * seaFrac - Math.sin(c * freq + phaseA) * 2.4)
+                                : (rows * (1 - seaFrac) - r - Math.sin(c * freq + phaseA) * 2.4);
                     if (depth < 0) setT(c, r, T.water);
                     else if (depth < 4.5) setT(c, r, T.sand);
                     else setT(c, r, T.grass);
                 }
-                // Находим точку на берегу для пирса и лагеря
-                const midC = Math.floor(cols / 2), midR = Math.floor(rows / 2);
-                let shoreX = midC, shoreY = midR;
+
+                // Ищем реальную кромку пляжа и выносим пирс строго в море!
+                const targetC = Math.floor(cols * MB_RAND_FLOAT(0.35, 0.65));
+                const targetR = Math.floor(rows * MB_RAND_FLOAT(0.35, 0.65));
+                let sx = targetC, sy = targetR, bestD = 1e9;
                 for (let r = 3; r < rows - 3; r++) for (let c = 3; c < cols - 3; c++) {
                     if (getT(c, r) === T.sand && (isWater(c - 1, r) || isWater(c + 1, r) || isWater(c, r - 1) || isWater(c, r + 1))) {
-                        if (Math.hypot(c - midC, r - midR) < Math.hypot(shoreX - midC, shoreY - midR) || getT(shoreX, shoreY) !== T.sand) {
-                            shoreX = c; shoreY = r;
-                        }
+                        const d = Math.hypot(c - targetC, r - targetR);
+                        if (d < bestD) { bestD = d; sx = c; sy = r; }
                     }
                 }
                 const seaDx = seaSide === 'W' ? -1 : (seaSide === 'E' ? 1 : 0);
                 const seaDy = seaSide === 'N' ? -1 : (seaSide === 'S' ? 1 : 0);
                 const pierDeg = Math.atan2(seaDy, seaDx) * 180 / Math.PI;
-                addObj(P.woodBridge, shoreX + seaDx * 1.4, shoreY + seaDy * 1.4, 1.15, pierDeg, 2.0);
-                addObj(P.boats, shoreX + seaDx * 3.8 + seaDy * 2.0, shoreY + seaDy * 3.8 - seaDx * 2.0, 1.12, pierDeg + 20, 1.6);
-                const campX = Math.max(3, Math.min(cols - 3, shoreX - seaDx * 3.2));
-                const campY = Math.max(3, Math.min(rows - 3, shoreY - seaDy * 3.2));
+                addObj(P.woodBridge, sx + seaDx * 1.4, sy + seaDy * 1.4, 1.14, pierDeg, 1.9);
+                addObj(P.boats, sx + seaDx * 3.6 + seaDy * 2.0, sy + seaDy * 3.6 - seaDx * 2.0, 1.1, pierDeg + 18, 1.55);
+                const campX = Math.max(3, Math.min(cols - 3, sx - seaDx * 3.2));
+                const campY = Math.max(3, Math.min(rows - 3, sy - seaDy * 3.2));
                 placeCampCluster(campX, campY, { radius: 2.8, tents: 2, propPool: P.pirateLoot, props: 4 });
                 addObj('camp_pirateflag', campX - seaDx * 1.5, campY - seaDy * 1.5, 1.1, 0, 0.8);
                 genTitle = MB_PICK(['Бухта Контрабандистов', 'Пиратский причал', 'Берег Бурных Волн']);
             }
-            // Лодки у кромки воды (для острова)
-            if (isIsland) {
-                for (let tries = 0; tries < 25; tries++) {
-                    const bx = MB_RAND_INT(2, cols - 3), by = MB_RAND_INT(2, rows - 3);
-                    if (isWater(bx, by) && [-2, 0, 2].some(d => getT(bx + d, by) === T.sand || getT(bx, by + d) === T.sand) && canPlace(bx, by, 2.2)) {
-                        addObj(P.boats, bx + 0.5, by + 0.5, 1.15, MB_RAND_INT(0, 359), 1.6);
-                        break;
-                    }
-                }
-            }
-            scatterGroves([T.grass], P.palms, P.bushes, P.flowers, 1.1);
-            scatterGroves([T.sand], P.beachLife, P.pirateLoot, P.rocks, 0.45);
+            scatterGroves([T.grass], P.palms, P.bushes, P.flowers, 1.05);
+            scatterGroves([T.sand], P.beachLife, P.pirateLoot, P.rocks, 0.44);
         }
 
         // ============================================================
-        // 5. 🏜️ ПУСТЫНЯ (ОАЗИСЫ, РУИНЫ, КАРАВАНЫ, ДЮНЫ И КАКТУСЫ)
+        // 6. 🏜️ ПУСТЫНЯ (0–2 ОАЗИСА + РУИНЫ + КАРАВАНЫ + СКАЛЬНЫЕ ГРЯДЫ)
         // ============================================================
         else if (picked === 'desert') {
-            const hasOasis = Math.random() < 0.62;
-            const hasRuins = !hasOasis || (cols >= 26 && Math.random() < 0.45);
-            let ox = cols / 2, oy = rows / 2;
+            const nOases = Math.random() < 0.65 ? (cols >= 32 && Math.random() < 0.35 ? 2 : 1) : 0;
+            const hasRuins = (nOases === 0) || (Math.random() < 0.55);
 
-            if (hasOasis) {
-                ox = MB_RAND_FLOAT(cols * 0.28, cols * 0.72);
-                oy = MB_RAND_FLOAT(rows * 0.28, rows * 0.72);
-                const rx = MB_RAND_FLOAT(2.8, Math.min(5.2, cols * 0.18)), ry = MB_RAND_FLOAT(2.2, Math.min(4.0, rows * 0.22));
-                paintBlob(ox, oy, rx + 2.0, ry + 1.8, T.grass, 0.18);
-                paintBlob(ox, oy, rx, ry, T.water, 0.15);
+            for (let o = 0; o < nOases; o++) {
+                const spot = findDrySpot([T.sand], 4.5, 6.0);
+                if (!spot) continue;
+                const rx = MB_RAND_FLOAT(2.5, Math.min(4.8, cols * 0.17)), ry = MB_RAND_FLOAT(2.0, Math.min(3.8, rows * 0.22));
+                paintBlob(spot.x, spot.y, rx + 1.8, ry + 1.6, T.grass, 0.18);
+                paintBlob(spot.x, spot.y, rx, ry, T.water, 0.15);
                 for (let a = 0; a < 8; a++) {
                     const ang = (a / 8) * 6.28 + MB_RAND_FLOAT(-0.2, 0.2);
-                    const px = ox + Math.cos(ang) * (rx + 1.3), py = oy + Math.sin(ang) * (ry + 1.2);
-                    if (canPlace(px, py, 1.5)) addObj(P.palms, px, py, MB_RAND_FLOAT(0.92, 1.25), MB_RAND_INT(0, 359), 1.55);
+                    const px = spot.x + Math.cos(ang) * (rx + 1.25), py = spot.y + Math.sin(ang) * (ry + 1.15);
+                    if (canPlace(px, py, 1.45)) addObj(P.palms, px, py, MB_RAND_FLOAT(0.9, 1.24), MB_RAND_INT(0, 359), 1.5);
                 }
             }
             if (hasRuins) {
-                const rx = hasOasis ? (ox > cols / 2 ? cols * 0.24 : cols * 0.76) : MB_RAND_FLOAT(cols * 0.32, cols * 0.68);
-                const ry = hasOasis ? (oy > rows / 2 ? rows * 0.28 : rows * 0.72) : MB_RAND_FLOAT(rows * 0.32, rows * 0.68);
-                placeRuinsCluster(rx, ry, T.flagstone);
+                const spot = findDrySpot([T.sand], 4.0, 4.8);
+                if (spot) placeRuinsCluster(spot.x, spot.y, T.flagstone);
             }
-            // Стоянка каравана в свободном месте
-            for (let tries = 0; tries < 25; tries++) {
-                const cx = MB_RAND_FLOAT(4, cols - 4), cy = MB_RAND_FLOAT(4, rows - 4);
-                if (getT(Math.floor(cx), Math.floor(cy)) !== T.sand || !canPlace(cx, cy, 4.5)) continue;
-                placeCampCluster(cx, cy, { radius: 3.3, tents: 2, bigTentPool: P.desertTents, tentPool: P.campTents, firePool: ['camp_desert_campfire_1x1'], propPool: P.desertProps, props: 4 });
-                break;
+            const campSpot = findDrySpot([T.sand], 4.0, 4.5);
+            if (campSpot) {
+                placeCampCluster(campSpot.x, campSpot.y, {
+                    radius: 3.2, tents: MB_RAND_INT(2, 3), bigTentPool: P.desertTents,
+                    tentPool: P.campTents, firePool: ['camp_desert_campfire_1x1'], propPool: P.desertProps, props: 4
+                });
             }
-            scatterGroves([T.sand], P.desertRocks, P.desertCacti, P.desertProps, 0.9);
-            genTitle = hasOasis && hasRuins ? 'Оазис у древних руин' : (hasOasis ? 'Пустынный оазис каравана' : 'Занесённые песком руины');
+            scatterGroves([T.sand], P.desertRocks, P.desertCacti, P.desertProps, 0.88);
+            genTitle = (nOases && hasRuins) ? 'Оазис у древних руин' : (nOases ? 'Пустынный оазис каравана' : 'Занесённые песком руины');
         }
 
         // ============================================================
-        // 6. 🍄 ФЕЙСКИЙ ЛЕС (ВОЛШЕБНЫЕ ОЗЁРА, КРИСТАЛЛЫ, ГРИБНЫЕ КРУГИ)
+        // 7. 🍄 ФЕЙСКИЙ ЛЕС (МАГИЧЕСКИЕ ВОДЫ + ТРОННЫЙ КРУГ + СВЕТЯЩИЕСЯ РОЩИ)
         // ============================================================
         else if (picked === 'fey') {
             for (let i = 0; i < Math.floor((cols * rows) / 34); i++) {
-                paintBlob(MB_RAND_FLOAT(2, cols - 2), MB_RAND_FLOAT(2, rows - 2), MB_RAND_FLOAT(2.0, 3.8), MB_RAND_FLOAT(1.8, 3.2), T.leafG, 0.22);
+                paintBlob(MB_RAND_FLOAT(2, cols - 2), MB_RAND_FLOAT(2, rows - 2), MB_RAND_FLOAT(2.0, 3.8), MB_RAND_FLOAT(1.7, 3.1), T.leafG, 0.22);
             }
             if (Math.random() < 0.55) {
-                const wx = MB_RAND_FLOAT(cols * 0.28, cols * 0.72), wy = MB_RAND_FLOAT(rows * 0.28, rows * 0.72);
-                paintBlob(wx, wy, MB_RAND_FLOAT(2.8, 4.8), MB_RAND_FLOAT(2.4, 3.8), T.water, 0.2);
+                const nPools = cols >= 28 && Math.random() < 0.4 ? 2 : 1;
+                for (let p = 0; p < nPools; p++) {
+                    paintBlob(cols * MB_RAND_FLOAT(0.24, 0.76), rows * MB_RAND_FLOAT(0.24, 0.76), MB_RAND_FLOAT(2.6, 4.4), MB_RAND_FLOAT(2.2, 3.5), T.water, 0.2);
+                }
             } else {
                 const [f0, f1] = randomEdgePair(true);
-                carveSpline(f0, f1, 1.35, T.water, { bend: MB_RAND_FLOAT(-0.3, 0.3) });
+                carveSpline(f0, f1, 1.3, T.water, { bend: MB_RAND_FLOAT(-0.3, 0.3) });
             }
-            // Магический центр: Трон фей или Кристальный круг на случайной сухой поляне
-            for (let tries = 0; tries < 25; tries++) {
-                const tx = MB_RAND_FLOAT(4, cols - 4), ty = MB_RAND_FLOAT(4, rows - 4);
-                if (isWater(Math.floor(tx), Math.floor(ty))) continue;
-                addObj('furniture_feythrone', tx, ty, 1.22, MB_RAND_INT(0, 359), 1.8);
+
+            const spot = findDrySpot([T.grass, T.leafG], 3.8, 4.2);
+            if (spot) {
+                addObj('furniture_feythrone', spot.x, spot.y, 1.2, MB_RAND_INT(0, 359), 1.75);
                 const ringN = MB_RAND_INT(5, 8);
                 for (let a = 0; a < ringN; a++) {
                     const ang = (a / ringN) * 6.28;
-                    const cx = tx + Math.cos(ang) * 3.4, cy = ty + Math.sin(ang) * 2.8;
+                    const cx = spot.x + Math.cos(ang) * 3.3, cy = spot.y + Math.sin(ang) * 2.7;
                     if (!isWater(Math.floor(cx), Math.floor(cy)) && canPlace(cx, cy, 1.1)) {
                         addObj(a % 2 === 0 ? P.feyCrystals : P.feyDecor, cx, cy, 1.0, MB_RAND_INT(0, 359), 1.05);
                     }
                 }
-                break;
             }
-            scatterWaterDetails(0.22);
-            scatterGroves([T.grass, T.leafG], P.feyTrees, P.feyFungi, P.feyDecor, 1.22);
+            scatterWaterDetails(P.waterDec, 0.2);
+            scatterGroves([T.grass, T.leafG], P.feyTrees, P.feyFungi, P.feyDecor, 1.2);
             genTitle = MB_PICK(['Фейская роща', 'Светящийся лес', 'Тронный круг грибов', 'Зачарованное озеро']);
         }
 
         // ============================================================
-        // 7. ⛺ ЛАГЕРЬ ОХОТНИКОВ / ОРКОВ (СЛУЧАЙНЫЕ ПОЛЯНЫ И ЧАСТОКОЛ)
+        // 8. ⛺ ЛАГЕРЬ ОХОТНИКОВ / ОРКОВ (ПОЛЯНА + ДОРОГИ + ЧАСТОКОЛ + РУЧЕЙ)
         // ============================================================
         else if (picked === 'warcamp') {
-            const fortified = Math.random() < 0.52;
-            const cx = MB_RAND_FLOAT(cols * 0.36, cols * 0.64), cy = MB_RAND_FLOAT(rows * 0.36, rows * 0.64);
-            const rx = Math.min(9.5, cols * MB_RAND_FLOAT(0.26, 0.34)), ry = Math.min(6.8, rows * MB_RAND_FLOAT(0.28, 0.35));
-            paintBlob(cx, cy, rx, ry, T.dirt, 0.16);
+            const fortified = Math.random() < 0.54;
+            const cx = cols * MB_RAND_FLOAT(0.35, 0.65), cy = rows * MB_RAND_FLOAT(0.35, 0.65);
+            const rx = Math.min(9.2, cols * MB_RAND_FLOAT(0.25, 0.33)), ry = Math.min(6.6, rows * MB_RAND_FLOAT(0.28, 0.35));
 
-            // Тропа, ведущая от лагеря к случайному краю карты
-            const gateSide = MB_PICK(['N', 'S', 'E', 'W']);
-            const gateEdge = randomEdgePoint(gateSide);
-            const gateAng = Math.atan2(gateEdge.y - cy, gateEdge.x - cx);
-            carveSpline({ x: cx, y: cy }, gateEdge, 1.15, T.dirt, { bend: MB_RAND_FLOAT(-0.18, 0.18) });
+            // 30% шанс на ручей у окраины лагеря
+            if (cols >= 24 && Math.random() < 0.30) {
+                const farX = cx > cols / 2 ? MB_RAND_FLOAT(2.5, 4.5) : MB_RAND_FLOAT(cols - 4.5, cols - 2.5);
+                carveSpline({ x: farX, y: 0 }, { x: farX + MB_RAND_FLOAT(-2, 2), y: rows - 1 }, 1.25, T.water);
+            }
+
+            paintBlob(cx, cy, rx, ry, T.dirt, 0.16, [T.grass]);
+            const gateSides = Math.random() < 0.42 ? MB_PICK([['W', 'E'], ['N', 'S'], ['W', 'N'], ['E', 'S']]) : [MB_PICK(['N', 'S', 'E', 'W'])];
+            const gateAngles = [];
+            gateSides.forEach(gs => {
+                const edge = randomEdgePoint(gs);
+                gateAngles.push(Math.atan2(edge.y - cy, edge.x - cx));
+                const tr = carveSpline({ x: cx, y: cy }, edge, 1.15, T.dirt, { keepWater: true, bend: MB_RAND_FLOAT(-0.18, 0.18) });
+                autoPlaceBridges(tr, false);
+            });
 
             if (fortified) {
                 const ringN = Math.max(12, Math.floor((rx + ry) * 1.35));
                 for (let i = 0; i < ringN; i++) {
                     const ang = (i / ringN) * 6.28;
-                    const diff = Math.abs(Math.atan2(Math.sin(ang - gateAng), Math.cos(ang - gateAng)));
-                    if (diff < 0.42) continue; // Ворота там, где выходит дорога!
+                    if (gateAngles.some(ga => Math.abs(Math.atan2(Math.sin(ang - ga), Math.cos(ang - ga))) < 0.42)) continue;
                     const bx = cx + Math.cos(ang) * rx, by = cy + Math.sin(ang) * ry;
-                    if (inB(Math.floor(bx), Math.floor(by))) addObj(P.barricades, bx, by, 1.08, ang * 180 / Math.PI + 90, 1.15);
+                    if (inB(Math.floor(bx), Math.floor(by)) && !isWater(Math.floor(bx), Math.floor(by))) {
+                        addObj(P.barricades, bx, by, 1.06, ang * 180 / Math.PI + 90, 1.15);
+                    }
                 }
-                addObj(P.watchpost, cx + Math.cos(gateAng + 0.45) * rx, cy + Math.sin(gateAng + 0.45) * ry, 1.05, 0, 1.8);
+                const ga0 = gateAngles[0];
+                const wx = cx + Math.cos(ga0 + 0.44) * rx, wy = cy + Math.sin(ga0 + 0.44) * ry;
+                if (!isWater(Math.floor(wx), Math.floor(wy))) addObj(P.watchpost, wx, wy, 1.04, 0, 1.75);
             }
 
             placeCampCluster(cx, cy, {
@@ -786,698 +1099,14 @@
                 bigTentPool: fortified ? P.campBigTents : null,
                 tentPool: P.orcTents,
                 firePool: ['camp_campfire_hog', 'dungeon_campfire_cooking_spit'],
-                fireScale: 1.25,
+                fireScale: 1.24,
                 propPool: P.orcProps,
                 props: Math.max(4, Math.floor((rx * ry) / 8))
             });
-            addObj('camp_totemlarge', cx - Math.cos(gateAng) * 2.2, cy - Math.sin(gateAng) * 2.2, 1.15, 0, 1.3);
-            scatterGroves([T.grass], P.trees, P.bushes, P.rocks, 1.15);
+            addObj('camp_totemlarge', cx - Math.cos(gateAngles[0]) * 2.1, cy - Math.sin(gateAngles[0]) * 2.1, 1.14, 0, 1.25);
+            scatterGroves([T.grass], P.trees, P.bushes, P.rocks, 1.12);
             genTitle = fortified ? MB_PICK(['Укреплённый лагерь орков', 'Частокол налётчиков', 'Форт Охотников'])
                                  : MB_PICK(['Стойбище охотников', 'Лесной лагерь племени', 'Костёр на поляне']);
-        }
-
-        // ============================================================
-        // 8. ❄️ СНЕЖНЫЙ ПЕРЕВАЛ (УЩЕЛЬЯ, ЛЕДЯНЫЕ ОЗЁРА И ПРИВАЛЫ)
-        // ============================================================
-        else if (picked === 'snow') {
-            const isCanyon = Math.random() < 0.48;
-            if (isCanyon) {
-                // Органическое горное ущелье по произвольной кривой!
-                for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) setT(c, r, T.wall);
-                const [p0, p1] = randomEdgePair(true);
-                const canyonW = Math.max(3.6, Math.min(cols, rows) * 0.28);
-                carveSpline(p0, p1, canyonW, T.snow, { bend: MB_RAND_FLOAT(-0.25, 0.25) });
-                const trailPts = carveSpline(p0, p1, 1.25, T.stone, { bend: MB_RAND_FLOAT(-0.25, 0.25) });
-                const mid = trailPts[Math.floor(trailPts.length * MB_RAND_FLOAT(0.35, 0.65))];
-                placeCampCluster(mid.x + mid.nx * 1.6, mid.y + mid.ny * 1.6, { radius: 2.6, tents: 2, propPool: P.snowPelts, props: 3 });
-                if (Math.random() < 0.6) {
-                    const bp = trailPts[Math.floor(trailPts.length * 0.72)];
-                    addObj(P.barricades, bp.x, bp.y, 1.1, Math.atan2(bp.uy, bp.ux) * 180 / Math.PI + 90, 1.2);
-                }
-                genTitle = MB_PICK(['Снежное ущелье', 'Горный перевал', 'Заснеженная застава']);
-            } else {
-                // Замёрзшее озеро в случайном месте + горная тропа с мостом + лагерь экспедиции
-                const lx = MB_RAND_FLOAT(cols * 0.30, cols * 0.70), ly = MB_RAND_FLOAT(rows * 0.30, rows * 0.70);
-                const rx = MB_RAND_FLOAT(3.8, Math.min(7.5, cols * 0.26)), ry = MB_RAND_FLOAT(3.0, Math.min(5.5, rows * 0.30));
-                paintBlob(lx, ly, rx, ry, T.ice, 0.18);
-                paintBlob(lx, ly, rx * 0.54, ry * 0.54, T.water, 0.15);
-                const [t0, t1] = randomEdgePair(true);
-                const roadPts = carveSpline(t0, t1, 1.15, T.stone, { keepWater: true, bend: MB_RAND_FLOAT(-0.2, 0.2) });
-                autoPlaceBridges(roadPts, false);
-                for (let tries = 0; tries < 25; tries++) {
-                    const cx = MB_RAND_FLOAT(4, cols - 4), cy = MB_RAND_FLOAT(4, rows - 4);
-                    if (getT(Math.floor(cx), Math.floor(cy)) !== T.snow || !canPlace(cx, cy, 4.0)) continue;
-                    placeCampCluster(cx, cy, { groundTile: T.dirt, radius: 2.8, tents: 2, bigTentPool: P.campBigTents, propPool: P.snowPelts, props: 3 });
-                    break;
-                }
-                genTitle = MB_PICK(['Замёрзшее озеро', 'Привал в тундре', 'Ледяная переправа']);
-            }
-            scatterGroves([T.snow], P.trees, P.snowRocks, P.rockBig, 0.9);
-        }
-
-        const titleInp = document.getElementById('mb-map-title-inp');
-        if (titleInp) titleInp.value = genTitle;
-
-        window._mbData = data;
-        SAVE_MB_DATA(data);
-        RENDER_GM_MAP_BUILDER_UI();
-    };
-})();
-
-// ================================================================
-// 👑❄️ ЧАСТЬ 3: ЛОГИЧНЫЕ ПРОЦЕДУРНЫЕ ГОРОД И СНЕЖНЫЙ ПЕРЕВАЛ (V5)
-// ================================================================
-(function INSTALL_CITY_AND_SNOW_V5() {
-    const _PREV_GEN = MB_GENERATE_RANDOM;
-    const TARGETS = ['city', 'snow'];
-
-    MB_GENERATE_RANDOM = function(biome) {
-        const allBiomes = ['tavern', 'city', 'battlefield', 'forest', 'dungeon', 'mansion', 'dwarven', 'pirate', 'desert', 'fey', 'eastern', 'warcamp', 'snow'];
-        const picked = (biome === 'random' || !biome) ? MB_PICK_NEXT_VARIANT('_global', allBiomes) : biome;
-        if (!TARGETS.includes(picked)) return _PREV_GEN(picked);
-
-        MB_PUSH_UNDO();
-        const cols = window._mbCols, rows = window._mbRows;
-
-        const T = {
-            grass:     Math.random() < 0.25 ? MB_PICK_TILE_FAMILY('moss', 'grass') : MB_PICK_TILE_FAMILY('grass', 'grass'),
-            dirt:      MB_PICK_TILE_FAMILY('dirt', 'dirt'),
-            stone:     MB_PICK_TILE_FAMILY('stone', 'stone'),
-            flagstone: MB_PICK_TILE_FAMILY('flagstone', 'stone'),
-            cobble:    MB_PICK_TILE_FAMILY('cobble', 'stone'),
-            wall:      MB_PICK_TILE_FAMILY('wall', 'wall'),
-            snow:      MB_PICK_TILE_FAMILY('snow', 'snow'),
-            ice:       MB_PICK_TILE_FAMILY('ice', 'snow'),
-            water:     'water'
-        };
-        // Гарантируем, чтобы улицы и кварталы города отличались по текстуре
-        if (T.flagstone === T.cobble) T.flagstone = T.stone;
-
-        const lightMap = {
-            city: ['day', 'day', 'sunset', 'night'],
-            snow: ['day', 'day', 'night']
-        };
-        window._mbLighting = MB_PICK(lightMap[picked]);
-        const data = CREATE_EMPTY_MB_DATA(picked === 'city' ? T.cobble : T.snow, cols, rows);
-        data.lighting = window._mbLighting;
-
-        const inB = (c, r) => c >= 0 && c < cols && r >= 0 && r < rows;
-        const getT = (c, r) => inB(c, r) ? data.cells[r * cols + c].t : null;
-        const setT = (c, r, t) => { if (inB(c, r)) data.cells[r * cols + c].t = t; };
-        const isWall = (c, r) => /^wall/.test(getT(c, r) || '');
-        const isWater = (c, r) => /^water/.test(getT(c, r) || '');
-
-        const fillRect = (x1, y1, x2, y2, t, onlyOn = null) => {
-            for (let r = Math.max(0, Math.floor(y1)); r <= Math.min(rows - 1, Math.floor(y2)); r++)
-                for (let c = Math.max(0, Math.floor(x1)); c <= Math.min(cols - 1, Math.floor(x2)); c++) {
-                    if (onlyOn && !onlyOn.includes(getT(c, r))) continue;
-                    setT(c, r, t);
-                }
-        };
-
-        const phaseA = MB_RAND_FLOAT(0, 6.28), phaseB = MB_RAND_FLOAT(0, 6.28);
-        const paintBlob = (cx, cy, rx, ry, tile, wob = 0.16, onlyOn = null) => {
-            const rMin = Math.max(0, Math.floor(cy - ry - 3)), rMax = Math.min(rows - 1, Math.ceil(cy + ry + 3));
-            const cMin = Math.max(0, Math.floor(cx - rx - 3)), cMax = Math.min(cols - 1, Math.ceil(cx + rx + 3));
-            for (let r = rMin; r <= rMax; r++) for (let c = cMin; c <= cMax; c++) {
-                if (onlyOn && !onlyOn.includes(getT(c, r))) continue;
-                const ang = Math.atan2(r - cy, c - cx);
-                const noise = Math.sin(ang * 3 + phaseA) * wob + Math.cos(ang * 5 + phaseB) * (wob * 0.45);
-                const d = Math.hypot((c - cx) / Math.max(0.6, rx), (r - cy) / Math.max(0.6, ry));
-                if (d <= 1.0 + noise) setT(c, r, tile);
-            }
-        };
-
-        const placedZones = [];
-        const canPlace = (x, y, minDist = 1.0) => {
-            if (!inB(Math.floor(x), Math.floor(y))) return false;
-            return !placedZones.some(z => Math.hypot(z.x - x, z.y - y) < Math.max(minDist, z.r));
-        };
-        const addObj = (poolOrId, x, y, scale = 1.0, rot = 0, reserve = 0) => {
-            const id = Array.isArray(poolOrId) ? MB_PICK(poolOrId) : poolOrId;
-            if (!id) return false;
-            const stObj = MB_FIND_STAMP_OBJ(id);
-            if (!stObj) return false;
-            if (stObj.img) MB_GET_LOADED_IMG(stObj.img, false);
-            data.objects.push({ id, x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100, scale, rot: Math.round(rot) });
-            if (reserve > 0) placedZones.push({ x, y, r: reserve });
-            return true;
-        };
-
-        const P = {
-            roofTile:    MB_GET_POOL(/^city_roof_tiled_6x4_shaded$|^city_roof_premade_8x6$/),
-            roofThatch:  MB_GET_POOL(/^city_roof_thatch_6x4_shaded$|^city_roof_thatch_6x4$/),
-            cityCenter:  MB_GET_POOL(/^city_fountain$|^city_well$|^city_feature_statue_[1-3]_stone$|^city_statue[1-3]$/),
-            carts:       MB_GET_POOL(/^city_cart_|^city_wagon$/),
-            horses:      MB_GET_POOL(/^other_horse2?$/),
-            lamps:       MB_GET_POOL(/^city_woodlamp$|^other_light_stand_lit_iron$/),
-            market:      MB_GET_POOL(/^other_apples$|^other_baskets$|^other_clutter_sacks_[12]$|^furniture_storage_crate_[12]_dark$|^furniture_storage_barrel_[12]_dark$|^other_cabbage$/),
-            gardens:     MB_GET_POOL(/^other_garden[123]$|^nature_flower[123]$/),
-            tables:      MB_GET_POOL(/^furniture_table_(rectangle_[1-3]|long_1)_dark$|^furniture_table_long_1$/),
-            barrels:     MB_GET_POOL(/^furniture_storage_barrel_[1-3]_dark$|^other_keg(5tapped|6)$/),
-            crates:      MB_GET_POOL(/^furniture_storage_crate_[1-4]_dark$|^other_clutter_sacks_[12]$|^furniture_crate_[12]$/),
-            watchpost:   MB_GET_POOL(/^other_watchpost$/),
-            flags:       MB_GET_POOL(/^other_largeflag$/),
-            boats:       MB_GET_POOL(/^other_canoe$/),
-            stoneBridge: MB_GET_POOL(/^nature_stone_bridge_section_7x4$/),
-            woodBridge:  MB_GET_POOL(/^nature_wooden_bridge_section_7x4$/),
-
-            trees:       MB_GET_POOL(/^nature_tree_(small_[12]|large_[12]|[123])$/),
-            bushes:      MB_GET_POOL(/^nature_bush_(2|3|4|5|7)_green|^nature_bush_shrub_[12]$/),
-            flowers:     MB_GET_POOL(/^nature_flower_[1-4]$|^nature_flowers_[1-3]$/),
-
-            // Строго природные зимние скалы и сухостой (без летних цветов и без новогодних игрушек!)
-            cliffs:      MB_GET_POOL(/^nature_cliff_[123]$|^nature_rock_formation_[2-6]$|^nature_rock_outcrop$/),
-            snowRocks:   MB_GET_POOL(/^nature_rock_[123]$|^nature_rock_small_[12]$|^nature_boulder$|^nature_rocks_[1-5]$/),
-            deadwood:    MB_GET_POOL(/^other_deadwood3$|^nature_fallen_tree_[12]$|^nature_stump_[123]$|^nature_log_fallen_tree$/),
-            waterRocks:  MB_GET_POOL(/^nature_submerged_rocks_[1-4]$|^nature_river_rock_[123]$/),
-            campfires:   MB_GET_POOL(/^camp_campfire(_fire|_pot_cooking)?$/),
-            bigTents:    MB_GET_POOL(/^camp_tent_round_large_pavillion$|^camp_tent_large_9x5$/),
-            tents:       MB_GET_POOL(/^camp_tent_(round_small|square_[123]|narrow_[12])$|^other_shelter$/),
-            pelts:       MB_GET_POOL(/^camp_(wolf|beaver)pelt$|^camp_pelt(wolf|fox)$|^furniture_bedroll_[123]$|^other_firewood_pile$|^nature_stump_axe_chopping$|^nature_log_seat_[12]$/),
-            barricades:  MB_GET_POOL(/^furniture_barricade$|^other_woodenstakes$/),
-            braziers:    MB_GET_POOL(/^dungeon_light_brazier_[123]_[abc]$|^other_light_stand_lit_iron$/),
-            pillars:     MB_GET_POOL(/^dungeon_pillar_(round|square)_1x1$|^dungeon_stone_pillar_[12]$/),
-            ruins:       MB_GET_POOL(/^other_ruin_[1-4]_2x2$|^other_rubble_(small|medium|mixed_3x2)$/),
-            altars:      MB_GET_POOL(/^dungeon_feature_altar_gold$|^dungeon_tomb_(1|open)$/),
-            chests:      MB_GET_POOL(/^dungeon_chest_[12]_(steel|gold)$/),
-            iceCrystals: MB_GET_POOL(/^dungeon_crystalblue$|^dungeon_crystal_vertical_2x2$/)
-        };
-
-        let genTitle = 'Локация';
-
-        // ============================================================
-        // 👑 1. ГОРОД: СТРОГИЕ КВАРТАЛЫ, РО́ВНЫЕ УЛИЦЫ И УМНАЯ ЗАСТРОЙКА
-        // ============================================================
-        if (picked === 'city') {
-            const style = MB_PICK_NEXT_VARIANT('city_v5', ['plaza_crossroads', 'canal_city', 'city_gates']);
-            const thatchProb = Math.random() < 0.45 ? 0.30 : 0.08;
-
-            // Карта занятости клеток под дома, улицы, площади, каналы и стены
-            const occ = Array.from({ length: rows }, () => new Uint8Array(cols));
-            const markOcc = (x1, y1, x2, y2, val = 1) => {
-                for (let r = Math.max(0, Math.floor(y1)); r <= Math.min(rows - 1, Math.floor(y2)); r++)
-                    for (let c = Math.max(0, Math.floor(x1)); c <= Math.min(cols - 1, Math.floor(x2)); c++) occ[r][c] = val;
-            };
-            const rectFreeForHouse = (x1, y1, w, h) => {
-                if (x1 < 0 || y1 < 0 || x1 + w > cols || y1 + h > rows) return false;
-                for (let r = y1; r < y1 + h; r++) for (let c = x1; c < x1 + w; c++) {
-                    if (occ[r][c] !== 0 || getT(c, r) !== T.cobble) return false;
-                }
-                return true;
-            };
-            const touchesStreet = (x1, y1, w, h) => {
-                let hTouch = false, vTouch = false;
-                for (let c = x1; c < x1 + w; c++) {
-                    if (getT(c, y1 - 1) === T.flagstone || getT(c, y1 + h) === T.flagstone) hTouch = true;
-                }
-                for (let r = y1; r < y1 + h; r++) {
-                    if (getT(x1 - 1, r) === T.flagstone || getT(x1 + w, r) === T.flagstone) vTouch = true;
-                }
-                return { hTouch, vTouch };
-            };
-
-            const placeBridgeStraight = (x1, y1, x2, y2, isStone = true) => {
-                const horiz = (Math.abs(x2 - x1) >= Math.abs(y2 - y1));
-                const span = (horiz ? (x2 - x1 + 1) : (y2 - y1 + 1)) + 1.3;
-                const segs = Math.max(1, Math.ceil(span / 3.4));
-                const sc = Math.max(0.76, (span / segs) / 3.45);
-                const pool = isStone ? P.stoneBridge : P.woodBridge;
-                for (let i = 0; i < segs; i++) {
-                    const f = (i + 0.5) / segs;
-                    const bx = horiz ? (x1 - 0.15 + (x2 - x1 + 1.3) * f) : (x1 + 0.5);
-                    const by = horiz ? (y1 + 0.5) : (y1 - 0.15 + (y2 - y1 + 1.3) * f);
-                    addObj(pool, bx, by, sc, horiz ? 0 : 90, 1.35);
-                }
-            };
-
-            const placeStreet = (isHoriz, pos, width = 2, start = 0, end = null) => {
-                const lim = end !== null ? end : (isHoriz ? cols - 1 : rows - 1);
-                if (isHoriz) {
-                    fillRect(start, pos, lim, pos + width - 1, T.flagstone);
-                    markOcc(start, pos, lim, pos + width - 1, 2);
-                } else {
-                    fillRect(pos, start, pos + width - 1, lim, T.flagstone);
-                    markOcc(pos, start, pos + width - 1, lim, 2);
-                }
-            };
-
-            // Умный упаковщик домов: выравнивает крыши по улицам, оставляет проулки и дворики!
-            const packDistrictHouses = () => {
-                const trySizes = cols <= 18
-                    ? [{ w: 4, h: 3, sc: 0.84, horiz: true }, { w: 3, h: 4, sc: 0.84, horiz: false }]
-                    : [
-                        { w: 5, h: 3, sc: 0.98, horiz: true }, { w: 3, h: 5, sc: 0.98, horiz: false },
-                        { w: 4, h: 3, sc: 0.84, horiz: true }, { w: 3, h: 4, sc: 0.84, horiz: false }
-                    ];
-
-                // Проходим по карте и сажаем дома с аккуратным зазором (1 клетка между домами)
-                for (let r = 0; r < rows - 2; r++) {
-                    for (let c = 0; c < cols - 2; c++) {
-                        if (occ[r][c] !== 0 || getT(c, r) !== T.cobble) continue;
-
-                        // Сначала смотрим, к какой улице ближе эта клетка, чтобы выбрать правильную ориентацию крыши
-                        const preferVert = (getT(c - 1, r) === T.flagstone || getT(c + 3, r) === T.flagstone || getT(c + 4, r) === T.flagstone) &&
-                                           !(getT(c, r - 1) === T.flagstone || getT(c, r + 3) === T.flagstone);
-                        const ordered = trySizes.slice().sort((a, b) => (a.horiz === !preferVert ? -1 : 1));
-
-                        let placed = false;
-                        for (const sz of ordered) {
-                            if (!rectFreeForHouse(c, r, sz.w, sz.h)) continue;
-                            const touch = touchesStreet(c, r, sz.w, sz.h);
-                            // Маленький шанс оставить на участке зелёный дворик с деревом и клумбой вместо дома
-                            if (Math.random() < 0.14 && sz.w >= 4 && sz.h >= 3) {
-                                fillRect(c, r, c + sz.w - 1, r + sz.h - 1, T.grass);
-                                markOcc(c, r, c + sz.w - 1, r + sz.h - 1, 3);
-                                const gx = c + sz.w / 2, gy = r + sz.h / 2;
-                                addObj(P.trees, gx - 0.6, gy - 0.2, 0.95, MB_RAND_INT(0, 359), 1.1);
-                                addObj(P.gardens, gx + 0.8, gy + 0.3, 0.82, MB_RAND_INT(0, 359), 0.6);
-                                placed = true;
-                                break;
-                            }
-
-                            const cx = c + sz.w / 2, cy = r + sz.h / 2;
-                            const rot = sz.horiz ? MB_PICK([0, 180]) : MB_PICK([90, 270]);
-                            const useThatch = Math.random() < thatchProb;
-                            addObj(useThatch ? P.roofThatch : P.roofTile, cx, cy, sz.sc, rot, 0);
-                            if (Math.random() < 0.78) {
-                                addObj('other_misc_chimney_1x1', cx + (sz.horiz ? 0.8 : 0.2), cy - (sz.horiz ? 0.35 : 0.7), 0.82, 0, 0);
-                            }
-                            // Бронируем сам дом + узкий 1-клеточный переулок сбоку, чтобы крыши не слипались в кашу
-                            markOcc(c, r, c + sz.w - 1, r + sz.h - 1, 1);
-                            markOcc(c + sz.w, r, c + sz.w, r + sz.h - 1, 4);
-                            markOcc(c, r + sz.h, c + sz.w - 1, r + sz.h, 4);
-
-                            // Клумба или ящики у стены со стороны переулка (никогда посреди дороги!)
-                            const decX = sz.horiz ? (c + sz.w + 0.5) : (c + 0.5);
-                            const decY = sz.horiz ? (r + sz.h / 2) : (r + sz.h + 0.5);
-                            if (inB(Math.floor(decX), Math.floor(decY)) && getT(Math.floor(decX), Math.floor(decY)) === T.cobble && canPlace(decX, decY, 0.8)) {
-                                addObj(Math.random() < 0.55 ? P.market : P.gardens, decX, decY, 0.72, MB_RAND_INT(0, 359), 0.65);
-                            }
-                            // Если дом выходит к улице — ставим иногда уличный фонарь у угла
-                            if ((touch.hTouch || touch.vTouch) && Math.random() < 0.35) {
-                                const lx = c + (touch.vTouch ? -0.35 : 0.2), ly = r + (touch.hTouch ? -0.35 : 0.2);
-                                if (inB(Math.floor(lx), Math.floor(ly)) && getT(Math.floor(lx), Math.floor(ly)) === T.flagstone && canPlace(lx, ly, 3.2)) {
-                                    addObj(P.lamps, lx, ly, 0.82, 0, 0.7);
-                                }
-                            }
-                            placed = true;
-                            break;
-                        }
-                        if (placed) c += 2;
-                    }
-                }
-            };
-
-            // ВАРИАНТ 1: ТОРГОВАЯ ПЛОЩАДЬ И КВАРТАЛЫ
-            if (style === 'plaza_crossroads') {
-                genTitle = MB_PICK(['Торговая площадь', 'Ярмарочный квартал', 'Перекрёсток Купцов', 'Старый город']);
-                const stW = cols >= 26 ? 3 : 2;
-                const mx = MB_RAND_INT(Math.floor(cols * 0.38), Math.floor(cols * 0.60));
-                const my = MB_RAND_INT(Math.floor(rows * 0.38), Math.floor(rows * 0.60));
-
-                placeStreet(true, my - Math.floor(stW / 2), stW);
-                placeStreet(false, mx - Math.floor(stW / 2), stW);
-
-                // Дополнительный переулок на больших картах
-                if (cols >= 32) {
-                    const secX = mx > cols / 2 ? Math.max(4, mx - 11) : Math.min(cols - 6, mx + 11);
-                    placeStreet(false, secX, 2);
-                }
-
-                // Прямоугольная мощёная площадь в центре перекрёстка
-                const pRx = Math.min(5, Math.max(3, Math.floor(cols * 0.14)));
-                const pRy = Math.min(4, Math.max(2, Math.floor(rows * 0.19)));
-                const px1 = Math.max(2, mx - pRx), px2 = Math.min(cols - 3, mx + pRx);
-                const py1 = Math.max(2, my - pRy), py2 = Math.min(rows - 3, my + pRy);
-                fillRect(px1, py1, px2, py2, T.stone);
-                markOcc(px1, py1, px2, py2, 2);
-
-                const pcx = (px1 + px2 + 1) / 2, pcy = (py1 + py2 + 1) / 2;
-                addObj(P.cityCenter, pcx, pcy, cols >= 26 ? 1.25 : 1.1, 0, 1.9);
-
-                // Фонари по 4 углам площади
-                [[px1 + 0.7, py1 + 0.7], [px2 + 0.3, py1 + 0.7], [px1 + 0.7, py2 + 0.3], [px2 + 0.3, py2 + 0.3]].forEach(([lx, ly]) => {
-                    addObj(P.lamps, lx, ly, 0.85, 0, 0.7);
-                });
-
-                // Прилавки рынка ровно по углам площади (не перекрывая проезд по улицам!)
-                const stallSpots = [
-                    { x: px1 + 1.5, y: py1 + 1.4, rot: 0 }, { x: px2 - 0.5, y: py1 + 1.4, rot: 0 },
-                    { x: px1 + 1.5, y: py2 - 0.4, rot: 0 }, { x: px2 - 0.5, y: py2 - 0.4, rot: 0 }
-                ];
-                stallSpots.forEach(s => {
-                    if (Math.hypot(s.x - pcx, s.y - pcy) > 2.3 && canPlace(s.x, s.y, 1.2)) {
-                        addObj(P.tables, s.x, s.y, 0.88, s.rot, 1.15);
-                        addObj(P.market, s.x + (s.x < pcx ? -0.5 : 0.5), s.y + (s.y < pcy ? 0.55 : -0.55), 0.72, MB_RAND_INT(0, 359), 0);
-                    }
-                });
-
-                // Повозка, едущая РОВНО вдоль горизонтальной улицы!
-                const cartX = mx > cols / 2 ? Math.max(2.5, px1 - 2.6) : Math.min(cols - 2.5, px2 + 2.6);
-                addObj(P.carts, cartX, my + 0.5, 0.96, mx > cols / 2 ? 0 : 180, 1.6);
-
-                packDistrictHouses();
-            }
-
-            // ВАРИАНТ 2: РЕЧНОЙ КВАРТАЛ С КАНАЛОМ И НАБЕРЕЖНЫМИ
-            else if (style === 'canal_city') {
-                genTitle = MB_PICK(['Речной квартал', 'Набережная каналов', 'Мосты Старого города']);
-                const horizCanal = (cols >= rows); // На широких картах канал горизонтальный, дома сверху и снизу
-                const cW = (horizCanal ? rows : cols) >= 18 ? 3 : 2;
-                const pos = horizCanal
-                    ? MB_RAND_INT(Math.floor(rows * 0.38), Math.floor(rows * 0.56))
-                    : MB_RAND_INT(Math.floor(cols * 0.38), Math.floor(cols * 0.56));
-
-                // Каменная набережная + сам канал
-                if (horizCanal) {
-                    fillRect(0, pos - 1, cols - 1, pos + cW, T.flagstone);
-                    fillRect(0, pos, cols - 1, pos + cW - 1, T.water);
-                    markOcc(0, pos - 1, cols - 1, pos + cW, 2);
-
-                    const bridges = cols >= 28
-                        ? [Math.floor(cols * 0.24), Math.floor(cols * 0.52), Math.floor(cols * 0.78)]
-                        : [Math.floor(cols * 0.32), Math.floor(cols * 0.68)];
-                    bridges.forEach(bx => {
-                        placeStreet(false, bx, 2, 0, pos - 1);
-                        placeStreet(false, bx, 2, pos + cW, rows - 1);
-                        placeBridgeStraight(bx + 0.5, pos, bx + 0.5, pos + cW - 1, true);
-                        addObj(P.lamps, bx - 0.5, pos - 0.5, 0.85, 0, 0.7);
-                        addObj(P.lamps, bx + 2.5, pos + cW + 0.5, 0.85, 0, 0.7);
-                    });
-
-                    // Лодки ровно вдоль канала + ящики на набережной
-                    for (let x = 3; x <= cols - 4; x += 8) {
-                        if (bridges.some(bx => Math.abs(bx + 1 - x) < 3.5)) continue;
-                        addObj(P.boats, x, pos + cW / 2, 1.0, MB_PICK([0, 180]), 1.4);
-                        if (canPlace(x, pos - 0.5, 0.9)) addObj(P.crates, x, pos - 0.5, 0.76, 0, 0.7);
-                        if (canPlace(x + 1.2, pos + cW + 0.5, 0.9)) addObj(P.barrels, x + 1.2, pos + cW + 0.5, 0.76, 0, 0.7);
-                    }
-                } else {
-                    fillRect(pos - 1, 0, pos + cW, rows - 1, T.flagstone);
-                    fillRect(pos, 0, pos + cW - 1, rows - 1, T.water);
-                    markOcc(pos - 1, 0, pos + cW, rows - 1, 2);
-
-                    const bridges = [Math.floor(rows * 0.32), Math.floor(rows * 0.68)];
-                    bridges.forEach(by => {
-                        placeStreet(true, by, 2, 0, pos - 1);
-                        placeStreet(true, by, 2, pos + cW, cols - 1);
-                        placeBridgeStraight(pos, by + 0.5, pos + cW - 1, by + 0.5, true);
-                        addObj(P.lamps, pos - 0.5, by - 0.5, 0.85, 0, 0.7);
-                        addObj(P.lamps, pos + cW + 0.5, by + 2.5, 0.85, 0, 0.7);
-                    });
-                    addObj(P.boats, pos + cW / 2, rows / 2, 1.0, 90, 1.4);
-                }
-
-                packDistrictHouses();
-            }
-
-            // ВАРИАНТ 3: ГОРОДСКИЕ ВОРОТА И ПРИГОРОД
-            else {
-                genTitle = MB_PICK(['Городские ворота', 'Застава Столицы', 'Въезд в Притишье']);
-                const cityRight = Math.random() < 0.5;
-                const wallX = cityRight ? Math.floor(cols * MB_RAND_FLOAT(0.34, 0.42)) : Math.floor(cols * MB_RAND_FLOAT(0.56, 0.64));
-                const gateY = MB_RAND_INT(Math.floor(rows * 0.35), Math.floor(rows * 0.65));
-
-                // Пригород за стеной — зелёная трава + грунтовый тракт
-                if (cityRight) {
-                    fillRect(0, 0, wallX - 1, rows - 1, T.grass);
-                    markOcc(0, 0, wallX + 1, rows - 1, 2);
-                    fillRect(0, gateY - 1, wallX - 1, gateY + 1, T.dirt);
-                    placeStreet(true, gateY - 1, 3, wallX, cols - 1);
-                } else {
-                    fillRect(wallX + 2, 0, cols - 1, rows - 1, T.grass);
-                    markOcc(wallX, 0, cols - 1, rows - 1, 2);
-                    fillRect(wallX + 2, gateY - 1, cols - 1, gateY + 1, T.dirt);
-                    placeStreet(true, gateY - 1, 3, 0, wallX + 1);
-                }
-
-                // Внутренняя поперечная улица вдоль стены на расстоянии квартала
-                const innerStX = cityRight ? Math.min(cols - 5, wallX + 7) : Math.max(3, wallX - 7);
-                if (cols >= 24) placeStreet(false, innerStX, 2);
-
-                // Ровная крепостная стена толщиной 2 клетки с широким проездом ворот
-                for (let r = 0; r < rows; r++) {
-                    if (Math.abs(r - gateY) > 1) {
-                        setT(wallX, r, T.wall);
-                        setT(wallX + 1, r, T.wall);
-                    }
-                }
-
-                // Сторожевые башни, флаги и фонари точно у ворот
-                const outSign = cityRight ? -1 : 1;
-                addObj(P.watchpost, wallX + 1.0, Math.max(1.5, gateY - 3.0), 1.08, 0, 1.8);
-                addObj(P.watchpost, wallX + 1.0, Math.min(rows - 1.5, gateY + 3.6), 1.08, 0, 1.8);
-                addObj(P.flags, wallX + (cityRight ? -0.3 : 2.3), Math.max(1.2, gateY - 2.4), 1.0, 0, 0.7);
-                addObj(P.flags, wallX + (cityRight ? -0.3 : 2.3), Math.min(rows - 1.2, gateY + 3.0), 1.0, 0, 0.7);
-                addObj(P.lamps, wallX + (cityRight ? -0.6 : 2.6), gateY - 1.4, 0.85, 0, 0.6);
-                addObj(P.lamps, wallX + (cityRight ? -0.6 : 2.6), gateY + 2.2, 0.85, 0, 0.6);
-
-                // Подъезжающая к воротам повозка с лошадью
-                const cartX = Math.max(2.2, Math.min(cols - 2.2, wallX + outSign * 4.2));
-                const horseX = Math.max(1.2, Math.min(cols - 1.2, cartX - outSign * 2.0));
-                addObj(P.carts, cartX, gateY + 0.5, 0.98, cityRight ? 0 : 180, 1.6);
-                addObj(P.horses, horseX, gateY + 0.5, 0.92, cityRight ? 0 : 180, 1.0);
-
-                // Небольшой колодец внутри города у ворот + плотная застройка городской половины
-                const wellX = cityRight ? Math.min(cols - 3, wallX + 3.8) : Math.max(2.5, wallX - 2.8);
-                const wellY = gateY > rows / 2 ? Math.max(2.5, gateY - 3.5) : Math.min(rows - 2.5, gateY + 3.8);
-                if (getT(Math.floor(wellX), Math.floor(wellY)) === T.cobble) {
-                    addObj('city_well', wellX, wellY, 1.05, 0, 1.5);
-                    markOcc(wellX - 1, wellY - 1, wellX + 1, wellY + 1, 3);
-                }
-
-                packDistrictHouses();
-
-                // Живой пригород снаружи стен (рощи деревьев и кустов, без прилипания к стене)
-                for (let r = 1; r < rows - 1; r++) for (let c = 1; c < cols - 1; c++) {
-                    if (getT(c, r) !== T.grass) continue;
-                    if (Math.abs(c - wallX) <= 2 || Math.abs(c - (wallX + 1)) <= 2) continue;
-                    if (!canPlace(c + 0.5, r + 0.5, 1.75)) continue;
-                    const rnd = Math.random();
-                    if (rnd < 0.18) addObj(P.trees, c + 0.5, r + 0.5, MB_RAND_FLOAT(0.9, 1.25), MB_RAND_INT(0, 359), 1.65);
-                    else if (rnd < 0.28) addObj(P.bushes, c + 0.5, r + 0.5, 0.9, MB_RAND_INT(0, 359), 0.95);
-                    else if (rnd < 0.33) addObj(P.flowers, c + 0.5, r + 0.5, 0.8, MB_RAND_INT(0, 359), 0.7);
-                }
-            }
-        }
-
-        // ============================================================
-        // ❄️ 2. СНЕЖНЫЙ ПЕРЕВАЛ: ПРИРОДНЫЕ СКАЛЫ, ГЛАДКИЕ ТРОПЫ И ЛЁД
-        // ============================================================
-        else if (picked === 'snow') {
-            const style = MB_PICK_NEXT_VARIANT('snow_v5', ['frozen_river_crossing', 'mountain_pass_outpost', 'frozen_lake_ruins']);
-
-            const carveSnowSpline = (p0, p1, radius, tile, opts = {}) => {
-                const bend = (opts.bend !== undefined ? opts.bend : MB_RAND_FLOAT(-0.24, 0.24));
-                const dx = p1.x - p0.x, dy = p1.y - p0.y;
-                const len = Math.max(1, Math.hypot(dx, dy));
-                const nx = -dy / len, ny = dx / len;
-                const ctrl = { x: (p0.x + p1.x) / 2 + nx * len * bend, y: (p0.y + p1.y) / 2 + ny * len * bend };
-                const steps = Math.max(24, Math.ceil(len * 3));
-                const pts = [];
-                for (let i = 0; i <= steps; i++) {
-                    const t = i / steps, u = 1 - t;
-                    const x = u * u * p0.x + 2 * u * t * ctrl.x + t * t * p1.x;
-                    const y = u * u * p0.y + 2 * u * t * ctrl.y + t * t * p1.y;
-                    const tx = 2 * u * (ctrl.x - p0.x) + 2 * t * (p1.x - ctrl.x);
-                    const ty = 2 * u * (ctrl.y - p0.y) + 2 * t * (p1.y - ctrl.y);
-                    const tLen = Math.max(0.01, Math.hypot(tx, ty));
-                    pts.push({ x, y, ux: tx / tLen, uy: ty / tLen, nx: -ty / tLen, ny: tx / tLen });
-
-                    const rr = Math.ceil(radius + 0.5);
-                    for (let dr = -rr; dr <= rr; dr++) for (let dc = -rr; dc <= rr; dc++) {
-                        const cx = Math.floor(x) + dc, cy = Math.floor(y) + dr;
-                        if (!inB(cx, cy)) continue;
-                        if (Math.hypot(cx + 0.5 - x, cy + 0.5 - y) <= radius) {
-                            if (opts.keepWater && isWater(cx, cy)) continue;
-                            if (opts.onlyOn && !opts.onlyOn.includes(getT(cx, cy))) continue;
-                            setT(cx, cy, tile);
-                        }
-                    }
-                }
-                return pts;
-            };
-
-            const autoBridgeSnow = (roadPts, isStone = false) => {
-                const pool = isStone ? P.stoneBridge : P.woodBridge;
-                let inW = false, sIdx = 0;
-                for (let i = 0; i < roadPts.length; i++) {
-                    const pt = roadPts[i];
-                    const wet = isWater(Math.floor(pt.x), Math.floor(pt.y));
-                    if (wet && !inW) { inW = true; sIdx = i; }
-                    else if ((!wet || i === roadPts.length - 1) && inW) {
-                        inW = false;
-                        const a = roadPts[sIdx], b = roadPts[wet ? i : i - 1];
-                        const span = Math.hypot(b.x - a.x, b.y - a.y) + 1.9;
-                        if (span < 1.5) continue;
-                        const deg = Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI;
-                        const segs = Math.max(1, Math.ceil(span / 3.4));
-                        const sc = Math.max(0.76, (span / segs) / 3.45);
-                        for (let s = 0; s < segs; s++) {
-                            const f = (s + 0.5) / segs;
-                            addObj(pool, a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f, sc, deg, 1.45);
-                        }
-                    }
-                }
-            };
-
-            const placeWinterCamp = (cx, cy, bigTent = false) => {
-                paintBlob(cx, cy, 2.7, 2.3, T.dirt, 0.16, [T.snow]);
-                addObj(P.campfires, cx, cy, 1.15, 0, 1.5);
-                const nTents = bigTent ? 2 : MB_RAND_INT(2, 3);
-                const baseAng = MB_RAND_FLOAT(0, 6.28);
-                for (let i = 0; i < nTents; i++) {
-                    const ang = baseAng + (i / nTents) * 6.28 + MB_RAND_FLOAT(-0.25, 0.25);
-                    const tx = cx + Math.cos(ang) * 2.55, ty = cy + Math.sin(ang) * 2.25;
-                    if (!inB(Math.floor(tx), Math.floor(ty)) || isWater(Math.floor(tx), Math.floor(ty))) continue;
-                    if (!canPlace(tx, ty, 1.8)) continue;
-                    const useBig = (i === 0 && bigTent);
-                    addObj(useBig ? P.bigTents : P.tents, tx, ty, useBig ? 0.85 : 1.0, (ang * 180 / Math.PI) + 90, 1.9);
-                }
-                for (let k = 0; k < 3; k++) {
-                    const ang = MB_RAND_FLOAT(0, 6.28);
-                    const px = cx + Math.cos(ang) * MB_RAND_FLOAT(1.4, 2.3);
-                    const py = cy + Math.sin(ang) * MB_RAND_FLOAT(1.3, 2.1);
-                    if (canPlace(px, py, 0.9) && !isWater(Math.floor(px), Math.floor(py))) {
-                        addObj(P.pelts, px, py, 0.92, MB_RAND_INT(0, 359), 0.85);
-                    }
-                }
-            };
-
-            // ВАРИАНТ 1: ЛЕДЯНАЯ ПЕРЕПРАВА И ПРИВАЛ ЭКСПЕДИЦИИ
-            if (style === 'frozen_river_crossing') {
-                genTitle = MB_PICK(['Ледяная переправа', 'Замёрзшая река и привал', 'Мост на Северном тракте']);
-                const verticalRiver = (cols >= rows);
-                const bend = MB_RAND_FLOAT(-0.22, 0.22);
-                const r0 = verticalRiver ? { x: cols * MB_RAND_FLOAT(0.38, 0.62), y: 0 } : { x: 0, y: rows * MB_RAND_FLOAT(0.38, 0.62) };
-                const r1 = verticalRiver ? { x: cols * MB_RAND_FLOAT(0.38, 0.62), y: rows - 1 } : { x: cols - 1, y: rows * MB_RAND_FLOAT(0.38, 0.62) };
-
-                // Широкий замёрзший берег (лёд) + узкая тёмная полынья (вода) по центру русла
-                carveSnowSpline(r0, r1, cols >= 26 ? 2.6 : 2.1, T.ice, { bend });
-                carveSnowSpline(r0, r1, cols >= 26 ? 1.35 : 1.05, T.water, { bend });
-
-                // Плавная снежно-земляная дорога поперёк реки + автоматический мост!
-                const t0 = verticalRiver ? { x: 0, y: rows * MB_RAND_FLOAT(0.30, 0.70) } : { x: cols * MB_RAND_FLOAT(0.30, 0.70), y: 0 };
-                const t1 = verticalRiver ? { x: cols - 1, y: rows * MB_RAND_FLOAT(0.30, 0.70) } : { x: cols * MB_RAND_FLOAT(0.30, 0.70), y: rows - 1 };
-                const roadPts = carveSnowSpline(t0, t1, 1.15, T.dirt, { keepWater: true, bend: MB_RAND_FLOAT(-0.18, 0.18) });
-                autoBridgeSnow(roadPts, Math.random() < 0.45);
-
-                // Повозка на подходе к мосту
-                const cartPt = roadPts[Math.floor(roadPts.length * 0.20)];
-                if (cartPt && !isWater(Math.floor(cartPt.x), Math.floor(cartPt.y))) {
-                    addObj(P.carts, cartPt.x, cartPt.y, 0.96, Math.atan2(cartPt.uy, cartPt.ux) * 180 / Math.PI, 1.6);
-                }
-
-                // Тёплый лагерь экспедиции на сухом снежном берегу
-                for (let tries = 0; tries < 30; tries++) {
-                    const cx = MB_RAND_FLOAT(3.5, cols - 3.5), cy = MB_RAND_FLOAT(3.5, rows - 3.5);
-                    if (getT(Math.floor(cx), Math.floor(cy)) !== T.snow || !canPlace(cx, cy, 4.2)) continue;
-                    const dry = [-2, 0, 2].every(dy => [-2, 0, 2].every(dx => getT(Math.floor(cx) + dx, Math.floor(cy) + dy) === T.snow));
-                    if (!dry) continue;
-                    placeWinterCamp(cx, cy, cols >= 24);
-                    break;
-                }
-            }
-
-            // ВАРИАНТ 2: ГОРНЫЙ ПЕРЕВАЛ И ЗАСТАВА (НАСТОЯЩИЕ СКАЛЫ, НИКАКИХ КИРПИЧНЫХ СТЕН!)
-            else if (style === 'mountain_pass_outpost') {
-                genTitle = MB_PICK(['Горный перевал', 'Северная застава', 'Снежное ущелье']);
-                const horizPass = (cols >= rows);
-                const p0 = horizPass ? { x: 0, y: rows * MB_RAND_FLOAT(0.36, 0.64) } : { x: cols * MB_RAND_FLOAT(0.36, 0.64), y: 0 };
-                const p1 = horizPass ? { x: cols - 1, y: rows * MB_RAND_FLOAT(0.36, 0.64) } : { x: cols * MB_RAND_FLOAT(0.36, 0.64), y: rows - 1 };
-
-                // Прокладываем извилистый горный тракт через перевал
-                const roadPts = carveSnowSpline(p0, p1, 1.25, T.dirt, { bend: MB_RAND_FLOAT(-0.22, 0.22) });
-
-                // Природные скальные гребни по обе стороны перевала (из скал, утёсов и валунов!)
-                const ridgeOffset = Math.max(3.8, Math.min(cols, rows) * 0.34);
-                for (let i = 2; i < roadPts.length - 2; i += 4) {
-                    const pt = roadPts[i];
-                    for (const side of [-1, 1]) {
-                        const rx = pt.x + pt.nx * side * (ridgeOffset + MB_RAND_FLOAT(-0.6, 1.4));
-                        const ry = pt.y + pt.ny * side * (ridgeOffset + MB_RAND_FLOAT(-0.6, 1.4));
-                        if (!inB(Math.floor(rx), Math.floor(ry)) || getT(Math.floor(rx), Math.floor(ry)) !== T.snow) continue;
-                        if (canPlace(rx, ry, 1.7)) {
-                            addObj(P.cliffs, rx, ry, MB_RAND_FLOAT(1.05, 1.45), MB_RAND_INT(0, 359), 1.85);
-                        }
-                    }
-                }
-                // Дополнительная каменная гряда вдоль самых краёв карты
-                for (let c = 1; c < cols - 1; c += 3) {
-                    if (horizPass) {
-                        if (getT(c, 1) === T.snow && canPlace(c + 0.5, 1.2, 1.5)) addObj(P.cliffs, c + 0.5, 1.2, MB_RAND_FLOAT(0.95, 1.3), MB_RAND_INT(0, 359), 1.5);
-                        if (getT(c, rows - 2) === T.snow && canPlace(c + 0.5, rows - 1.2, 1.5)) addObj(P.cliffs, c + 0.5, rows - 1.2, MB_RAND_FLOAT(0.95, 1.3), MB_RAND_INT(0, 359), 1.5);
-                    }
-                }
-
-                // Пограничная застава в самом узком месте перевала
-                const mid = roadPts[Math.floor(roadPts.length * MB_RAND_FLOAT(0.45, 0.58))];
-                const roadDeg = Math.atan2(mid.uy, mid.ux) * 180 / Math.PI;
-                addObj(P.watchpost, mid.x + mid.nx * 2.5, mid.y + mid.ny * 2.5, 1.08, 0, 1.8);
-                addObj(P.flags, mid.x + mid.nx * 1.4, mid.y + mid.ny * 1.4, 1.0, 0, 0.7);
-                addObj(P.barricades, mid.x + mid.ux * 2.2 - mid.nx * 0.9, mid.y + mid.uy * 2.2 - mid.ny * 0.9, 1.05, roadDeg + 90, 1.15);
-                addObj(P.barricades, mid.x + mid.ux * 2.2 + mid.nx * 1.4, mid.y + mid.uy * 2.2 + mid.ny * 1.4, 1.05, roadDeg + 90, 1.15);
-                addObj(P.braziers, mid.x + mid.ux * 1.1 + mid.nx * 1.6, mid.y + mid.uy * 1.1 + mid.ny * 1.6, 0.85, 0, 0.7);
-                addObj(P.braziers, mid.x + mid.ux * 1.1 - mid.nx * 1.6, mid.y + mid.uy * 1.1 - mid.ny * 1.6, 0.85, 0, 0.7);
-
-                // Тёплый лагерь гарнизона за заставой
-                const campX = Math.max(3, Math.min(cols - 3, mid.x - mid.ux * 3.8 - mid.nx * 2.2));
-                const campY = Math.max(3, Math.min(rows - 3, mid.y - mid.uy * 3.8 - mid.ny * 2.2));
-                placeWinterCamp(campX, campY, false);
-            }
-
-            // ВАРИАНТ 3: ЗАМЁРЗШЕЕ ОЗЕРО И ЗАСНЕЖЕННЫЕ ДРЕВНИЕ РУИНЫ
-            else {
-                genTitle = MB_PICK(['Замёрзшее озеро и руины', 'Ледяное святилище', 'Полынья в тундре']);
-                const lx = cols * MB_RAND_FLOAT(0.38, 0.62), ly = rows * MB_RAND_FLOAT(0.38, 0.62);
-                const rx = Math.min(7.5, Math.max(3.6, cols * 0.25)), ry = Math.min(5.2, Math.max(2.8, rows * 0.29));
-                paintBlob(lx, ly, rx, ry, T.ice, 0.18);
-                // 1–2 тёмные полыньи внутри льда
-                paintBlob(lx + MB_RAND_FLOAT(-1.2, 1.2), ly + MB_RAND_FLOAT(-0.8, 0.8), rx * 0.44, ry * 0.42, T.water, 0.16, [T.ice]);
-
-                // Заснеженные руины на одном берегу
-                const rSide = lx > cols / 2 ? -1 : 1;
-                const rX = Math.max(4, Math.min(cols - 4, lx + rSide * (rx + 2.8)));
-                const rY = Math.max(3.5, Math.min(rows - 3.5, ly + MB_RAND_FLOAT(-1.5, 1.5)));
-                paintBlob(rX, rY, 2.8, 2.3, T.flagstone, 0.16, [T.snow]);
-                addObj(P.altars, rX, rY, 1.15, MB_PICK([0, 90, 180, 270]), 1.4);
-                if (canPlace(rX + 1.5, rY - 0.6, 0.8)) addObj(P.chests, rX + 1.5, rY - 0.6, 0.88, 20, 0.85);
-                for (let i = 0; i < 5; i++) {
-                    const ang = (i / 5) * 6.28 + 0.4;
-                    const px = rX + Math.cos(ang) * 2.5, py = rY + Math.sin(ang) * 2.1;
-                    if (inB(Math.floor(px), Math.floor(py)) && canPlace(px, py, 0.9)) {
-                        addObj(i % 2 === 0 ? P.pillars : (Math.random() < 0.5 ? P.ruins : P.iceCrystals), px, py, 0.92, MB_RAND_INT(0, 359), 0.9);
-                    }
-                }
-                addObj(P.braziers, rX - 1.6, rY + 1.2, 0.85, 0, 0.7);
-
-                // Лагерь исследователей на противоположном берегу
-                const cX = Math.max(3.5, Math.min(cols - 3.5, lx - rSide * (rx + 2.6)));
-                const cY = Math.max(3.5, Math.min(rows - 3.5, ly > rows / 2 ? 3.5 : rows - 3.5));
-                if (getT(Math.floor(cX), Math.floor(cY)) === T.snow) placeWinterCamp(cX, cY, false);
-            }
-
-            // Камни в ледяной воде
-            for (let r = 1; r < rows - 1; r++) for (let c = 1; c < cols - 1; c++) {
-                if (isWater(c, r) && canPlace(c + 0.5, r + 0.5, 1.5) && Math.random() < 0.12) {
-                    addObj(P.waterRocks, c + 0.5, r + 0.5, 0.88, MB_RAND_INT(0, 359), 0.9);
-                }
-            }
-
-            // Редкие северные рощи: хвойные деревья, валуны и сухостой строго на снегу
-            const groves = Math.max(4, Math.floor((cols * rows) / 56));
-            for (let g = 0; g < groves; g++) {
-                const gx = MB_RAND_FLOAT(1.5, cols - 1.5), gy = MB_RAND_FLOAT(1.5, rows - 1.5);
-                if (getT(Math.floor(gx), Math.floor(gy)) !== T.snow) continue;
-                for (let k = 0; k < MB_RAND_INT(3, 5); k++) {
-                    const ox = gx + MB_RAND_FLOAT(-2.5, 2.5), oy = gy + MB_RAND_FLOAT(-2.2, 2.2);
-                    if (getT(Math.floor(ox), Math.floor(oy)) !== T.snow || !canPlace(ox, oy, 1.55)) continue;
-                    if (k < 2) addObj(P.trees, ox, oy, MB_RAND_FLOAT(0.85, 1.22), MB_RAND_INT(0, 359), 1.65);
-                    else if (k < 4) addObj(P.snowRocks, ox, oy, MB_RAND_FLOAT(0.82, 1.18), MB_RAND_INT(0, 359), 1.05);
-                    else addObj(P.deadwood, ox, oy, 0.88, MB_RAND_INT(0, 359), 1.0);
-                }
-            }
         }
 
         const titleInp = document.getElementById('mb-map-title-inp');
