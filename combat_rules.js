@@ -1,21 +1,16 @@
 // ================================================================
-// 🧱 НЕПРОХОДИМОСТЬ СТЕН, ЛИМИТ ДВИЖЕНИЯ В БОЮ (ФТ),
-// ДАЛЬНОСТЬ АТАК/ЗАКЛИНАНИЙ И ВЫХОД ИЗ БОЯ (combat_rules.js)
+// 🧱 НЕПРОХОДИМОСТЬ СТЕН, УМНЫЙ ОБХОД ПРОЁМОВ (ПОИСК ПУТИ),
+// ЛИМИТ ДВИЖЕНИЯ В БОЮ (ФТ), ДАЛЬНОСТЬ АТАК И ВЫХОД ИЗ БОЯ (combat_rules.js)
 // ================================================================
 (function INIT_COMBAT_PHYSICS_AND_WALLS() {
     window._gmWallBrushMode = false;
     window._gmWallBrushAction = 'block'; // 'block' | 'erase'
     window._gmWallOverlayVisible = false;
+    window._crDragPath = null;           // { pts: [{x, y}], totalFt } — пунктирный маршрут при перетаскивании
 
     let isPaintingWalls = false;
     let dragStartInfo = null;
     let wallWarningTimer = null;
-
-    function ESC(s) {
-        return String(s || '')
-            .replace(/&/g, '&amp;').replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    }
 
     // --- 1. СЕТКА МАСШТАБА И МАСКА ПРЕПЯТСТВИЙ ---
     function GET_MAP_GRID_DIMS(st) {
@@ -57,42 +52,278 @@
         };
     }
 
-    // Расстояние между двумя точками карты (в футах, 1 клетка = 5 фт)
-    window.CALC_MAP_DISTANCE_FT = function(st, x1Pct, y1Pct, x2Pct, y2Pct) {
+    function CLAMP_INSIDE_CELL(st, c, r, xPct, yPct) {
+        const { cols, rows } = GET_MAP_GRID_DIMS(st);
+        const cellW = 100 / cols;
+        const cellH = 100 / rows;
+        const padX = cellW * 0.16;
+        const padY = cellH * 0.16;
+        const x = Math.max(c * cellW + padX, Math.min((c + 1) * cellW - padX, xPct));
+        const y = Math.max(r * cellH + padY, Math.min((r + 1) * cellH - padY, yPct));
+        return { x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10 };
+    }
+
+    function CALC_EXACT_DIST_FT(st, x1Pct, y1Pct, x2Pct, y2Pct) {
         const { cols, rows } = GET_MAP_GRID_DIMS(st);
         const dx = ((x2Pct - x1Pct) / 100) * cols;
         const dy = ((y2Pct - y1Pct) / 100) * rows;
-        return Math.round(Math.hypot(dx, dy) * 5);
+        return Math.hypot(dx, dy) * 5;
+    }
+
+    // Расстояние между двумя точками карты (в футах, 1 клетка = 5 фт)
+    window.CALC_MAP_DISTANCE_FT = function(st, x1Pct, y1Pct, x2Pct, y2Pct) {
+        return Math.round(CALC_EXACT_DIST_FT(st, x1Pct, y1Pct, x2Pct, y2Pct));
     };
 
-    // Проверка отрезка на пересечение со стеной (возвращает последнюю свободную точку)
-    function TRACE_PATH_AGAINST_WALLS(st, x0, y0, x1, y1) {
-        if (!st || !st.collisionMask || !st.collisionMask.includes('1')) {
-            return { blocked: false, x: x1, y: y1 };
-        }
+    // Проверка, свободен ли отрезок пути от стен (без срезания углов)
+    function IS_MOVE_SEGMENT_CLEAR(st, x0, y0, x1, y1) {
+        if (!st || !st.collisionMask || !st.collisionMask.includes('1')) return true;
         const { cols, rows } = GET_MAP_GRID_DIMS(st);
         const startCell = PCT_TO_CELL(st, x0, y0);
-        const startInsideWall = IS_CELL_BLOCKED(st, startCell.c, startCell.r);
-
+        const startBlocked = IS_CELL_BLOCKED(st, startCell.c, startCell.r);
         const distCells = Math.hypot(((x1 - x0) / 100) * cols, ((y1 - y0) / 100) * rows);
-        const steps = Math.max(10, Math.ceil(distCells * 6));
-        let lastX = x0, lastY = y0;
+        const steps = Math.max(10, Math.ceil(distCells * 8));
+        let prev = startCell;
 
         for (let i = 1; i <= steps; i++) {
             const t = i / steps;
-            const px = x0 + (x1 - x0) * t;
-            const py = y0 + (y1 - y0) * t;
-            const cell = PCT_TO_CELL(st, px, py);
-            const blocked = IS_CELL_BLOCKED(st, cell.c, cell.r);
-
-            // Если фишка случайно оказалась внутри стены — позволяем ей выйти наружу
-            if (blocked && !(startInsideWall && cell.c === startCell.c && cell.r === startCell.r)) {
-                return { blocked: true, x: lastX, y: lastY };
+            const cur = PCT_TO_CELL(st, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t);
+            const curBlocked = IS_CELL_BLOCKED(st, cur.c, cur.r);
+            if (curBlocked && !(startBlocked && cur.c === startCell.c && cur.r === startCell.r)) {
+                return false;
             }
-            lastX = px;
-            lastY = py;
+            if (cur.c !== prev.c && cur.r !== prev.r) {
+                if (IS_CELL_BLOCKED(st, cur.c, prev.r) || IS_CELL_BLOCKED(st, prev.c, cur.r)) {
+                    return false;
+                }
+            }
+            prev = cur;
         }
-        return { blocked: false, x: x1, y: y1 };
+        return true;
+    }
+
+    // Поиск кратчайших путей от стартовой клетки (Дейкстра по 8 направлениям без срезания углов)
+    function BUILD_NAV_FIELD(st, startC, startR) {
+        const { cols, rows } = GET_MAP_GRID_DIMS(st);
+        const total = cols * rows;
+        const dist = new Float32Array(total);
+        const parent = new Int32Array(total);
+        dist.fill(Infinity);
+        parent.fill(-1);
+
+        const sIdx = startR * cols + startC;
+        dist[sIdx] = 0;
+
+        // Бинарная куча [idx, cost]
+        const heap = [[sIdx, 0]];
+        const push = (item) => {
+            heap.push(item);
+            let i = heap.length - 1;
+            while (i > 0) {
+                const p = (i - 1) >> 1;
+                if (heap[p][1] <= heap[i][1]) break;
+                const tmp = heap[p]; heap[p] = heap[i]; heap[i] = tmp;
+                i = p;
+            }
+        };
+        const pop = () => {
+            const top = heap[0];
+            const last = heap.pop();
+            if (heap.length > 0) {
+                heap[0] = last;
+                let i = 0;
+                const len = heap.length;
+                while (true) {
+                    let l = (i << 1) + 1, r = l + 1, best = i;
+                    if (l < len && heap[l][1] < heap[best][1]) best = l;
+                    if (r < len && heap[r][1] < heap[best][1]) best = r;
+                    if (best === i) break;
+                    const tmp = heap[i]; heap[i] = heap[best]; heap[best] = tmp;
+                    i = best;
+                }
+            }
+            return top;
+        };
+
+        const DIRS = [
+            [1, 0, 5], [-1, 0, 5], [0, 1, 5], [0, -1, 5],
+            [1, 1, 7.071], [1, -1, 7.071], [-1, 1, 7.071], [-1, -1, 7.071]
+        ];
+
+        while (heap.length > 0) {
+            const [u, d] = pop();
+            if (d > dist[u]) continue;
+            const uc = u % cols;
+            const ur = (u - uc) / cols;
+
+            for (let k = 0; k < DIRS.length; k++) {
+                const dc = DIRS[k][0], dr = DIRS[k][1], cost = DIRS[k][2];
+                const nc = uc + dc, nr = ur + dr;
+                if (nc < 0 || nc >= cols || nr < 0 || nr >= rows) continue;
+                if (IS_CELL_BLOCKED(st, nc, nr)) continue;
+
+                // По диагонали проходим, только если оба соседних угла свободны (не режем косяки дверей)
+                if (dc !== 0 && dr !== 0) {
+                    if (IS_CELL_BLOCKED(st, uc + dc, ur) || IS_CELL_BLOCKED(st, uc, ur + dr)) continue;
+                }
+
+                const v = nr * cols + nc;
+                const nd = d + cost;
+                if (nd < dist[v]) {
+                    dist[v] = nd;
+                    parent[v] = u;
+                    push([v, nd]);
+                }
+            }
+        }
+
+        return { cols, rows, startC, startR, dist, parent };
+    }
+
+    // Сглаживание маршрута (убирает лишние зигзаги, оставляя чистые повороты в проёмах)
+    function SMOOTH_PATH(st, rawPts) {
+        if (rawPts.length <= 2) return rawPts;
+        const out = [rawPts[0]];
+        let i = 0;
+        while (i < rawPts.length - 1) {
+            let best = i + 1;
+            for (let j = rawPts.length - 1; j > i + 1; j--) {
+                if (IS_MOVE_SEGMENT_CLEAR(st, rawPts[i].x, rawPts[i].y, rawPts[j].x, rawPts[j].y)) {
+                    best = j;
+                    break;
+                }
+            }
+            out.push(rawPts[best]);
+            i = best;
+        }
+        return out;
+    }
+
+    // Обрезка маршрута по остатку движения в бою (в футах)
+    function CLIP_PATH_BY_FT(st, pts, maxFt) {
+        if (!pts.length) return { pts: [], totalFt: 0, clamped: false };
+        const res = [pts[0]];
+        let acc = 0;
+
+        for (let i = 1; i < pts.length; i++) {
+            const a = pts[i - 1], b = pts[i];
+            const segFt = CALC_EXACT_DIST_FT(st, a.x, a.y, b.x, b.y);
+            if (acc + segFt <= maxFt + 0.01) {
+                res.push(b);
+                acc += segFt;
+            } else {
+                const rem = Math.max(0, maxFt - acc);
+                if (segFt > 0.01 && rem > 0.1) {
+                    const ratio = rem / segFt;
+                    const cx = Math.round((a.x + (b.x - a.x) * ratio) * 10) / 10;
+                    const cy = Math.round((a.y + (b.y - a.y) * ratio) * 10) / 10;
+                    const cell = PCT_TO_CELL(st, cx, cy);
+                    if (!IS_CELL_BLOCKED(st, cell.c, cell.r)) {
+                        res.push({ x: cx, y: cy });
+                        acc = maxFt;
+                    }
+                }
+                return { pts: res, totalFt: Math.round(acc), clamped: true };
+            }
+        }
+        return { pts: res, totalFt: Math.round(acc), clamped: false };
+    }
+
+    // Главный расчёт позиции фишки при перетаскивании (с обходом проёмов и скольжением по стене)
+    function RESOLVE_TOKEN_DRAG(st, startInfo, rawX, rawY, maxFt) {
+        const hasWalls = !!(st && st.collisionMask && st.collisionMask.includes('1'));
+        if (!hasWalls) {
+            const clipped = CLIP_PATH_BY_FT(st, [{ x: startInfo.x, y: startInfo.y }, { x: rawX, y: rawY }], maxFt);
+            const end = clipped.pts[clipped.pts.length - 1];
+            return { x: end.x, y: end.y, pts: clipped.pts, totalFt: clipped.totalFt, clamped: clipped.clamped, hitWall: false };
+        }
+
+        const nav = startInfo.nav;
+        const { cols, rows } = nav;
+        const curCell = PCT_TO_CELL(st, rawX, rawY);
+        const curIdx = curCell.r * cols + curCell.c;
+
+        let goalC = curCell.c, goalR = curCell.r;
+        let endPt = { x: rawX, y: rawY };
+        let hitWall = false;
+
+        // Если курсор попал на стену или недостижимую клетку — мягко притягиваем к ближайшей доступной клетке пола
+        if (IS_CELL_BLOCKED(st, curCell.c, curCell.r) || !isFinite(nav.dist[curIdx])) {
+            hitWall = true;
+            let best = null;
+            for (let rad = 1; rad <= 3 && !best; rad++) {
+                for (let dr = -rad; dr <= rad; dr++) {
+                    for (let dc = -rad; dc <= rad; dc++) {
+                        const nc = curCell.c + dc, nr = curCell.r + dr;
+                        if (nc < 0 || nc >= cols || nr < 0 || nr >= rows) continue;
+                        const nIdx = nr * cols + nc;
+                        if (IS_CELL_BLOCKED(st, nc, nr) || !isFinite(nav.dist[nIdx])) continue;
+
+                        const clampedPt = CLAMP_INSIDE_CELL(st, nc, nr, rawX, rawY);
+                        const dCursor = CALC_EXACT_DIST_FT(st, clampedPt.x, clampedPt.y, rawX, rawY);
+                        // Предпочитаем клетки в пределах хода, ближайшие к курсору
+                        const overPenalty = (nav.dist[nIdx] > maxFt + 3) ? 12 : 0;
+                        const score = dCursor + overPenalty;
+                        if (!best || score < best.score) {
+                            best = { c: nc, r: nr, pt: clampedPt, score };
+                        }
+                    }
+                }
+            }
+
+            if (best) {
+                goalC = best.c;
+                goalR = best.r;
+                endPt = best.pt;
+            } else {
+                // Глухая стена без проходов рядом — оставляем в последней валидной точке
+                const fx = startInfo.lastValidX !== undefined ? startInfo.lastValidX : startInfo.x;
+                const fy = startInfo.lastValidY !== undefined ? startInfo.lastValidY : startInfo.y;
+                return {
+                    x: fx, y: fy,
+                    pts: startInfo.lastValidPts || [{ x: startInfo.x, y: startInfo.y }, { x: fx, y: fy }],
+                    totalFt: startInfo.lastValidFt || 0,
+                    clamped: false,
+                    hitWall: true
+                };
+            }
+        } else {
+            // Аккуратно держим точку внутри свободной клетки, чтобы округление не закинуло фишку в соседнюю стену
+            endPt = CLAMP_INSIDE_CELL(st, goalC, goalR, rawX, rawY);
+        }
+
+        // Если прямая линия до целевой точки свободна — идём напрямую
+        let pathPts;
+        if (IS_MOVE_SEGMENT_CLEAR(st, startInfo.x, startInfo.y, endPt.x, endPt.y)) {
+            pathPts = [{ x: startInfo.x, y: startInfo.y }, endPt];
+        } else {
+            // Иначе восстанавливаем маршрут по клеткам через проём и сглаживаем
+            const chain = [];
+            let cur = goalR * cols + goalC;
+            const sIdx = nav.startR * cols + nav.startC;
+            let guard = 0;
+            while (cur !== -1 && cur !== sIdx && guard++ < cols * rows) {
+                const c = cur % cols;
+                const r = (cur - c) / cols;
+                chain.push({ x: ((c + 0.5) / cols) * 100, y: ((r + 0.5) / rows) * 100 });
+                cur = nav.parent[cur];
+            }
+            chain.reverse();
+            const rawPts = [{ x: startInfo.x, y: startInfo.y }].concat(chain);
+            rawPts[rawPts.length - 1] = endPt;
+            pathPts = SMOOTH_PATH(st, rawPts);
+        }
+
+        const clipped = CLIP_PATH_BY_FT(st, pathPts, maxFt);
+        const finalPt = clipped.pts[clipped.pts.length - 1] || { x: startInfo.x, y: startInfo.y };
+        return {
+            x: Math.round(finalPt.x * 10) / 10,
+            y: Math.round(finalPt.y * 10) / 10,
+            pts: clipped.pts,
+            totalFt: clipped.totalFt,
+            clamped: clipped.clamped,
+            hitWall
+        };
     }
 
     // Проверка линии видимости между двумя точками (игнорируем стартовую и конечную клетки)
@@ -111,24 +342,6 @@
             if (IS_CELL_BLOCKED(st, cell.c, cell.r)) return false;
         }
         return true;
-    }
-
-    // Ограничение точки по радиусу оставшегося движения (в футах)
-    function CLAMP_TO_MOVEMENT_FT(st, x0, y0, x1, y1, maxFt) {
-        const { cols, rows } = GET_MAP_GRID_DIMS(st);
-        const dxC = ((x1 - x0) / 100) * cols;
-        const dyC = ((y1 - y0) / 100) * rows;
-        const distFt = Math.hypot(dxC, dyC) * 5;
-        if (distFt <= maxFt || distFt < 0.01) {
-            return { clamped: false, x: x1, y: y1, usedFt: Math.round(distFt) };
-        }
-        const ratio = Math.max(0, maxFt) / distFt;
-        return {
-            clamped: true,
-            x: Math.max(2, Math.min(98, x0 + (x1 - x0) * ratio)),
-            y: Math.max(2, Math.min(98, y0 + (y1 - y0) * ratio)),
-            usedFt: Math.round(Math.max(0, maxFt))
-        };
     }
 
     function SHOW_MAP_RULE_HINT(text, isError = false) {
@@ -161,7 +374,6 @@
             const st = GET_MAP_STATE();
             st.mapCols = mb.cols;
             st.mapRows = mb.rows;
-            // Стены, лава и пропасть — непроходимы; полы, мебель (столы/кровати) и двери — проходимы
             let mask = '';
             for (let i = 0; i < mb.cells.length; i++) {
                 const t = (mb.cells[i] && mb.cells[i].t) ? mb.cells[i].t : '';
@@ -282,6 +494,16 @@
             }
         }
 
+        // В) Пунктирный маршрут движения через проёмы во время перетаскивания фишки
+        if (window._crDragPath && window._crDragPath.pts && window._crDragPath.pts.length >= 2) {
+            const ptsStr = window._crDragPath.pts
+                .map(p => `${(p.x / 100) * w},${(p.y / 100) * h}`)
+                .join(' ');
+            const p0 = window._crDragPath.pts[0];
+            parts.push(`<polyline points="${ptsStr}" fill="none" stroke="#86efac" stroke-width="2.6" stroke-dasharray="6 4" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>`);
+            parts.push(`<circle cx="${(p0.x / 100) * w}" cy="${(p0.y / 100) * h}" r="4" fill="#86efac" opacity="0.85"/>`);
+        }
+
         svg.innerHTML = parts.join('');
     }
 
@@ -320,7 +542,6 @@
         to.turnStartPos = activeTok ? { x: activeTok.x, y: activeTok.y } : null;
     };
 
-    // Если игрок нажал «🏃 Рывок» из tactics.js — реально добавляем его скорость к запасу движения!
     const _ORIG_BASIC_ACT = window.TAC_USE_BASIC_ACTION;
     if (typeof _ORIG_BASIC_ACT === 'function') {
         window.TAC_USE_BASIC_ACTION = function(actId) {
@@ -359,7 +580,6 @@
         if (!item) return { min: 5, max: 5, label: '5 фт', isMelee: true };
         const txt = `${item.name || ''} ${item.properties || ''} ${item.desc || ''}`.toLowerCase();
 
-        // Прямое указание дистанции в свойствах (напр. 80/320 или 20/60)
         const mRange = txt.match(/(\d+)\s*\/\s*(\d+)/);
         if (mRange) {
             const norm = parseInt(mRange[1], 10);
@@ -400,7 +620,6 @@
         if (!myTok || !targetTok || myTok === targetTok) return { ok: true, distFt: 0 };
 
         const distFt = window.CALC_MAP_DISTANCE_FT(st, myTok.x, myTok.y, targetTok.x, targetTok.y);
-        // +2.5 фт допуска на диагонали и центры фишек (соседняя клетка по диагонали = 7.07 фт -> считается в пределах 5 фт)
         if (distFt > rangeFt + 2.5) {
             return {
                 ok: false,
@@ -418,7 +637,6 @@
         return { ok: true, distFt };
     }
 
-    // Оборачиваем боевые атаки с проверкой дистанции и стен
     const _ORIG_USE_WEP = window.BG3_PLAYER_USE_WEAPON;
     if (typeof _ORIG_USE_WEP === 'function') {
         window.BG3_PLAYER_USE_WEAPON = function(invIdx) {
@@ -499,7 +717,6 @@
         c.inCombat = false;
         SC(cs);
 
-        // Если никто в комнате больше не в бою — выключаем ленту инициативы
         const rc = (typeof GET_ACTIVE_ROOM_CODE === 'function') ? GET_ACTIVE_ROOM_CODE() : null;
         const partyIdx = (typeof GET_ROOM_PARTY_INDICES === 'function') ? GET_ROOM_PARTY_INDICES(rc) : cs.map((_, i) => i);
         const anyoneFighting = partyIdx.some(i => {
@@ -548,7 +765,6 @@
         RENDER_MAP_AREA();
     };
 
-    // Показываем дистанцию в окне Внезапной атаки
     const _ORIG_OPEN_AMBUSH_CR = window.OPEN_AMBUSH_MODAL;
     if (typeof _ORIG_OPEN_AMBUSH_CR === 'function') {
         window.OPEN_AMBUSH_MODAL = function() {
@@ -579,7 +795,6 @@
         };
     }
 
-    // Инициализируем движение при старте внезапной атаки
     ['START_PLAYER_AMBUSH_TOKEN', 'START_PLAYER_AMBUSH'].forEach(fnName => {
         const orig = window[fnName];
         if (typeof orig !== 'function') return;
@@ -600,7 +815,7 @@
         };
     });
 
-    // --- 7. ПЕРЕХВАТ ПЕРЕТАСКИВАНИЯ ФИШЕК (СТЕНЫ + ЛИМИТ ДВИЖЕНИЯ В БОЮ) ---
+    // --- 7. ПЕРЕХВАТ ПЕРЕТАСКИВАНИЯ ФИШЕК (УМНЫЙ ОБХОД ПРОЁМОВ + ЛИМИТ ДВИЖЕНИЯ) ---
     const _ORIG_START_DRAG_CR = window.START_DRAG_MAP_OBJ;
     if (typeof _ORIG_START_DRAG_CR === 'function') {
         window.START_DRAG_MAP_OBJ = function(type, index, domId) {
@@ -625,7 +840,20 @@
                     }
                 }
                 if (tok) {
-                    dragStartInfo = { x: tok.x, y: tok.y, index };
+                    const sCell = PCT_TO_CELL(st, tok.x, tok.y);
+                    const nav = (st.collisionMask && st.collisionMask.includes('1'))
+                        ? BUILD_NAV_FIELD(st, sCell.c, sCell.r)
+                        : null;
+                    dragStartInfo = {
+                        x: tok.x,
+                        y: tok.y,
+                        index,
+                        nav,
+                        lastValidX: tok.x,
+                        lastValidY: tok.y,
+                        lastValidPts: [{ x: tok.x, y: tok.y }],
+                        lastValidFt: 0
+                    };
                 }
             } else {
                 dragStartInfo = null;
@@ -641,7 +869,6 @@
         const isGM = sess && sess.role === 'gm';
         const isPlayer = sess && sess.role === 'player';
 
-        // 1. Кисть стен для ГМ
         const origDown = mapArea.onmousedown;
         mapArea.onmousedown = function(e) {
             if (isGM && window._gmWallBrushMode) {
@@ -655,7 +882,6 @@
             if (origDown) return origDown.call(this, e);
         };
 
-        // 2. Перетаскивание фишки с учётом стен и запаса движения
         const origMove = mapArea.onmousemove;
         mapArea.onmousemove = function(e) {
             if (isGM && window._gmWallBrushMode && isPaintingWalls) {
@@ -666,40 +892,40 @@
             if (isPlayer && window._draggingMapObj && window._draggingMapObj.type === 'token' && dragStartInfo) {
                 const vp = document.getElementById('map-viewport') || mapArea;
                 const rect = vp.getBoundingClientRect();
-                let xPct = Math.max(2, Math.min(98, Math.round(((e.clientX - rect.left) / Math.max(1, rect.width)) * 1000) / 10));
-                let yPct = Math.max(2, Math.min(98, Math.round(((e.clientY - rect.top) / Math.max(1, rect.height)) * 1000) / 10));
+                const rawX = Math.max(2, Math.min(98, ((e.clientX - rect.left) / Math.max(1, rect.width)) * 100));
+                const rawY = Math.max(2, Math.min(98, ((e.clientY - rect.top) / Math.max(1, rect.height)) * 100));
 
                 const st = GET_MAP_STATE();
                 const cs = GC();
                 const inCombat = !!(cs[PI] && cs[PI].inCombat && st.turnOrder && st.turnOrder.active);
-                let moveLeft = 9999;
-                if (inCombat) {
-                    const to = window.ENSURE_TURN_STATE(st);
-                    moveLeft = Math.max(0, to.moveLeft ?? 0);
-                    const cl = CLAMP_TO_MOVEMENT_FT(st, dragStartInfo.x, dragStartInfo.y, xPct, yPct, moveLeft);
-                    xPct = cl.x;
-                    yPct = cl.y;
-                }
+                const to = inCombat ? window.ENSURE_TURN_STATE(st) : null;
+                const moveLeft = inCombat ? Math.max(0, to.moveLeft ?? 0) : 9999;
 
-                const traced = TRACE_PATH_AGAINST_WALLS(st, dragStartInfo.x, dragStartInfo.y, xPct, yPct);
-                xPct = Math.round(traced.x * 10) / 10;
-                yPct = Math.round(traced.y * 10) / 10;
+                const resolved = RESOLVE_TOKEN_DRAG(st, dragStartInfo, rawX, rawY, moveLeft);
+
+                dragStartInfo.lastValidX = resolved.x;
+                dragStartInfo.lastValidY = resolved.y;
+                dragStartInfo.lastValidPts = resolved.pts;
+                dragStartInfo.lastValidFt = resolved.totalFt;
 
                 const el = document.getElementById(window._draggingMapObj.domId);
                 if (el) {
-                    el.style.left = xPct + '%';
-                    el.style.top = yPct + '%';
+                    el.style.left = resolved.x + '%';
+                    el.style.top = resolved.y + '%';
                 }
-                window._draggingMapObj.lastX = xPct;
-                window._draggingMapObj.lastY = yPct;
+                window._draggingMapObj.lastX = resolved.x;
+                window._draggingMapObj.lastY = resolved.y;
+                window._draggingMapObj.walkedFt = resolved.totalFt;
                 window._draggingMapObj.moved = true;
 
-                const stepFt = window.CALC_MAP_DISTANCE_FT(st, dragStartInfo.x, dragStartInfo.y, xPct, yPct);
-                if (traced.blocked) {
-                    SHOW_MAP_RULE_HINT('🧱 Непроходимая стена!', true);
-                } else if (inCombat) {
-                    const rem = Math.max(0, moveLeft - stepFt);
-                    SHOW_MAP_RULE_HINT(`👣 Шаг: −${stepFt} фт | Останется: ${rem} фт`);
+                window._crDragPath = { pts: resolved.pts, totalFt: resolved.totalFt };
+                DRAW_WALL_OVERLAY_AND_MOVE_RING();
+
+                if (inCombat) {
+                    const rem = Math.max(0, moveLeft - resolved.totalFt);
+                    SHOW_MAP_RULE_HINT(`👣 Путь: ${resolved.totalFt} фт | Останется: ${rem} фт${resolved.clamped ? ' (предел хода)' : ''}`);
+                } else if (resolved.hitWall && resolved.totalFt === 0) {
+                    SHOW_MAP_RULE_HINT('🧱 Непроходимая стена', true);
                 }
                 return;
             }
@@ -718,15 +944,19 @@
             const snapDrag = wasPlayerTokDrag ? Object.assign({}, window._draggingMapObj) : null;
             const snapStart = dragStartInfo ? Object.assign({}, dragStartInfo) : null;
             dragStartInfo = null;
+            window._crDragPath = null;
 
             if (origUp) origUp.call(this, e);
+            DRAW_WALL_OVERLAY_AND_MOVE_RING();
 
             if (wasPlayerTokDrag && snapDrag && snapStart) {
                 const st = GET_MAP_STATE();
                 const cs = GC();
                 if (cs[PI] && cs[PI].inCombat && st.turnOrder && st.turnOrder.active) {
                     const to = window.ENSURE_TURN_STATE(st);
-                    const movedFt = window.CALC_MAP_DISTANCE_FT(st, snapStart.x, snapStart.y, snapDrag.lastX, snapDrag.lastY);
+                    const movedFt = (snapDrag.walkedFt !== undefined)
+                        ? snapDrag.walkedFt
+                        : window.CALC_MAP_DISTANCE_FT(st, snapStart.x, snapStart.y, snapDrag.lastX, snapDrag.lastY);
                     to.moveLeft = Math.max(0, (to.moveLeft ?? 0) - movedFt);
                     SAVE_MAP_STATE(st);
                     RENDER_MAP_AREA();
@@ -735,7 +965,13 @@
         };
     }
 
-    window.addEventListener('mouseup', () => { isPaintingWalls = false; });
+    window.addEventListener('mouseup', () => {
+        isPaintingWalls = false;
+        if (window._crDragPath) {
+            window._crDragPath = null;
+            DRAW_WALL_OVERLAY_AND_MOVE_RING();
+        }
+    });
 
     // --- 8. ХУКИ В RENDER_MAP_AREA И БОЕВОЙ HUD ---
     const _ORIG_RENDER_MAP_CR = window.RENDER_MAP_AREA;
@@ -747,7 +983,6 @@
         const sess = GET_SESSION();
         const isGM = sess && sess.role === 'gm';
 
-        // Кнопка «🧱 Стены» и пресеты масштаба в нижней панели тактики для Мастера
         const tacBar = document.getElementById('tactics-map-toolbar');
         if (tacBar && isGM) {
             const firstRow = tacBar.firstElementChild;
@@ -783,7 +1018,6 @@
             }
         }
 
-        // Быстрая кнопка «🕊️ Завершить бой» для Мастера на ленте инициативы
         const ribbon = document.getElementById('bg3-initiative-ribbon');
         if (ribbon && isGM && !ribbon.querySelector('[data-cr-gm-end]')) {
             const endBtn = document.createElement('button');
@@ -817,7 +1051,6 @@
             const activeTok = tokens.length ? tokens[(to.currentIdx || 0) % tokens.length] : null;
             const isMyTurn = !tokens.length || (activeTok && activeTok.isPlayer && activeTok.charIdx === PI);
 
-            // 1. Защита чужого хода + кнопка «↩️ Отменить шаг» + «🏃 Выйти из боя»
             const nextBtn = hud.querySelector('button[onclick="GM_NEXT_TURN()"]');
             if (nextBtn) {
                 if (!isMyTurn) {
@@ -846,7 +1079,6 @@
                 }
             }
 
-            // 2. Показываем счётчик движения «👣 30 / 30 фт» в строке статуса хода
             if (isMyTurn) {
                 const statusRow = hud.querySelector('span[style*="#4cd964"]')?.parentElement;
                 if (statusRow && !statusRow.querySelector('[data-cr-move-pill]')) {
@@ -858,7 +1090,6 @@
                 }
             }
 
-            // 3. Добавляем расстояние в футах на каждую кнопку цели
             if (myTok) {
                 hud.querySelectorAll('button[onclick*="window._bg3SelectedTargetIdx="]').forEach(btn => {
                     const m = (btn.getAttribute('onclick') || '').match(/_bg3SelectedTargetIdx=(\d+)/);
@@ -874,7 +1105,6 @@
                     btn.appendChild(tag);
                 });
 
-                // 4. Помечаем на кнопках оружия/заклинаний, если выбранная цель вне дальности
                 const targetTok = tokens[window._bg3SelectedTargetIdx];
                 if (targetTok && targetTok !== myTok) {
                     const distFt = window.CALC_MAP_DISTANCE_FT(st, myTok.x, myTok.y, targetTok.x, targetTok.y);
