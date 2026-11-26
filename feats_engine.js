@@ -1710,6 +1710,102 @@
             }).join('');
         };
     }
+    
+    // Д) Возвращаем кнопку «Применить» ВСЕМ заклинаниям в АиЗ (врождённым, заговорам и 1–9 кругу)
+    const _ORIG_OAT_APPLY = window.OAT;
+    if (typeof _ORIG_OAT_APPLY === 'function') {
+        window.OAT = function() {
+            _ORIG_OAT_APPLY();
+            const cont = document.getElementById('attacks-content');
+            const c = GC()[PI];
+            if (!cont || !c) return;
+
+            // 1. Врождённые (от расы) — добавляем кнопку «Применить» с учётом 1/день
+            const rs = (typeof RSP === 'function') ? RSP(c) : [];
+            const usedMap = c.usedSpells || {};
+            rs.forEach((s, rIdx) => {
+                const descEl = cont.querySelector('#racial_desc_' + rIdx);
+                const itemCard = descEl ? descEl.closest('.spell-item') : null;
+                if (!itemCard || itemCard.querySelector('[data-oat-racial-btn]')) return;
+
+                const headerEl = itemCard.firstElementChild;
+                if (!headerEl) return;
+                const cleanName = s.replace(' (1/день)', '');
+                const isOnce = s.includes('/день');
+                const spent = isOnce && (usedMap[s] || usedMap[cleanName]);
+
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; gap:8px;';
+                headerEl.style.flex = '1';
+                headerEl.before(row);
+                row.appendChild(headerEl);
+
+                const btn = document.createElement('button');
+                btn.className = 'btn-cast';
+                btn.setAttribute('data-oat-racial-btn', '1');
+                btn.style.cssText = 'padding:4px 10px; flex-shrink:0;';
+                if (spent) {
+                    btn.disabled = true;
+                    btn.style.opacity = '0.5';
+                    btn.textContent = 'Использовано';
+                } else {
+                    btn.textContent = 'Применить';
+                    btn.onclick = (e) => { e.stopPropagation(); CSP(s); };
+                }
+                row.appendChild(btn);
+            });
+
+            // 2. Все заговоры и заклинания 1–9 круга — меняем заглушку «Боевое (на панели боя)» на «Применить»
+            cont.querySelectorAll('.spell-item').forEach(card => {
+                const stub = Array.from(card.querySelectorAll('span')).find(sp => sp.textContent.includes('Боевое (на панели боя)'));
+                if (!stub) return;
+                const nameEl = card.querySelector('b');
+                if (!nameEl) return;
+                const spName = nameEl.textContent.trim();
+                const btn = document.createElement('button');
+                btn.className = 'btn-cast';
+                btn.style.cssText = 'padding:4px 10px; flex-shrink:0;';
+                btn.textContent = 'Применить';
+                btn.onclick = (e) => { e.stopPropagation(); CAST_SPELL(spName); };
+                stub.replaceWith(btn);
+            });
+        };
+    }
+
+    // Разрешаем применять любые заклинания (и врождённые) из АиЗ в том числе вне боя
+    const _ORIG_CSP_FREE = window.CSP;
+    if (typeof _ORIG_CSP_FREE === 'function') {
+        window.CSP = function(sn) {
+            const cs = GC(), c = cs[PI];
+            if (!c) return;
+            const wasInCombat = !!c.inCombat;
+            if (!wasInCombat) { c.inCombat = true; SC(cs); }
+            try { return _ORIG_CSP_FREE(sn); }
+            finally {
+                if (!wasInCombat) {
+                    const fCs = GC();
+                    if (fCs[PI]) { fCs[PI].inCombat = false; SC(fCs); }
+                }
+            }
+        };
+    }
+
+    const _ORIG_CAST_FREE = window.CAST_SPELL;
+    if (typeof _ORIG_CAST_FREE === 'function') {
+        window.CAST_SPELL = function(spellName) {
+            const cs = GC(), c = cs[PI];
+            if (!c || window._castingFromBg3Hud) return _ORIG_CAST_FREE(spellName);
+            const wasInCombat = !!c.inCombat;
+            if (!wasInCombat) { c.inCombat = true; SC(cs); }
+            try { return _ORIG_CAST_FREE(spellName); }
+            finally {
+                if (!wasInCombat) {
+                    const fCs = GC();
+                    if (fCs[PI]) { fCs[PI].inCombat = false; SC(fCs); }
+                }
+            }
+        };
+    }
 
     const oldBtn = document.getElementById('feats-utility-left-btn');
     if (oldBtn) oldBtn.remove();
