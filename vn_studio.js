@@ -1,6 +1,6 @@
 // ================================================================
-// 🎭 ВИЗУАЛЬНАЯ НОВЕЛЛА NPC И МАСТЕРСКАЯ NPC v2 (vn_studio.js)
-// Чистая сцена на карте • Пульт управления под картой • Карточка + 3-вкладочный редактор
+// 🎭 ВИЗУАЛЬНАЯ НОВЕЛЛА NPC И МАСТЕРСКАЯ NPC v2.1 (vn_studio.js)
+// Все обработчики на window • Чистая сцена на карте • Пульт под картой
 // ================================================================
 (function INIT_VN_STUDIO_V2() {
     const FB_ROOMS_URL = "https://dnds-23b7d-default-rtdb.firebaseio.com/campaign_v2/rooms";
@@ -36,7 +36,7 @@
         attFilter: 'all',
         selectedId: null,
         previewEmo: 'neutral',
-        editMode: false,            // false = чистая карточка NPC, true = редактор с 3 вкладками
+        editMode: false,
         editTab: 'main',            // 'main' | 'art' | 'dialog'
         editArtEmo: 'neutral',
         draft: null,
@@ -62,19 +62,19 @@
         return emos[emotionId] || emos.neutral || npc.avatar || '';
     }
 
-    // Аккуратный тёмно-фэнтезийный силуэт (вместо жёлтого смайлика, пока не загружен арт)
     function BUILD_SILHOUETTE_SVG(accentColor, sizePx = 110) {
         const col = accentColor || '#c9a96e';
+        const gid = 'vnSilG_' + col.replace('#', '');
         return `
             <svg width="${sizePx}" height="${Math.round(sizePx * 1.15)}" viewBox="0 0 120 138" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block; filter:drop-shadow(0 6px 16px rgba(0,0,0,0.8));">
                 <defs>
-                    <linearGradient id="vnSilG_${col.replace('#','')}" x1="60" y1="8" x2="60" y2="134" gradientUnits="userSpaceOnUse">
+                    <linearGradient id="${gid}" x1="60" y1="8" x2="60" y2="134" gradientUnits="userSpaceOnUse">
                         <stop offset="0%" stop-color="#302b25"/>
                         <stop offset="100%" stop-color="#171512"/>
                     </linearGradient>
                 </defs>
                 <path d="M60 12C43 12 31 24 31 41C31 53 38 63 46 67C28 73 14 91 12 128C12 132 15 134 19 134H101C105 134 108 132 108 128C106 91 92 73 74 67C82 63 89 53 89 41C89 24 77 12 60 12Z"
-                      fill="url(#vnSilG_${col.replace('#','')})" stroke="${col}" stroke-width="2.2" stroke-opacity="0.72"/>
+                      fill="url(#${gid})" stroke="${col}" stroke-width="2.2" stroke-opacity="0.72"/>
                 <path d="M40 72L60 92L80 72" stroke="${col}" stroke-width="1.6" stroke-opacity="0.45" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>`;
     }
@@ -88,9 +88,8 @@
             document.head.appendChild(st);
         }
         st.textContent = `
-            /* Сцена Визуальной Новеллы поверх карты (чистая, без завалов кнопками) */
             .vn-stage {
-                position: absolute; inset: 0; z-index: 15;
+                position: absolute; inset: 0; z-index: 16;
                 display: flex; flex-direction: column; justify-content: flex-end;
                 overflow: hidden;
                 background: radial-gradient(circle at 50% 30%, rgba(18,16,14,0.42) 0%, rgba(10,9,8,0.86) 100%);
@@ -166,7 +165,6 @@
                 display: flex; flex-direction: column; padding: 14px 18px; text-align: left;
             }
 
-            /* Пульт сцены под картой (чистый, просторный, в палитре сайта) */
             #vn-dock-panel {
                 margin-top: 12px;
                 background: var(--ui-panel2, #161412);
@@ -202,7 +200,6 @@
                 font-weight: 700 !important;
             }
 
-            /* Мастерская NPC (Карточка + 3-вкладочный редактор) */
             .vns-layout {
                 display: grid; grid-template-columns: 270px 1fr; gap: 14px;
                 height: 62vh; min-height: 430px;
@@ -240,9 +237,7 @@
                 border-color: var(--ui-accent, #d2b278) !important;
                 box-shadow: inset 3px 0 0 var(--ui-accent, #d2b278) !important;
             }
-            .vns-emo-grid {
-                display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
-            }
+            .vns-emo-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
             .vns-emo-card {
                 background: var(--ui-panel, #221f1c);
                 border: 1px solid var(--ui-border, #3e372f);
@@ -339,7 +334,7 @@
                 body: scene ? JSON.stringify(scene) : undefined
             }).catch(() => {});
         }
-        RENDER_VN_STAGE_AND_DOCK();
+        window.RENDER_VN_STAGE_AND_DOCK();
     }
 
     function SYNC_VN_FOR_ROOM(roomCode) {
@@ -356,7 +351,7 @@
         window._vnUi.draft = null;
         if (typeTimer) { clearInterval(typeTimer); typeTimer = null; }
 
-        if (!nextRc) { RENDER_VN_STAGE_AND_DOCK(); return; }
+        if (!nextRc) { window.RENDER_VN_STAGE_AND_DOCK(); return; }
 
         fetch(`${FB_ROOMS_URL}/${encodeURIComponent(nextRc)}/vn_studio.json`)
             .then(r => r.ok ? r.json() : null)
@@ -369,7 +364,7 @@
                     if (mig.length && IS_GM()) SAVE_STUDIO_NPCS(mig, nextRc);
                 }
                 window._vnSceneCache[nextRc] = (data && data.scene && data.scene.active) ? data.scene : null;
-                RENDER_VN_STAGE_AND_DOCK();
+                window.RENDER_VN_STAGE_AND_DOCK();
             })
             .catch(() => {});
 
@@ -385,16 +380,16 @@
                     const val = snap.val();
                     if (val) window._vnNpcsCache[nextRc] = NORMALIZE_NPCS(val);
                     if (document.getElementById('vn-studio-modal-marker') && !window._vnUi.editMode) {
-                        RENDER_NPC_STUDIO_MODAL();
+                        window.RENDER_NPC_STUDIO_MODAL();
                     }
-                    RENDER_VN_STAGE_AND_DOCK();
+                    window.RENDER_VN_STAGE_AND_DOCK();
                 });
 
                 sceneRef.on('value', (snap) => {
                     if (activeRoom !== nextRc) return;
                     const val = snap.val();
                     window._vnSceneCache[nextRc] = (val && val.active) ? val : null;
-                    RENDER_VN_STAGE_AND_DOCK();
+                    window.RENDER_VN_STAGE_AND_DOCK();
                 });
                 return true;
             }
@@ -534,6 +529,7 @@
         scene.choices.push(val);
         if (inp) inp.value = '';
         SAVE_LIVE_SCENE(scene);
+        setTimeout(() => document.getElementById('vn-gm-choice-inp')?.focus(), 20);
     };
 
     window.VN_GM_REMOVE_LIVE_CHOICE = function(idx) {
@@ -593,10 +589,10 @@
     window.VN_TOGGLE_INSTANT_TEXT = function() {
         window._vnUi.instantText = !window._vnUi.instantText;
         localStorage.setItem('dnd_vn_instant_text', window._vnUi.instantText ? '1' : '0');
-        RENDER_VN_STAGE_AND_DOCK();
+        window.RENDER_VN_STAGE_AND_DOCK();
     };
 
-    // --- 4. ОТРИСОВКА ЧИСТОЙ СЦЕНЫ НА КАРТЕ + УДОБНОГО ПУЛЬТА ПОД КАРТОЙ ---
+    // --- 4. ОТРИСОВКА СЦЕНЫ НА КАРТЕ + ПУЛЬТА ПОД КАРТОЙ (НА WINDOW!) ---
     function RUN_TYPEWRITER(elId, fullText, stampKey, quoteWrap) {
         if (typeTimer) { clearInterval(typeTimer); typeTimer = null; }
         const el = document.getElementById(elId); if (!el) return;
@@ -619,14 +615,13 @@
         el.onclick = () => { if (typeTimer) { clearInterval(typeTimer); typeTimer = null; el.textContent = formatted; } };
     }
 
-    function RENDER_VN_STAGE_AND_DOCK() {
+    window.RENDER_VN_STAGE_AND_DOCK = function() {
         ENSURE_VN_CSS();
         const mapArea = document.getElementById('map-area');
         if (!mapArea) return;
         const mapPanel = mapArea.parentElement;
         const gmMapBtns = document.getElementById('gm-map-edit-btn-wrap');
 
-        // Сохраняем текст и фокус ввода в пульте под картой
         const prevGmVal = document.getElementById('vn-gm-live-input')?.value || '';
         const prevPlVal = document.getElementById('vn-pl-live-input')?.value || '';
         const prevChVal = document.getElementById('vn-gm-choice-inp')?.value || '';
@@ -653,14 +648,14 @@
         const isNarrator = (scene.speakMode === 'narrator' || scene.activeSlot === 'narrator');
         const isLeftOut = (!isGM && Array.isArray(scene.leftPlayers) && scene.leftPlayers.includes(myIdx));
 
-        // Если сцена свёрнута к карте или игрок отошёл — показываем компактную полоску и возвращаем кнопки карты
         if (isLeftOut || window._vnUi.minimized) {
             if (oldDock) oldDock.remove();
             if (gmMapBtns && isGM) gmMapBtns.style.display = 'block';
 
             const mini = document.createElement('div');
             mini.id = 'vn-mini-bar';
-            mini.style.cssText = 'position:absolute; top:10px; left:50%; transform:translateX(-50%); z-index:16; background:rgba(18,16,14,0.95); border:1px solid #c9a96e; border-radius:20px; padding:5px 14px; display:flex; align-items:center; gap:10px; box-shadow:0 6px 20px rgba(0,0,0,0.8);';
+            mini.style.cssText = 'position:absolute; top:10px; left:50%; transform:translateX(-50%); z-index:17; background:rgba(18,16,14,0.95); border:1px solid #c9a96e; border-radius:20px; padding:5px 14px; display:flex; align-items:center; gap:10px; box-shadow:0 6px 20px rgba(0,0,0,0.8);';
+            mini.onmousedown = e => e.stopPropagation();
             mini.onclick = e => e.stopPropagation();
             mini.innerHTML = `
                 <span style="color:#e6c88c; font-size:0.84rem; font-weight:600;">🎭 ${isLeftOut ? 'Идёт диалог:' : 'Диалог свёрнут:'} ${ESC(activeNpc ? activeNpc.name : 'NPC')}</span>
@@ -670,10 +665,8 @@
             return;
         }
 
-        // Пока новелла развёрнута — прячем кнопки редактирования карты, на их место встаёт пульт сцены
         if (gmMapBtns && isGM) gmMapBtns.style.display = 'none';
 
-        // 1. ЧИСТАЯ СЦЕНА НА КАРТЕ
         const renderActor = (npc, slotObj, slotName) => {
             if (!npc || !slotObj) return '';
             const emo = GET_EMO(slotObj.emotion);
@@ -710,7 +703,7 @@
         if (window._vnUi.historyOpen) {
             const hist = Array.isArray(scene.history) ? scene.history : [];
             historyHTML = `
-                <div class="vn-history-overlay" onclick="event.stopPropagation();">
+                <div class="vn-history-overlay" onmousedown="event.stopPropagation();" onclick="event.stopPropagation();">
                     <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid rgba(255,255,255,0.12); padding-bottom:8px; margin-bottom:10px;">
                         <b style="color:#e6c88c; font-size:1rem;">📜 История диалога (${hist.length})</b>
                         <button data-custom-bg="1" class="vn-glass-btn" onclick="window._vnUi.historyOpen=false; RENDER_VN_STAGE_AND_DOCK();">✕ К сцене</button>
@@ -738,6 +731,7 @@
         const stage = document.createElement('div');
         stage.id = 'vn-stage-root';
         stage.className = 'vn-stage';
+        stage.onmousedown = e => e.stopPropagation();
         stage.onclick = e => e.stopPropagation();
         stage.ondblclick = e => e.stopPropagation();
 
@@ -781,7 +775,7 @@
             if (sc) sc.scrollTop = sc.scrollHeight;
         }
 
-        // 2. ПУЛЬТ УПРАВЛЕНИЯ ПОД КАРТОЙ (РАЗНЫЙ ДЛЯ ИГРОКА И ГМ)
+        // Пульт управления под картой
         let dock = oldDock;
         if (!dock && mapPanel) {
             dock = document.createElement('div');
@@ -793,7 +787,7 @@
         if (!isGM) {
             const choicesBtns = (scene.choices || []).map(ch => {
                 const isLeave = /^(уйти|отойти|покинуть|закончить)/i.test(ch.trim());
-                return `<button data-custom-bg="1" class="vn-soft-btn ${isLeave ? '' : ''}" style="${isLeave ? 'border-color:#9e5858 !important; color:#f2b8b8 !important;' : ''}" onclick="VN_PLAYER_SEND_REPLY('${ESC_JS(ch)}', false)">${isLeave ? '🚪 ' : '💬 '}${ESC(ch)}</button>`;
+                return `<button data-custom-bg="1" class="vn-soft-btn" style="${isLeave ? 'border-color:#9e5858 !important; color:#f2b8b8 !important;' : ''}" onclick="VN_PLAYER_SEND_REPLY('${ESC_JS(ch)}', false)">${isLeave ? '🚪 ' : '💬 '}${ESC(ch)}</button>`;
             }).join('');
 
             dock.innerHTML = `
@@ -821,7 +815,7 @@
                     <span style="font-size:0.8rem; color:var(--ui-muted,#aaa);">Добавить вторым в кадр:</span>
                     ${otherNpcs.length
                         ? otherNpcs.map(n => `<button data-custom-bg="1" class="vn-soft-btn" onclick="VN_ADD_SECOND_NPC_TO_SCENE('${ESC_JS(n.id)}')">+ ${ESC(n.name)}</button>`).join('')
-                        : `<small style="color:var(--ui-muted,#888);">Создайте ещё одного NPC в Каталоге</small>`}
+                        : `<small style="color:var(--ui-muted,#888);">Создайте ещё одного NPC в «🎭 Все NPC»</small>`}
                     <button data-custom-bg="1" class="vn-soft-btn" style="margin-left:auto;" onclick="window._vnUi.gmSecondPickerOpen=false; RENDER_VN_STAGE_AND_DOCK();">✕</button>
                 </div>` : '';
 
@@ -847,7 +841,6 @@
                 </div>` : '';
 
             dock.innerHTML = `
-                <!-- Строка 1: Кто говорит + 2-й NPC + Эмоция -->
                 <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
                     <div style="display:flex; gap:5px; flex-wrap:wrap; align-items:center;">
                         ${leftNpc ? `<button data-custom-bg="1" class="vn-soft-btn ${scene.activeSlot === 'left' && gmM !== 'narrator' ? 'is-active' : ''}" onclick="window._vnUi.gmSpeakMode='speech'; VN_GM_SET_ACTIVE_SLOT('left');">🎭 ${ESC(leftNpc.name)}</button>` : ''}
@@ -869,7 +862,6 @@
 
                 ${secondPickerHTML}
 
-                <!-- Строка 2: Ввод реплики -->
                 <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
                     ${gmM !== 'narrator' ? `
                         <button data-custom-bg="1" class="vn-soft-btn ${gmM === 'whisper' ? 'is-active' : ''}" title="Переключить: обычная речь или тихий шёпот"
@@ -886,7 +878,6 @@
                 ${quickLinesHTML}
                 ${choicesPanelHTML}
 
-                <!-- Строка 3: Вспомогательные инструменты сцены -->
                 <div style="display:flex; justify-content:space-between; align-items:center; gap:6px; flex-wrap:wrap; padding-top:4px; border-top:1px dashed var(--ui-border,#3e372f);">
                     <div style="display:flex; gap:6px; flex-wrap:wrap;">
                         <button data-custom-bg="1" class="vn-soft-btn ${window._vnUi.gmChoicesOpen ? 'is-active' : ''}" onclick="window._vnUi.gmChoicesOpen=!window._vnUi.gmChoicesOpen; RENDER_VN_STAGE_AND_DOCK();">💬 Варианты ответов (${(scene.choices || []).length})</button>
@@ -903,9 +894,9 @@
             el.focus();
             if (typeof el.setSelectionRange === 'function') el.setSelectionRange(el.value.length, el.value.length);
         }
-    }
+    };
 
-    // --- 5. МАСТЕРСКАЯ NPC (КАРТОЧКА ПРОСМОТРА + 3-ВКЛАДОЧНЫЙ РЕДАКТОР) ---
+    // --- 5. МАСТЕРСКАЯ NPC (КАРТОЧКА + 3-ВКЛАДОЧНЫЙ РЕДАКТОР) ---
     function SYNC_DRAFT_FROM_CURRENT_TAB() {
         const d = window._vnUi.draft; if (!d) return;
         const t = window._vnUi.editTab;
@@ -920,12 +911,44 @@
         }
     }
 
+    function BUILD_SIDEBAR_ITEMS_HTML() {
+        const allNpcs = GET_STUDIO_NPCS();
+        const q = (window._vnUi.search || '').toLowerCase().trim();
+        const attF = window._vnUi.attFilter || 'all';
+        const filtered = allNpcs.filter(n => {
+            const attOk = attF === 'all' || (n.attitude || 'neutral') === attF;
+            const qOk = !q || (n.name || '').toLowerCase().includes(q) || (n.role || '').toLowerCase().includes(q);
+            return attOk && qOk;
+        });
+
+        return filtered.map(n => {
+            const att = GET_ATT(n.attitude);
+            const isSel = (!window._vnUi.editMode && window._vnUi.selectedId === n.id) || (window._vnUi.editMode && window._vnUi.draft?.id === n.id);
+            return `
+                <button data-custom-bg="1" class="vns-npc-item ${isSel ? 'is-selected' : ''}" onclick="VNS_SELECT_NPC('${ESC_JS(n.id)}')">
+                    ${n.avatar
+                        ? `<img src="${n.avatar}" style="width:38px; height:38px; border-radius:50%; object-fit:cover; border:2px solid ${att.color}; flex-shrink:0;">`
+                        : `<div style="width:38px; height:38px; border-radius:50%; background:var(--ui-panel2,#161412); border:1px solid ${att.color}; display:flex; align-items:center; justify-content:center; flex-shrink:0; font-size:0.95rem;">${att.icon}</div>`}
+                    <div style="flex:1; min-width:0;">
+                        <div style="font-weight:700; font-size:0.88rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:${isSel ? 'var(--ui-accent,#d2b278)' : 'var(--ui-text,#e5e0d7)'};">${ESC(n.name)}</div>
+                        <div style="font-size:0.75rem; color:var(--ui-muted,#888); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${ESC(n.role || att.label)}</div>
+                    </div>
+                </button>`;
+        }).join('') || '<div style="text-align:center; padding:18px; color:var(--ui-muted,#888); font-size:0.84rem;">Никого не найдено</div>';
+    }
+
+    window.VNS_FILTER_LIST = function(val) {
+        window._vnUi.search = val || '';
+        const listEl = document.getElementById('vns-npc-list-scroll');
+        if (listEl) listEl.innerHTML = BUILD_SIDEBAR_ITEMS_HTML();
+    };
+
     window.VNS_SELECT_NPC = function(npcId) {
         window._vnUi.selectedId = npcId;
         window._vnUi.editMode = false;
         window._vnUi.draft = null;
         window._vnUi.previewEmo = 'neutral';
-        RENDER_NPC_STUDIO_MODAL();
+        window.RENDER_NPC_STUDIO_MODAL();
     };
 
     window.VNS_START_EDIT = function(npcId) {
@@ -941,19 +964,19 @@
         if (!window._vnUi.draft.emotions) window._vnUi.draft.emotions = {};
         if (!Array.isArray(window._vnUi.draft.choices)) window._vnUi.draft.choices = [];
         if (!Array.isArray(window._vnUi.draft.quickLines)) window._vnUi.draft.quickLines = [];
-        RENDER_NPC_STUDIO_MODAL();
+        window.RENDER_NPC_STUDIO_MODAL();
     };
 
     window.VNS_SWITCH_EDIT_TAB = function(tab) {
         SYNC_DRAFT_FROM_CURRENT_TAB();
         window._vnUi.editTab = tab;
-        RENDER_NPC_STUDIO_MODAL();
+        window.RENDER_NPC_STUDIO_MODAL();
     };
 
     window.VNS_SET_DRAFT_ATTITUDE = function(attId) {
         SYNC_DRAFT_FROM_CURRENT_TAB();
         if (window._vnUi.draft) window._vnUi.draft.attitude = attId;
-        RENDER_NPC_STUDIO_MODAL();
+        window.RENDER_NPC_STUDIO_MODAL();
     };
 
     window.VNS_UPLOAD_EMO_FILE = function(emoId) {
@@ -979,7 +1002,7 @@
                         window._vnUi.draft.emotions[emoId] = dataUrl;
                         if (emoId === 'neutral' || !window._vnUi.draft.avatar) window._vnUi.draft.avatar = dataUrl;
                     }
-                    RENDER_NPC_STUDIO_MODAL();
+                    window.RENDER_NPC_STUDIO_MODAL();
                 };
                 img.src = ev.target.result;
             };
@@ -1000,14 +1023,14 @@
             window._vnUi.draft.emotions[emoId] = url;
             if (emoId === 'neutral' || !window._vnUi.draft.avatar) window._vnUi.draft.avatar = url;
         }
-        RENDER_NPC_STUDIO_MODAL();
+        window.RENDER_NPC_STUDIO_MODAL();
     };
 
     window.VNS_CLEAR_EMO = function(emoId) {
         if (!window._vnUi.draft?.emotions) return;
         delete window._vnUi.draft.emotions[emoId];
         if (emoId === 'neutral') window._vnUi.draft.avatar = Object.values(window._vnUi.draft.emotions)[0] || '';
-        RENDER_NPC_STUDIO_MODAL();
+        window.RENDER_NPC_STUDIO_MODAL();
     };
 
     window.VNS_ADD_DRAFT_CHIP = function(field, inpId) {
@@ -1017,14 +1040,15 @@
         if (!val || !window._vnUi.draft) return;
         if (!Array.isArray(window._vnUi.draft[field])) window._vnUi.draft[field] = [];
         window._vnUi.draft[field].push(val);
-        RENDER_NPC_STUDIO_MODAL();
+        window.RENDER_NPC_STUDIO_MODAL();
+        setTimeout(() => document.getElementById(inpId)?.focus(), 20);
     };
 
     window.VNS_REMOVE_DRAFT_CHIP = function(field, idx) {
         SYNC_DRAFT_FROM_CURRENT_TAB();
         if (!window._vnUi.draft || !Array.isArray(window._vnUi.draft[field])) return;
         window._vnUi.draft[field].splice(idx, 1);
-        RENDER_NPC_STUDIO_MODAL();
+        window.RENDER_NPC_STUDIO_MODAL();
     };
 
     window.VNS_SAVE_DRAFT = function() {
@@ -1033,7 +1057,7 @@
         const d = window._vnUi.draft;
         if (!d || !String(d.name || '').trim()) {
             window._vnUi.editTab = 'main';
-            RENDER_NPC_STUDIO_MODAL();
+            window.RENDER_NPC_STUDIO_MODAL();
             showMessage('⚠️ Введите имя', 'Укажите имя NPC на вкладке «👤 Основное».');
             return;
         }
@@ -1062,7 +1086,8 @@
         window._vnUi.selectedId = id;
         window._vnUi.editMode = false;
         window._vnUi.draft = null;
-        RENDER_NPC_STUDIO_MODAL();
+        window.RENDER_NPC_STUDIO_MODAL();
+        window.RENDER_VN_STAGE_AND_DOCK();
     };
 
     window.VNS_DELETE_NPC = function(npcId) {
@@ -1070,12 +1095,33 @@
         const list = GET_STUDIO_NPCS();
         const n = list.find(x => x.id === npcId);
         if (!n || !confirm(`Удалить NPC «${n.name}» из комнаты?`)) return;
+
+        // Если этот NPC сейчас в активной сцене — корректно убираем его
+        const scene = GET_LIVE_SCENE();
+        if (scene && scene.active) {
+            if (scene.rightSlot && scene.rightSlot.npcId === npcId) {
+                scene.rightSlot = null;
+                if (scene.activeSlot === 'right') scene.activeSlot = 'left';
+                SAVE_LIVE_SCENE(scene);
+            }
+            if (scene.leftSlot && scene.leftSlot.npcId === npcId) {
+                if (scene.rightSlot) {
+                    scene.leftSlot = scene.rightSlot;
+                    scene.rightSlot = null;
+                    scene.activeSlot = 'left';
+                    SAVE_LIVE_SCENE(scene);
+                } else {
+                    SAVE_LIVE_SCENE(null);
+                }
+            }
+        }
+
         const next = list.filter(x => x.id !== npcId);
         SAVE_STUDIO_NPCS(next);
         window._vnUi.selectedId = next[0]?.id || null;
         window._vnUi.editMode = false;
         window._vnUi.draft = null;
-        RENDER_NPC_STUDIO_MODAL();
+        window.RENDER_NPC_STUDIO_MODAL();
     };
 
     window.VNS_PLACE_ON_MAP = function(npcId) {
@@ -1115,7 +1161,7 @@
             });
             SAVE_BESTIARY(list);
         }
-        showMessage('⚔️ Готово', `«<b>${ESC(n.name)}</b>» добавлен в Бестиарий.<div style="margin-top:10px;"><button class="btn-small btn-save" onclick="closeModal('message-modal'); OPEN_GM_BESTIARY_MODAL();">Открыть Бестиарий</button></div>`);
+        showMessage('⚔️ Готово', `«<b>${ESC(n.name)}</b>» добавлен в Бестиарий.<div style="margin-top:10px;"><button class="btn-small btn-save" onclick="CM('message-modal'); OPEN_GM_BESTIARY_MODAL();">Открыть Бестиарий</button></div>`);
     };
 
     window.VNS_TO_LOREBOOK = function(npcId) {
@@ -1135,7 +1181,6 @@
             updatedAt: Date.now()
         };
 
-        // Синхронно обновляем кэш lorebook.js + localStorage + Firebase!
         if (!window._loreCache) window._loreCache = {};
         const curList = Array.isArray(window._loreCache[rc]) ? window._loreCache[rc].slice() : [];
         const exIdx = curList.findIndex(e => e.id === entry.id);
@@ -1176,7 +1221,6 @@
 
         return `
             <div style="display:flex; gap:18px; align-items:flex-start; flex-wrap:wrap;">
-                <!-- Портрет и предпросмотр эмоций -->
                 <div style="width:170px; flex-shrink:0; display:flex; flex-direction:column; align-items:center; gap:8px;">
                     <div style="width:166px; height:195px; border-radius:10px; background:var(--ui-panel,#221f1c); border:1px solid var(--ui-border-strong,#695c4c); display:flex; align-items:flex-end; justify-content:center; overflow:hidden; padding:6px;">
                         ${sprite
@@ -1187,7 +1231,6 @@
                     <small style="color:var(--ui-muted,#888); font-size:0.74rem !important;">Загружено поз: ${emoCount} из 6</small>
                 </div>
 
-                <!-- Описание NPC -->
                 <div style="flex:1; min-width:240px; display:flex; flex-direction:column; gap:10px;">
                     <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px; flex-wrap:wrap;">
                         <div>
@@ -1216,7 +1259,6 @@
                 </div>
             </div>
 
-            <!-- Главные действия -->
             <div style="margin-top:auto; padding-top:12px; border-top:1px solid var(--ui-border,#3e372f); display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
                 <div style="display:flex; gap:8px; flex-wrap:wrap;">
                     <button class="btn-save" style="padding:9px 18px; font-size:0.95rem;" onclick="VN_START_SCENE_WITH_NPC('${ESC_JS(npc.id)}')">🎬 Начать диалог</button>
@@ -1282,7 +1324,7 @@
 
             body = `
                 <div style="font-size:0.84rem; color:var(--ui-muted,#aaa);">
-                    Загрузите основной портрет в <b>«Спокойный»</b> — остальные эмоции необязательны (если загрузить отдельные позы, они будут плавно меняться прямо в диалоге). Поддерживаются PNG/WebP с прозрачным фоном.
+                    Загрузите основной портрет в <b>«Спокойный»</b> — остальные эмоции необязательны (если загрузить отдельные позы, они будут меняться прямо в диалоге). Поддерживаются PNG/WebP с прозрачным фоном.
                 </div>
                 <div class="vns-emo-grid">
                     ${EMOTIONS.map(em => {
@@ -1360,7 +1402,7 @@
         `;
     }
 
-    function RENDER_NPC_STUDIO_MODAL() {
+    window.RENDER_NPC_STUDIO_MODAL = function() {
         ENSURE_VN_CSS();
         const cont = document.getElementById('gm-tool-modal-content');
         if (!cont) return;
@@ -1368,34 +1410,12 @@
 
         const allNpcs = GET_STUDIO_NPCS();
         const scene = GET_LIVE_SCENE();
-        const q = (window._vnUi.search || '').toLowerCase().trim();
         const attF = window._vnUi.attFilter || 'all';
 
         if (!window._vnUi.editMode && !allNpcs.some(n => n.id === window._vnUi.selectedId)) {
             window._vnUi.selectedId = allNpcs[0]?.id || null;
         }
         const selectedNpc = allNpcs.find(n => n.id === window._vnUi.selectedId) || null;
-
-        const filtered = allNpcs.filter(n => {
-            const attOk = attF === 'all' || (n.attitude || 'neutral') === attF;
-            const qOk = !q || (n.name || '').toLowerCase().includes(q) || (n.role || '').toLowerCase().includes(q);
-            return attOk && qOk;
-        });
-
-        const listHTML = filtered.map(n => {
-            const att = GET_ATT(n.attitude);
-            const isSel = (!window._vnUi.editMode && window._vnUi.selectedId === n.id) || (window._vnUi.editMode && window._vnUi.draft?.id === n.id);
-            return `
-                <button data-custom-bg="1" class="vns-npc-item ${isSel ? 'is-selected' : ''}" onclick="VNS_SELECT_NPC('${ESC_JS(n.id)}')">
-                    ${n.avatar
-                        ? `<img src="${n.avatar}" style="width:38px; height:38px; border-radius:50%; object-fit:cover; border:2px solid ${att.color}; flex-shrink:0;">`
-                        : `<div style="width:38px; height:38px; border-radius:50%; background:var(--ui-panel2,#161412); border:1px solid ${att.color}; display:flex; align-items:center; justify-content:center; flex-shrink:0; font-size:0.95rem;">${att.icon}</div>`}
-                    <div style="flex:1; min-width:0;">
-                        <div style="font-weight:700; font-size:0.88rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:${isSel ? 'var(--ui-accent,#d2b278)' : 'var(--ui-text,#e5e0d7)'};">${ESC(n.name)}</div>
-                        <div style="font-size:0.75rem; color:var(--ui-muted,#888); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${ESC(n.role || att.label)}</div>
-                    </div>
-                </button>`;
-        }).join('') || '<div style="text-align:center; padding:18px; color:var(--ui-muted,#888); font-size:0.84rem;">Никого не найдено</div>';
 
         const filterPills = [
             { id: 'all', lbl: 'Все' },
@@ -1418,9 +1438,9 @@
             <div class="vns-layout">
                 <div class="vns-sidebar">
                     <button class="btn-save" style="width:100%; padding:8px; margin-bottom:9px; font-size:0.88rem;" onclick="VNS_START_EDIT(null)">➕ Создать NPC</button>
-                    <input type="text" value="${ESC(window._vnUi.search)}" oninput="window._vnUi.search=this.value; RENDER_NPC_STUDIO_MODAL();" placeholder="🔍 Поиск по имени..." style="width:100%; padding:7px 9px; margin-bottom:7px; font-size:0.84rem;">
+                    <input type="text" id="vns-search-inp" value="${ESC(window._vnUi.search)}" oninput="VNS_FILTER_LIST(this.value)" placeholder="🔍 Поиск по имени..." style="width:100%; padding:7px 9px; margin-bottom:7px; font-size:0.84rem;">
                     <div style="display:flex; gap:4px; flex-wrap:wrap; margin-bottom:9px;">${filterPills}</div>
-                    <div style="flex:1; overflow-y:auto; padding-right:2px;">${listHTML}</div>
+                    <div id="vns-npc-list-scroll" style="flex:1; overflow-y:auto; padding-right:2px;">${BUILD_SIDEBAR_ITEMS_HTML()}</div>
                 </div>
 
                 <div class="vns-main">
@@ -1428,14 +1448,14 @@
                 </div>
             </div>
         `;
-    }
+    };
 
     // --- 6. ХУКИ ---
     window.OPEN_GM_NPC_MODAL = function() {
         if (!IS_GM()) return;
         window._vnUi.editMode = false;
         window._vnUi.draft = null;
-        RENDER_NPC_STUDIO_MODAL();
+        window.RENDER_NPC_STUDIO_MODAL();
         OM('gm-tool-modal');
     };
 
@@ -1443,7 +1463,7 @@
     if (typeof _ORIG_RENDER_MAP_VN === 'function') {
         window.RENDER_MAP_AREA = function() {
             _ORIG_RENDER_MAP_VN();
-            RENDER_VN_STAGE_AND_DOCK();
+            window.RENDER_VN_STAGE_AND_DOCK();
         };
     }
 
@@ -1464,7 +1484,7 @@
                         <div style="text-align:center;">
                             ${npc.avatar ? `<img src="${npc.avatar}" style="max-height:150px; max-width:150px; object-fit:contain; border-radius:10px; border:2px solid ${att.color}; margin-bottom:10px;">` : ''}
                             <div style="color:var(--ui-muted,#aaa); font-size:0.92rem; margin-bottom:12px;">${ESC(npc.role || att.label)}</div>
-                            <button class="btn-save" onclick="closeModal('message-modal'); LOG_COMBAT_TO_CHAT('🗣️ подходит и обращается к «${ESC_JS(npc.name)}»!');">💬 Подойти и заговорить</button>
+                            <button class="btn-save" onclick="CM('message-modal'); LOG_COMBAT_TO_CHAT('🗣️ подходит и обращается к «${ESC_JS(npc.name)}»!');">💬 Подойти и заговорить</button>
                         </div>
                     `);
                     return;
@@ -1481,9 +1501,9 @@
 
     const _ORIG_APPLY_VN = window.APPLY_ROLE_VIEW;
     if (typeof _ORIG_APPLY_VN === 'function') {
-        window.APPLY_ROLE_VIEW = function() { _ORIG_APPLY_VN(); SYNC_VN_FOR_ROOM(CUR_ROOM()); RENDER_VN_STAGE_AND_DOCK(); };
+        window.APPLY_ROLE_VIEW = function() { _ORIG_APPLY_VN(); SYNC_VN_FOR_ROOM(CUR_ROOM()); window.RENDER_VN_STAGE_AND_DOCK(); };
     }
 
     SYNC_VN_FOR_ROOM(CUR_ROOM());
-    RENDER_VN_STAGE_AND_DOCK();
+    window.RENDER_VN_STAGE_AND_DOCK();
 })();
