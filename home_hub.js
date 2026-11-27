@@ -1,8 +1,8 @@
 // ================================================================
-// 🏠 ГЛАВНАЯ (3 КОЛОНКИ: СТАРТ/ОБНОВЛЕНИЯ | ЛЕНТА | ОБЩИЙ ЧАТ),
-// ПРОФИЛЬ, ВКЛАДКА «ИГРАТЬ» И ЛИЧКА ПОЛЬЗОВАТЕЛЕЙ (home_hub.js)
+// 🏠 ГЛАВНАЯ (3 КОЛОНКИ: СТАРТ/ОБНОВЛЕНИЯ | ЛЕНТА С ПОСТАМИ И ФОТО | ОБЩИЙ ЧАТ),
+// ПРОФИЛЬ, ВКЛАДКА «ИГРАТЬ» И ЛИЧКА ПОЛЬЗОВАТЕЛЕЙ С БОКОВЫМ ПРОФИЛЕМ (home_hub.js)
 // ================================================================
-(function INIT_HOME_HUB_V2() {
+(function INIT_HOME_HUB_V3() {
     const FB_ROOT = "https://dnds-23b7d-default-rtdb.firebaseio.com/campaign_v2";
     const MY_HUB_CLIENT_ID = 'hub_' + Math.random().toString(36).slice(2, 8) + '_' + Date.now();
     const DM_READ_LS_KEY = 'dnd_user_dm_last_read_v1';
@@ -22,25 +22,30 @@
     ];
 
     const FEED_TAGS = [
-        { id: 'post',   label: '💬 Пост' },
-        { id: 'lfg',    label: '🎲 Поиск партии' },
-        { id: 'idea',   label: '💡 Идея / Обсуждение' }
+        { id: 'post',  label: '💬 Пост' },
+        { id: 'lfg',   label: '🎲 Поиск партии' },
+        { id: 'art',   label: '🎨 Творчество / Арты' },
+        { id: 'story', label: '📖 История из сессии' },
+        { id: 'idea',  label: '💡 Идея / Обсуждение' }
     ];
 
-    window._hubMainTab = window._hubMainTab || 'home'; // 'home' | 'profile' | 'play'
+    window._hubMainTab = window._hubMainTab || 'home';
     window._hubEditingProfile = false;
     window._hubProfilesCache = {};
     window._hubGlobalChat = [];
     window._hubFeedPosts = [];
-    window._hubFeedFilter = 'all';     // 'all' | 'posts' | 'templates' | 'updates'
+    window._hubFeedFilter = 'all';
+    window._hubFeedDraftImgs = [];      // Прикреплённые картинки к новому посту (до 4 шт.)
+    window._hubFeedOpenComments = {};   // { [postId]: true }
     window._hubOnlineUsers = {};
 
-    // Состояние лички пользователей (аккаунт -> аккаунт)
-    window._hubDmInbox = {};           // { [peerKey]: { peer, lastText, lastTs, lastFrom } }
+    // Состояние лички пользователей
+    window._hubDmInbox = {};
     window._hubDmActivePeer = null;
     window._hubDmMessages = [];
     window._hubDmSearch = '';
-    window._hubDmMobView = 'list';     // 'list' | 'chat'
+    window._hubDmMobView = 'list';      // 'list' | 'chat' | 'profile'
+    window._hubDmShowProfile = false;   // Боковая панель профиля справа внутри Лички
 
     let hubPresenceRef = null;
     let hubCloudBound = false;
@@ -58,27 +63,15 @@
     const CUR_USER = () => (typeof GET_CURRENT_USER === 'function') ? GET_CURRENT_USER() : null;
     const CUR_LOGIN_KEY = () => { const u = CUR_USER(); return u && u.login ? SAFE_KEY(u.login) : ''; };
 
-    function DM_THREAD_ID(a, b) {
-        return [SAFE_KEY(a), SAFE_KEY(b)].sort().join('__');
-    }
-
-    function GET_DM_READ_MAP() {
-        try { return JSON.parse(localStorage.getItem(DM_READ_LS_KEY) || '{}') || {}; } catch (e) { return {}; }
-    }
-
-    function SET_DM_READ(threadId, ts) {
-        const myKey = CUR_LOGIN_KEY();
-        if (!myKey || !threadId) return;
+    function DM_THREAD_ID(a, b) { return [SAFE_KEY(a), SAFE_KEY(b)].sort().join('__'); }
+    function GET_DM_READ_MAP() { try { return JSON.parse(localStorage.getItem(DM_READ_LS_KEY) || '{}') || {}; } catch (e) { return {}; } }
+    function SET_DM_READ(tid, ts) {
+        const myKey = CUR_LOGIN_KEY(); if (!myKey || !tid) return;
         const map = GET_DM_READ_MAP();
-        map[`${myKey}:${threadId}`] = Math.max(Number(map[`${myKey}:${threadId}`] || 0), Number(ts || Date.now()));
+        map[`${myKey}:${tid}`] = Math.max(Number(map[`${myKey}:${tid}`] || 0), Number(ts || Date.now()));
         try { localStorage.setItem(DM_READ_LS_KEY, JSON.stringify(map)); } catch (e) {}
     }
-
-    function GET_DM_READ_TS(threadId) {
-        const myKey = CUR_LOGIN_KEY();
-        if (!myKey || !threadId) return 0;
-        return Number(GET_DM_READ_MAP()[`${myKey}:${threadId}`] || 0);
-    }
+    function GET_DM_READ_TS(tid) { const k = CUR_LOGIN_KEY(); return k && tid ? Number(GET_DM_READ_MAP()[`${k}:${tid}`] || 0) : 0; }
 
     function GET_PROFILE(login) {
         const key = SAFE_KEY(login);
@@ -104,9 +97,25 @@
         return Object.values(window._hubOnlineUsers || {}).some(u => u && SAFE_KEY(u.login) === k);
     }
 
+    function FORMAT_POST_TEXT(raw) {
+        return ESC(raw).split('\n').map(line => {
+            const tr = line.trim();
+            if (!tr) return '<div style="height:6px;"></div>';
+            let h = tr
+                .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+                .replace(/\*([^*]+)\*/g, '<i>$1</i>');
+            if (/^&gt;\s*/.test(h)) {
+                return `<div style="border-left:3px solid var(--ui-accent,#d2b278); background:var(--ui-panel,#221f1c); padding:5px 10px; margin:4px 0; border-radius:0 6px 6px 0; font-style:italic;">${h.replace(/^&gt;\s*/, '')}</div>`;
+            }
+            if (/^[-•*]\s+/.test(h)) {
+                return `<div style="padding-left:12px; margin:2px 0;">• ${h.replace(/^[-•*]\s+/, '')}</div>`;
+            }
+            return `<div style="margin:2px 0;">${h}</div>`;
+        }).join('');
+    }
+
     function SAVE_MY_PROFILE(patch) {
-        const u = CUR_USER();
-        if (!u || !u.login) return;
+        const u = CUR_USER(); if (!u || !u.login) return;
         const key = SAFE_KEY(u.login);
         const next = Object.assign({}, GET_PROFILE(key), patch, { updatedAt: Date.now() });
         window._hubProfilesCache[key] = next;
@@ -120,7 +129,6 @@
                 if (accs[key]) { accs[key].displayName = patch.displayName; SAVE_ACCOUNTS(accs); }
             }
         }
-
         if (window.firebase && firebase.apps && firebase.apps.length) {
             firebase.database().ref(`campaign_v2/user_profiles/${key}`).set(next).catch(() => {});
         } else {
@@ -131,7 +139,7 @@
         PUBLISH_HUB_PRESENCE();
     }
 
-    // --- 1. СТИЛИ ХАБА И ЛИЧКИ ПОЛЬЗОВАТЕЛЕЙ ---
+    // --- 1. СТИЛИ ХАБА, ПОСТОВ И БОКОВОГО ПРОФИЛЯ В ЛИЧКЕ ---
     function ENSURE_HUB_CSS() {
         let st = document.getElementById('home-hub-css');
         if (!st) {
@@ -141,18 +149,52 @@
         }
         st.textContent = `
             .hub-shell { max-width: 1140px; margin: 10px auto 24px auto; }
-            .hub-shell.is-wide { max-width: 1520px; }
+            .hub-shell.is-wide { max-width: 1540px; }
+
+            /* Тёмные/матовые инпуты, textarea и выпадающие списки — НИКАКОГО белого системного фона */
+            .hub-shell input[type="text"],
+            .hub-shell input[type="password"],
+            .hub-shell input[type="url"],
+            .hub-shell textarea,
+            .hub-shell select,
+            #hub-user-dm-modal input[type="text"],
+            #hub-user-dm-modal textarea,
+            #hub-user-dm-modal select {
+                background: var(--ui-input-bg, #141210) !important;
+                color: var(--ui-text, #e5e0d7) !important;
+                border: 1px solid var(--ui-border-strong, #52483c) !important;
+                border-radius: 8px;
+                box-sizing: border-box !important;
+                font-family: inherit;
+                color-scheme: dark;
+            }
+            .hub-shell input::placeholder,
+            .hub-shell textarea::placeholder,
+            #hub-user-dm-modal input::placeholder {
+                color: var(--ui-muted, #8c8478) !important;
+                opacity: 0.85;
+            }
+            .hub-shell input:focus,
+            .hub-shell textarea:focus,
+            .hub-shell select:focus,
+            #hub-user-dm-modal input:focus {
+                outline: none !important;
+                border-color: var(--ui-accent, #d2b278) !important;
+            }
+            .hub-shell select option,
+            #hub-user-dm-modal select option {
+                background-color: var(--ui-panel, #221f1c) !important;
+                color: var(--ui-text, #e5e0d7) !important;
+            }
+
             .hub-nav-bar {
                 background: var(--ui-panel, #221f1c);
                 border: 1px solid var(--ui-border-strong, #695c4c);
                 border-radius: 12px;
                 padding: 10px 14px;
                 margin-bottom: 14px;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                flex-wrap: wrap;
-                gap: 10px;
+                display: flex; justify-content: space-between; align-items: center;
+                flex-wrap: wrap; gap: 10px;
                 box-shadow: var(--ui-shadow, 0 4px 14px rgba(0,0,0,0.34));
             }
             .hub-tabs-group {
@@ -174,52 +216,96 @@
                 color: var(--ui-btn-text, #1a150f) !important;
                 border-color: var(--ui-accent, #d2b278) !important;
             }
-            /* 3 колонки на Главной: Слева (старт/обновления) | По центру (лента) | Справа (общий чат) */
+
+            /* 3 колонки на Главной: Слева | Центр (Лента) | Справа (Общий чат) */
             .hub-home-grid {
                 display: grid;
-                grid-template-columns: 320px minmax(360px, 1.3fr) 365px;
+                grid-template-columns: 315px minmax(420px, 1.45fr) 360px;
                 gap: 16px;
                 align-items: start;
             }
-            .hub-left-col {
-                display: flex; flex-direction: column; gap: 14px;
-            }
-            .hub-updates-panel {
-                display: flex; flex-direction: column;
-                min-height: 290px;
-            }
-            .hub-updates-scroll {
-                flex: 1;
-                max-height: 360px;
-                overflow-y: auto;
+            .hub-left-col { display: flex; flex-direction: column; gap: 14px; }
+            .hub-updates-panel { display: flex; flex-direction: column; min-height: 290px; }
+            .hub-updates-scroll { flex: 1; max-height: 360px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 2px; }
+            .hub-feed-panel { display: flex; flex-direction: column; gap: 12px; min-height: 670px; text-align: left; }
+
+            /* Композер нового поста */
+            .hub-composer {
+                background: var(--ui-panel2, #161412);
+                border: 1px solid var(--ui-border-strong, #52483c);
+                border-radius: 11px;
+                padding: 12px;
                 display: flex;
                 flex-direction: column;
                 gap: 8px;
-                padding-right: 2px;
+                width: 100%;
+                box-sizing: border-box;
             }
-            .hub-feed-panel {
-                display: flex; flex-direction: column; gap: 12px;
-                min-height: 670px;
-                text-align: left;
+            .hub-composer-title {
+                width: 100% !important;
+                padding: 8px 11px !important;
+                font-size: 0.92rem !important;
+                font-weight: 600;
+                text-align: left !important;
             }
+            .hub-composer-textarea {
+                width: 100% !important;
+                min-height: 112px !important;
+                padding: 10px 12px !important;
+                font-size: 0.92rem !important;
+                line-height: 1.48 !important;
+                resize: vertical;
+                text-align: left !important;
+            }
+            .hub-composer-toolbar {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                gap: 8px;
+                flex-wrap: wrap;
+                padding-top: 2px;
+            }
+            .hub-fmt-btn {
+                padding: 4px 8px !important;
+                font-size: 0.78rem !important;
+                background: var(--ui-panel, #221f1c) !important;
+                color: var(--ui-text, #e5e0d7) !important;
+                border: 1px solid var(--ui-border, #3e372f) !important;
+                border-radius: 6px !important;
+                cursor: pointer;
+                box-shadow: none !important;
+            }
+            .hub-fmt-btn:hover { border-color: var(--ui-accent, #d2b278) !important; }
+            .hub-post-imgs-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+                gap: 8px;
+                margin: 8px 0 10px 0;
+            }
+            .hub-post-img-item {
+                width: 100%;
+                max-height: 290px;
+                object-fit: cover;
+                border-radius: 8px;
+                border: 1px solid var(--ui-border-strong, #52483c);
+                cursor: zoom-in;
+                background: #100f0e;
+            }
+
             .hub-feed-card {
                 background: var(--ui-panel2, #161412);
                 border: 1px solid var(--ui-border, #3e372f);
                 border-radius: 10px;
-                padding: 12px 14px;
+                padding: 13px 15px;
                 text-align: left;
             }
-            .hub-chat-box {
-                display: flex; flex-direction: column;
-                height: 670px; min-height: 440px;
-            }
+            .hub-chat-box { display: flex; flex-direction: column; height: 670px; min-height: 440px; }
             .hub-chat-messages {
                 flex: 1; overflow-y: auto;
                 background: var(--ui-panel2, #161412);
                 border: 1px solid var(--ui-border, #3e372f);
                 border-radius: 9px; padding: 10px;
-                display: flex; flex-direction: column; gap: 8px;
-                margin-bottom: 10px;
+                display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px;
             }
             .hub-chat-msg {
                 background: var(--ui-chat-msg, #24211d);
@@ -230,34 +316,36 @@
             .hub-chat-msg.is-mine { border-left: 3px solid var(--ui-accent, #d2b278); }
             .hub-avatar-sm {
                 width: 34px; height: 34px; border-radius: 50%; object-fit: cover;
-                border: 1px solid var(--ui-accent, #d2b278);
-                background: var(--ui-panel, #221f1c);
+                border: 1px solid var(--ui-accent, #d2b278); background: var(--ui-panel, #221f1c);
                 display: flex; align-items: center; justify-content: center;
                 font-size: 0.92rem; flex-shrink: 0; cursor: pointer;
             }
             .hub-profile-banner {
                 display: flex; gap: 18px; align-items: center; flex-wrap: wrap;
-                background: var(--ui-panel2, #161412);
-                border: 1px solid var(--ui-border-strong, #695c4c);
+                background: var(--ui-panel2, #161412); border: 1px solid var(--ui-border-strong, #695c4c);
                 border-radius: 12px; padding: 18px; margin-bottom: 16px; text-align: left;
             }
             .hub-stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px; }
             .hub-stat-card { background: var(--ui-panel2, #161412); border: 1px solid var(--ui-border, #3e372f); border-radius: 10px; padding: 12px 10px; text-align: center; }
 
-            /* Окно личных сообщений пользователей */
+            /* Окно Лички пользователей (2 колонки, либо 3 колонки с профилем сбоку!) */
             .hub-dm-layout {
                 display: grid;
-                grid-template-columns: 260px 1fr;
+                grid-template-columns: 245px 1fr;
                 gap: 12px;
-                height: 60vh;
-                min-height: 390px;
+                height: 62vh;
+                min-height: 400px;
             }
-            .hub-dm-list-col, .hub-dm-chat-col {
+            .hub-dm-layout.with-profile {
+                grid-template-columns: 235px 1fr 295px;
+            }
+            .hub-dm-list-col, .hub-dm-chat-col, .hub-dm-prof-col {
                 display: flex; flex-direction: column; min-height: 0;
                 background: var(--ui-panel2, #161412);
                 border: 1px solid var(--ui-border, #3e372f);
                 border-radius: 10px; padding: 10px;
             }
+            .hub-dm-prof-col { overflow-y: auto; text-align: left; }
             .hub-dm-peer-btn {
                 width: 100%; display: flex; align-items: center; gap: 9px;
                 padding: 8px 9px; margin-bottom: 5px; border-radius: 8px;
@@ -271,23 +359,27 @@
             }
             .hub-dm-mob-back { display: none; }
 
-            @media (max-width: 1180px) {
+            @media (max-width: 1200px) {
                 .hub-home-grid { grid-template-columns: 300px 1fr; }
                 .hub-chat-box { grid-column: 1 / -1; height: 440px; }
             }
-            @media (max-width: 820px) {
+            @media (max-width: 880px) {
                 .hub-home-grid { grid-template-columns: 1fr !important; }
                 .hub-feed-panel { min-height: 260px; }
                 .hub-stat-grid { grid-template-columns: repeat(2, 1fr) !important; }
-                .hub-dm-layout { grid-template-columns: 1fr !important; height: 66vh; }
-                .hub-dm-layout.mob-list .hub-dm-chat-col { display: none !important; }
-                .hub-dm-layout.mob-chat .hub-dm-list-col { display: none !important; }
+                .hub-dm-layout, .hub-dm-layout.with-profile { grid-template-columns: 1fr !important; height: 68vh; }
+                .hub-dm-layout.mob-list .hub-dm-chat-col,
+                .hub-dm-layout.mob-list .hub-dm-prof-col { display: none !important; }
+                .hub-dm-layout.mob-chat .hub-dm-list-col,
+                .hub-dm-layout.mob-chat .hub-dm-prof-col { display: none !important; }
+                .hub-dm-layout.mob-profile .hub-dm-list-col,
+                .hub-dm-layout.mob-profile .hub-dm-chat-col { display: none !important; }
                 .hub-dm-mob-back { display: inline-flex !important; }
             }
         `;
     }
 
-    // --- 2. ОБЛАЧНАЯ СИНХРОНИЗАЦИЯ (ЧАТ, ЛЕНТА, ПРОФИЛИ, ОНЛАЙН, ЛИЧКА) ---
+    // --- 2. ОБЛАЧНАЯ СИНХРОНИЗАЦИЯ ---
     function NORMALIZE_BY_TS(val, maxItems = 120, desc = false) {
         if (!val || typeof val !== 'object') return [];
         const arr = Object.values(val).filter(x => x && x.id);
@@ -391,17 +483,13 @@
         }
     }
 
-    // --- 3. ✉️ ЛИЧКА ПОЛЬЗОВАТЕЛЕЙ (АККАУНТ -> АККАУНТ, ОТДЕЛЬНО ОТ КОМНАТ) ---
+    // --- 3. ✉️ ЛИЧКА ПОЛЬЗОВАТЕЛЕЙ (С БОКОВОЙ ПАНЕЛЬЮ ПРОФИЛЯ СПРАВА) ---
     function COUNT_UNREAD_USER_DMS() {
-        const myKey = CUR_LOGIN_KEY();
-        if (!myKey) return 0;
+        const myKey = CUR_LOGIN_KEY(); if (!myKey) return 0;
         let cnt = 0;
         Object.values(window._hubDmInbox || {}).forEach(item => {
             if (!item || !item.peer || !item.lastTs) return;
-            const tid = DM_THREAD_ID(myKey, item.peer);
-            if (SAFE_KEY(item.lastFrom) !== myKey && Number(item.lastTs) > GET_DM_READ_TS(tid)) {
-                cnt++;
-            }
+            if (SAFE_KEY(item.lastFrom) !== myKey && Number(item.lastTs) > GET_DM_READ_TS(DM_THREAD_ID(myKey, item.peer))) cnt++;
         });
         return cnt;
     }
@@ -410,12 +498,8 @@
         const cnt = COUNT_UNREAD_USER_DMS();
         const badge = document.getElementById('hub-dm-unread-badge');
         if (!badge) return;
-        if (cnt > 0) {
-            badge.textContent = String(cnt);
-            badge.style.display = 'inline-block';
-        } else {
-            badge.style.display = 'none';
-        }
+        badge.textContent = String(cnt);
+        badge.style.display = cnt > 0 ? 'inline-block' : 'none';
     }
 
     function SHOW_USER_DM_TOAST(peerKey, text) {
@@ -478,8 +562,7 @@
                             if (!item || !item.peer || SAFE_KEY(item.lastFrom) === myKey) return;
                             const oldTs = Number(prev[item.peer]?.lastTs || 0);
                             if (Number(item.lastTs || 0) > oldTs) {
-                                const viewingSame = modalOpen && window._hubDmActivePeer === item.peer;
-                                if (!viewingSame) SHOW_USER_DM_TOAST(item.peer, item.lastText || '');
+                                if (!(modalOpen && window._hubDmActivePeer === item.peer)) SHOW_USER_DM_TOAST(item.peer, item.lastText || '');
                             }
                         });
                     }
@@ -498,8 +581,7 @@
     }
 
     function SUBSCRIBE_DM_THREAD(peerKey) {
-        const myKey = CUR_LOGIN_KEY();
-        const pk = SAFE_KEY(peerKey);
+        const myKey = CUR_LOGIN_KEY(), pk = SAFE_KEY(peerKey);
         if (!myKey || !pk) return;
         const tid = DM_THREAD_ID(myKey, pk);
         if (tid === dmThreadIdActive && dmThreadRef) return;
@@ -540,10 +622,8 @@
         let m = document.getElementById('hub-user-dm-modal');
         if (!m) {
             m = document.createElement('div');
-            m.className = 'modal';
-            m.id = 'hub-user-dm-modal';
-            m.style.zIndex = '95600';
-            m.innerHTML = `<div class="modal-content" id="hub-user-dm-content" style="max-width:860px; width:96%; padding:16px 18px;"></div>`;
+            m.className = 'modal'; m.id = 'hub-user-dm-modal'; m.style.zIndex = '95600';
+            m.innerHTML = `<div class="modal-content" id="hub-user-dm-content" style="max-width:880px; width:96%; padding:16px 18px; transition:max-width 0.18s;"></div>`;
             m.addEventListener('click', e => { if (e.target === m) m.classList.remove('active'); });
             document.body.appendChild(m);
         }
@@ -582,28 +662,28 @@
         setTimeout(() => document.getElementById('hub-dm-msg-inp')?.focus(), 40);
     };
 
-    window.USER_DM_SEND = function() {
-        const u = CUR_USER();
-        const myKey = CUR_LOGIN_KEY();
-        const peerKey = window._hubDmActivePeer;
-        if (!u || !myKey || !peerKey || peerKey === myKey) return;
+    window.USER_DM_TOGGLE_SIDE_PROFILE = function() {
+        window._hubDmShowProfile = !window._hubDmShowProfile;
+        if (window.innerWidth <= 880) {
+            window._hubDmMobView = window._hubDmShowProfile ? 'profile' : 'chat';
+        }
+        RENDER_USER_DM_MODAL();
+    };
 
+    window.USER_DM_SEND = function() {
+        const u = CUR_USER(), myKey = CUR_LOGIN_KEY(), peerKey = window._hubDmActivePeer;
+        if (!u || !myKey || !peerKey || peerKey === myKey) return;
         const inp = document.getElementById('hub-dm-msg-inp');
         const text = (inp ? inp.value : '').trim();
         if (!text) return;
 
-        const now = Date.now();
-        const id = 'dm_' + now + '_' + Math.random().toString(36).slice(2, 6);
+        const now = Date.now(), id = 'dm_' + now + '_' + Math.random().toString(36).slice(2, 6);
         const tid = DM_THREAD_ID(myKey, peerKey);
         const d = new Date(now);
-        const dateStr = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }) + ' ' +
-                        d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+        const dateStr = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
         const prof = GET_PROFILE(myKey);
 
-        const msg = {
-            id, from: myKey, fromName: prof.displayName, to: peerKey,
-            text: text.slice(0, 800), ts: now, date: dateStr
-        };
+        const msg = { id, from: myKey, fromName: prof.displayName, to: peerKey, text: text.slice(0, 800), ts: now, date: dateStr };
         const inboxMy = { peer: peerKey, lastText: msg.text.slice(0, 90), lastTs: now, lastFrom: myKey };
         const inboxPeer = { peer: myKey, lastText: msg.text.slice(0, 90), lastTs: now, lastFrom: myKey };
 
@@ -627,16 +707,13 @@
     };
 
     window.USER_DM_DELETE_MSG = function(msgId) {
-        const myKey = CUR_LOGIN_KEY();
-        const peerKey = window._hubDmActivePeer;
+        const myKey = CUR_LOGIN_KEY(), peerKey = window._hubDmActivePeer;
         if (!myKey || !peerKey) return;
         const msg = window._hubDmMessages.find(m => m.id === msgId);
         if (!msg || SAFE_KEY(msg.from) !== myKey) return;
         const tid = DM_THREAD_ID(myKey, peerKey);
-
         window._hubDmMessages = window._hubDmMessages.filter(m => m.id !== msgId);
         RENDER_USER_DM_MESSAGES_ONLY();
-
         if (window.firebase && firebase.apps && firebase.apps.length) {
             firebase.database().ref(`campaign_v2/user_dms/${tid}/${msgId}`).remove().catch(() => {});
         } else {
@@ -671,8 +748,7 @@
     }
 
     function BUILD_DM_PEERS_LIST_HTML() {
-        const myKey = CUR_LOGIN_KEY();
-        const q = (window._hubDmSearch || '').toLowerCase().trim();
+        const myKey = CUR_LOGIN_KEY(), q = (window._hubDmSearch || '').toLowerCase().trim();
         const inboxList = Object.values(window._hubDmInbox || {})
             .filter(x => x && x.peer && SAFE_KEY(x.peer) !== myKey)
             .sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0));
@@ -683,22 +759,14 @@
             Object.keys(accounts)
                 .concat(Object.keys(window._hubProfilesCache || {}))
                 .concat(Object.values(window._hubOnlineUsers || {}).map(u => u && u.login))
-                .map(SAFE_KEY)
-                .filter(k => k && k !== myKey && !seen.has(k))
+                .map(SAFE_KEY).filter(k => k && k !== myKey && !seen.has(k))
         ));
 
-        const matchesQ = (key) => {
-            if (!q) return true;
-            const p = GET_PROFILE(key);
-            return key.includes(q) || (p.displayName || '').toLowerCase().includes(q);
-        };
+        const matchesQ = key => !q || key.includes(q) || (GET_PROFILE(key).displayName || '').toLowerCase().includes(q);
 
         const renderPeer = (peerKey, inboxItem) => {
-            const p = GET_PROFILE(peerKey);
-            const act = window._hubDmActivePeer === peerKey;
-            const online = IS_USER_ONLINE(peerKey);
-            const tid = DM_THREAD_ID(myKey, peerKey);
-            const unread = !!(inboxItem && SAFE_KEY(inboxItem.lastFrom) !== myKey && Number(inboxItem.lastTs || 0) > GET_DM_READ_TS(tid));
+            const p = GET_PROFILE(peerKey), act = window._hubDmActivePeer === peerKey, online = IS_USER_ONLINE(peerKey);
+            const unread = !!(inboxItem && SAFE_KEY(inboxItem.lastFrom) !== myKey && Number(inboxItem.lastTs || 0) > GET_DM_READ_TS(DM_THREAD_ID(myKey, peerKey)));
             const av = p.avatar
                 ? `<img src="${p.avatar}" style="width:32px; height:32px; border-radius:50%; object-fit:cover; border:1px solid var(--ui-accent,#d2b278); flex-shrink:0;">`
                 : `<div style="width:32px; height:32px; border-radius:50%; background:var(--ui-panel2,#161412); border:1px solid var(--ui-border,#3e372f); display:flex; align-items:center; justify-content:center; flex-shrink:0;">👤</div>`;
@@ -712,20 +780,61 @@
                             </span>
                             ${unread ? `<span style="background:#a84848; color:#fff; border-radius:10px; padding:1px 6px; font-size:0.68rem; font-weight:bold;">NEW</span>` : ''}
                         </div>
-                        <div style="font-size:0.75rem; color:var(--ui-muted,#888); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
-                            ${inboxItem ? ESC(inboxItem.lastText || '') : `@${ESC(peerKey)}`}
-                        </div>
+                        <div style="font-size:0.74rem; color:var(--ui-muted,#888); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${inboxItem ? ESC(inboxItem.lastText || '') : `@${ESC(peerKey)}`}</div>
                     </div>
                 </button>`;
         };
 
-        const dialogsHtml = inboxList.filter(i => matchesQ(i.peer)).map(i => renderPeer(SAFE_KEY(i.peer), i)).join('');
-        const othersHtml = otherLogins.filter(matchesQ).map(k => renderPeer(k, null)).join('');
-
+        const dHtml = inboxList.filter(i => matchesQ(i.peer)).map(i => renderPeer(SAFE_KEY(i.peer), i)).join('');
+        const oHtml = otherLogins.filter(matchesQ).map(k => renderPeer(k, null)).join('');
         let out = '';
-        if (dialogsHtml) out += `<div style="font-size:0.74rem; color:var(--ui-accent,#d2b278); font-weight:700; margin:2px 0 5px 2px;">💬 Диалоги</div>${dialogsHtml}`;
-        if (othersHtml) out += `<div style="font-size:0.74rem; color:var(--ui-muted,#888); font-weight:600; margin:8px 0 5px 2px;">👥 Пользователи сайта</div>${othersHtml}`;
+        if (dHtml) out += `<div style="font-size:0.74rem; color:var(--ui-accent,#d2b278); font-weight:700; margin:2px 0 5px 2px;">💬 Диалоги</div>${dHtml}`;
+        if (oHtml) out += `<div style="font-size:0.74rem; color:var(--ui-muted,#888); font-weight:600; margin:8px 0 5px 2px;">👥 Пользователи</div>${oHtml}`;
         return out || `<div style="padding:18px; text-align:center; color:var(--ui-muted,#888); font-size:0.84rem;">Пользователи не найдены</div>`;
+    }
+
+    function BUILD_DM_SIDE_PROFILE_HTML(peerKey) {
+        const prof = GET_PROFILE(peerKey);
+        const roleObj = ROLE_PREFS.find(r => r.id === prof.favRole) || ROLE_PREFS[0];
+        const allTpls = (typeof GET_SHARED_TEMPLATES === 'function') ? GET_SHARED_TEMPLATES() : [];
+        const userTpls = allTpls.filter(t => !t.hideAuthor && SAFE_KEY(t.authorLogin) === peerKey);
+        const allHeroes = (typeof GC === 'function') ? GC() : [];
+        const heroCnt = allHeroes.filter(c => c && (SAFE_KEY(c.owner) === peerKey || SAFE_KEY(c.ownerId) === peerKey)).length;
+
+        const av = prof.avatar
+            ? `<img src="${prof.avatar}" style="width:68px; height:68px; border-radius:50%; object-fit:cover; border:2px solid var(--ui-accent,#d2b278);">`
+            : `<div style="width:68px; height:68px; border-radius:50%; background:var(--ui-panel,#221f1c); border:2px solid var(--ui-border-strong,#695c4c); display:flex; align-items:center; justify-content:center; font-size:1.9rem;">👤</div>`;
+
+        return `
+            <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--ui-border,#3e372f); padding-bottom:7px; margin-bottom:10px;">
+                <div style="display:flex; align-items:center; gap:6px;">
+                    <button class="btn-small hub-dm-mob-back" onclick="window._hubDmShowProfile=false; window._hubDmMobView='chat'; RENDER_USER_DM_MODAL();">⬅️ Чат</button>
+                    <b style="color:var(--ui-accent,#d2b278); font-size:0.9rem;">👤 Профиль</b>
+                </div>
+                <button class="btn-small" style="padding:2px 7px; font-size:0.75rem;" onclick="USER_DM_TOGGLE_SIDE_PROFILE()">✕</button>
+            </div>
+            <div style="display:flex; flex-direction:column; align-items:center; text-align:center; gap:5px; margin-bottom:12px;">
+                ${av}
+                <b style="font-size:1.05rem; color:var(--ui-text,#e5e0d7);">${ESC(prof.displayName)}</b>
+                <small style="color:var(--ui-muted,#888);">@${ESC(peerKey)} • ${IS_USER_ONLINE(peerKey) ? '<span style="color:#6cb878;">🟢 в сети</span>' : '⚫ не в сети'}</small>
+                <span style="background:var(--ui-panel,#221f1c); border:1px solid var(--ui-accent,#d2b278); color:var(--ui-accent,#d2b278); padding:2px 9px; border-radius:12px; font-size:0.78rem; margin-top:2px;">${ESC(prof.status)}</span>
+            </div>
+            <div style="background:var(--ui-panel,#221f1c); border:1px solid var(--ui-border,#3e372f); border-radius:8px; padding:9px 10px; font-size:0.83rem; display:flex; flex-direction:column; gap:5px; margin-bottom:10px;">
+                <div><b>Роль:</b> ${roleObj.label}</div>
+                ${prof.favClass ? `<div><b>Любимый класс:</b> ${ESC(prof.favClass)}</div>` : ''}
+                <div style="color:var(--ui-muted,#aaa);">⚔️ Героев: <b>${heroCnt}</b> • 🌟 Шаблонов: <b>${userTpls.length}</b></div>
+                ${prof.bio ? `<div style="margin-top:5px; padding-top:6px; border-top:1px dashed var(--ui-border,#3e372f); white-space:pre-wrap; line-height:1.4;">${ESC(prof.bio)}</div>` : ''}
+            </div>
+            ${userTpls.length ? `
+                <div>
+                    <div style="font-size:0.8rem; font-weight:700; color:var(--ui-accent,#d2b278); margin-bottom:5px;">🌟 Шаблоны игрока:</div>
+                    ${userTpls.map(t => `
+                        <div style="display:flex; justify-content:space-between; align-items:center; gap:6px; background:var(--ui-panel,#221f1c); border:1px solid var(--ui-border,#3e372f); border-radius:7px; padding:6px 8px; margin-bottom:5px; font-size:0.8rem;">
+                            <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"><b>${ESC(t.charSnapshot?.name || 'Герой')}</b></span>
+                            <button class="btn-small btn-save" style="padding:2px 7px; font-size:0.74rem;" onclick="document.getElementById('hub-user-dm-modal').classList.remove('active'); window._hubMainTab='play'; window._lobbyStep='player_chars'; PLAYER_USE_SHARED_USER_TEMPLATE('${ESC_JS(t.templateId)}', false);">Взять</button>
+                        </div>`).join('')}
+                </div>` : ''}
+        `;
     }
 
     window.USER_DM_ON_SEARCH = function(val) {
@@ -739,10 +848,12 @@
         if (!cont) return;
 
         const peer = window._hubDmActivePeer;
+        const showProf = !!(peer && window._hubDmShowProfile);
+        cont.style.maxWidth = showProf ? '1160px' : '880px';
+
         let chatColHTML = '';
         if (peer) {
-            const p = GET_PROFILE(peer);
-            const online = IS_USER_ONLINE(peer);
+            const p = GET_PROFILE(peer), online = IS_USER_ONLINE(peer);
             chatColHTML = `
                 <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding-bottom:8px; margin-bottom:8px; border-bottom:1px solid var(--ui-border,#3e372f); flex-wrap:wrap;">
                     <div style="display:flex; align-items:center; gap:8px;">
@@ -752,7 +863,7 @@
                             <small style="color:var(--ui-muted,#888); margin-left:6px;">@${ESC(peer)} • ${online ? '<span style="color:#6cb878;">🟢 в сети</span>' : '⚫ не в сети'}</small>
                         </div>
                     </div>
-                    <button class="btn-small" onclick="OPEN_PUBLIC_USER_PROFILE('${ESC_JS(peer)}')">👤 Профиль</button>
+                    <button class="btn-small ${showProf ? 'btn-save' : ''}" onclick="USER_DM_TOGGLE_SIDE_PROFILE()">👤 Профиль ${showProf ? '▸' : '◂'}</button>
                 </div>
                 <div id="hub-dm-messages-scroll" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:7px; padding-right:4px; margin-bottom:9px;"></div>
                 <div style="display:flex; gap:7px;">
@@ -760,22 +871,20 @@
                         onkeypress="if(event.key==='Enter'){ event.preventDefault(); USER_DM_SEND(); }"
                         style="flex:1; padding:8px 11px; text-align:left;">
                     <button class="btn-save" onclick="USER_DM_SEND()">Отправить</button>
-                </div>
-            `;
+                </div>`;
         } else {
             chatColHTML = `<div style="margin:auto; text-align:center; color:var(--ui-muted,#888); padding:28px;">
                 <div style="font-size:2.2rem; margin-bottom:6px;">✉️</div>
-                Выберите пользователя слева, чтобы начать личную переписку.<br>
-                <small>Эта личка работает между аккаунтами и не зависит от комнат.</small>
+                Выберите пользователя слева, чтобы начать личную переписку.
             </div>`;
         }
 
         cont.innerHTML = `
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom:1px solid var(--ui-border,#3e372f); padding-bottom:8px;">
-                <h2 style="margin:0; border:none; padding:0; font-size:1.25rem;">✉️ Личные сообщения пользователей</h2>
+                <h2 style="margin:0; border:none; padding:0; font-size:1.22rem;">✉️ Личные сообщения пользователей</h2>
                 <button class="btn-small" onclick="document.getElementById('hub-user-dm-modal').classList.remove('active')">✕ Закрыть</button>
             </div>
-            <div class="hub-dm-layout mob-${window._hubDmMobView || 'list'}">
+            <div class="hub-dm-layout ${showProf ? 'with-profile' : ''} mob-${window._hubDmMobView || 'list'}">
                 <div class="hub-dm-list-col">
                     <input type="text" value="${ESC(window._hubDmSearch || '')}" oninput="USER_DM_ON_SEARCH(this.value)"
                         placeholder="🔍 Поиск по нику или @логину..."
@@ -784,50 +893,147 @@
                         ${BUILD_DM_PEERS_LIST_HTML()}
                     </div>
                 </div>
-                <div class="hub-dm-chat-col">
-                    ${chatColHTML}
-                </div>
+                <div class="hub-dm-chat-col">${chatColHTML}</div>
+                ${showProf ? `<div class="hub-dm-prof-col">${BUILD_DM_SIDE_PROFILE_HTML(peer)}</div>` : ''}
             </div>
         `;
         if (peer) RENDER_USER_DM_MESSAGES_ONLY(true);
     }
 
-    // --- 4. 📰 ЛЕНТА ТАВЕРНЫ (ЦЕНТРАЛЬНАЯ КОЛОНКА) ---
+    // --- 4. 📰 ПОЛНОЦЕННЫЕ ПОСТЫ В ЛЕНТЕ (КАРТИНКИ, ЗАГОЛОВОК, ФОРМАТИРОВАНИЕ, КОММЕНТАРИИ) ---
+    window.HUB_OPEN_IMG_LIGHTBOX = function(src) {
+        if (!src) return;
+        let lb = document.getElementById('hub-img-lightbox');
+        if (!lb) {
+            lb = document.createElement('div');
+            lb.id = 'hub-img-lightbox';
+            lb.style.cssText = 'position:fixed; inset:0; background:rgba(8,7,6,0.92); z-index:99000; display:flex; align-items:center; justify-content:center; padding:18px; cursor:zoom-out;';
+            lb.onclick = () => { lb.style.display = 'none'; };
+            document.body.appendChild(lb);
+        }
+        lb.innerHTML = `<img src="${src}" style="max-width:94vw; max-height:90vh; border-radius:10px; border:2px solid var(--ui-accent,#d2b278); box-shadow:0 16px 48px rgba(0,0,0,0.9);">`;
+        lb.style.display = 'flex';
+    };
+
+    window.HUB_FEED_FORMAT = function(type) {
+        const ta = document.getElementById('hub-feed-post-inp');
+        if (!ta) return;
+        const s = ta.selectionStart || 0, e = ta.selectionEnd || 0;
+        const sel = ta.value.slice(s, e);
+        let ins = sel;
+        if (type === 'bold') ins = `**${sel || 'жирный текст'}**`;
+        else if (type === 'italic') ins = `*${sel || 'курсив'}*`;
+        else if (type === 'quote') ins = `\n> ${sel || 'цитата'}`;
+        else if (type === 'list') ins = `\n- ${sel || 'пункт списка'}`;
+        ta.value = ta.value.slice(0, s) + ins + ta.value.slice(e);
+        ta.focus();
+        ta.setSelectionRange(s + ins.length, s + ins.length);
+    };
+
+    function RENDER_DRAFT_IMGS_PREVIEW() {
+        const box = document.getElementById('hub-feed-draft-imgs');
+        if (!box) return;
+        const imgs = window._hubFeedDraftImgs || [];
+        if (!imgs.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+        box.style.display = 'flex';
+        box.innerHTML = imgs.map((src, idx) => `
+            <div style="position:relative; width:74px; height:74px; flex-shrink:0;">
+                <img src="${src}" style="width:100%; height:100%; object-fit:cover; border-radius:7px; border:1px solid var(--ui-border-strong,#695c4c);">
+                <button data-custom-bg="1" onclick="HUB_FEED_REMOVE_DRAFT_IMG(${idx})" title="Убрать картинку"
+                    style="position:absolute; top:-6px; right:-6px; width:20px; height:20px; border-radius:50%; padding:0; font-size:0.7rem; background:#7e3d3d; color:#fff; border:1px solid #f87171; cursor:pointer; box-shadow:none;">✕</button>
+            </div>`).join('');
+    }
+
+    window.HUB_FEED_REMOVE_DRAFT_IMG = function(idx) {
+        window._hubFeedDraftImgs.splice(idx, 1);
+        RENDER_DRAFT_IMGS_PREVIEW();
+    };
+
+    window.HUB_FEED_UPLOAD_IMG = function() {
+        if ((window._hubFeedDraftImgs || []).length >= 4) {
+            showMessage('🖼️ Лимит картинок', 'К одному посту можно прикрепить до 4 картинок.');
+            return;
+        }
+        const inp = document.createElement('input');
+        inp.type = 'file'; inp.accept = 'image/*'; inp.multiple = true;
+        inp.onchange = function(e) {
+            const files = Array.from(e.target.files || []).slice(0, 4 - window._hubFeedDraftImgs.length);
+            files.forEach(f => {
+                const reader = new FileReader();
+                reader.onload = ev => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const maxSide = 920;
+                        const scale = Math.min(1, maxSide / Math.max(img.width || 1, img.height || 1));
+                        const c = document.createElement('canvas');
+                        c.width = Math.max(1, Math.round(img.width * scale));
+                        c.height = Math.max(1, Math.round(img.height * scale));
+                        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+                        if (window._hubFeedDraftImgs.length < 4) {
+                            window._hubFeedDraftImgs.push(c.toDataURL('image/jpeg', 0.8));
+                            RENDER_DRAFT_IMGS_PREVIEW();
+                        }
+                    };
+                    img.src = ev.target.result;
+                };
+                reader.readAsDataURL(f);
+            });
+        };
+        inp.click();
+    };
+
+    window.HUB_FEED_ADD_IMG_URL = function() {
+        if ((window._hubFeedDraftImgs || []).length >= 4) {
+            showMessage('🖼️ Лимит картинок', 'К одному посту можно прикрепить до 4 картинок.');
+            return;
+        }
+        const url = (prompt('Вставьте прямую ссылку (URL) на картинку:') || '').trim();
+        if (!url || !/^https?:\/\//i.test(url)) return;
+        window._hubFeedDraftImgs.push(url);
+        RENDER_DRAFT_IMGS_PREVIEW();
+    };
+
     window.HUB_SET_FEED_FILTER = function(f) {
         window._hubFeedFilter = f;
         RENDER_FEED_ITEMS_ONLY();
         document.querySelectorAll('[data-hub-feed-filter]').forEach(btn => {
-            const act = btn.getAttribute('data-hub-feed-filter') === f;
-            btn.className = 'btn-small ' + (act ? 'btn-save' : '');
+            btn.className = 'btn-small ' + (btn.getAttribute('data-hub-feed-filter') === f ? 'btn-save' : '');
         });
     };
 
     window.HUB_PUBLISH_FEED_POST = function() {
-        const u = CUR_USER();
-        if (!u || !u.login) return;
+        const u = CUR_USER(); if (!u || !u.login) return;
+        const titleEl = document.getElementById('hub-feed-post-title');
         const txtEl = document.getElementById('hub-feed-post-inp');
         const tagEl = document.getElementById('hub-feed-post-tag');
+        const title = (titleEl ? titleEl.value : '').trim();
         const text = (txtEl ? txtEl.value : '').trim();
-        if (!text) return;
+        const images = (window._hubFeedDraftImgs || []).slice(0, 4);
 
-        const now = Date.now();
-        const id = 'fp_' + now + '_' + Math.random().toString(36).slice(2, 6);
+        if (!text && !images.length) {
+            showMessage('⚠️ Пустой пост', 'Напишите текст или прикрепите хотя бы одну картинку.');
+            return;
+        }
+
+        const now = Date.now(), id = 'fp_' + now + '_' + Math.random().toString(36).slice(2, 6);
         const prof = GET_PROFILE(u.login);
         const d = new Date(now);
         const dateStr = d.toLocaleDateString('ru-RU') + ' ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
 
         const post = {
-            id,
-            login: SAFE_KEY(u.login),
-            displayName: prof.displayName,
+            id, login: SAFE_KEY(u.login), displayName: prof.displayName,
             tag: tagEl ? tagEl.value : 'post',
-            text: text.slice(0, 900),
-            ts: now,
-            date: dateStr,
-            likes: {}
+            title: title.slice(0, 120),
+            text: text.slice(0, 2000),
+            images,
+            ts: now, date: dateStr, likes: {}, comments: {}
         };
 
+        if (titleEl) titleEl.value = '';
         if (txtEl) txtEl.value = '';
+        window._hubFeedDraftImgs = [];
+        RENDER_DRAFT_IMGS_PREVIEW();
+
         window._hubFeedPosts.unshift(post);
         RENDER_FEED_ITEMS_ONLY();
 
@@ -839,14 +1045,11 @@
     };
 
     window.HUB_TOGGLE_FEED_LIKE = function(postId) {
-        const myKey = CUR_LOGIN_KEY();
-        if (!myKey) return;
-        const post = window._hubFeedPosts.find(p => p.id === postId);
-        if (!post) return;
+        const myKey = CUR_LOGIN_KEY(); if (!myKey) return;
+        const post = window._hubFeedPosts.find(p => p.id === postId); if (!post) return;
         if (!post.likes || typeof post.likes !== 'object') post.likes = {};
         const had = !!post.likes[myKey];
-        if (had) delete post.likes[myKey];
-        else post.likes[myKey] = true;
+        if (had) delete post.likes[myKey]; else post.likes[myKey] = true;
         RENDER_FEED_ITEMS_ONLY();
 
         if (window.firebase && firebase.apps && firebase.apps.length) {
@@ -859,14 +1062,46 @@
         }
     };
 
-    window.HUB_DELETE_FEED_POST = function(postId) {
-        const myKey = CUR_LOGIN_KEY();
-        const isAdm = (typeof window.IS_ADMIN === 'function') && window.IS_ADMIN();
-        const post = window._hubFeedPosts.find(p => p.id === postId);
-        if (!post) return;
-        if (!isAdm && SAFE_KEY(post.login) !== myKey) return;
-        if (!confirm('Удалить эту запись из Ленты?')) return;
+    window.HUB_TOGGLE_FEED_COMMENTS = function(postId) {
+        window._hubFeedOpenComments[postId] = !window._hubFeedOpenComments[postId];
+        RENDER_FEED_ITEMS_ONLY();
+        if (window._hubFeedOpenComments[postId]) {
+            setTimeout(() => document.getElementById(`hub-fp-cmt-${postId}`)?.focus(), 30);
+        }
+    };
 
+    window.HUB_ADD_FEED_COMMENT = function(postId) {
+        const u = CUR_USER(), myKey = CUR_LOGIN_KEY(); if (!u || !myKey) return;
+        const post = window._hubFeedPosts.find(p => p.id === postId); if (!post) return;
+        const inp = document.getElementById(`hub-fp-cmt-${postId}`);
+        const text = (inp ? inp.value : '').trim();
+        if (!text) return;
+
+        const now = Date.now(), cId = 'fc_' + now + '_' + Math.random().toString(36).slice(2, 6);
+        const d = new Date(now);
+        const dateStr = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+        const cmt = { id: cId, login: myKey, text: text.slice(0, 500), ts: now, date: dateStr };
+
+        if (!post.comments || typeof post.comments !== 'object') post.comments = {};
+        post.comments[cId] = cmt;
+        if (inp) inp.value = '';
+        window._hubFeedOpenComments[postId] = true;
+        RENDER_FEED_ITEMS_ONLY();
+
+        if (window.firebase && firebase.apps && firebase.apps.length) {
+            firebase.database().ref(`campaign_v2/hub_feed/${postId}/comments/${cId}`).set(cmt).catch(() => {});
+        } else {
+            fetch(`${FB_ROOT}/hub_feed/${encodeURIComponent(postId)}/comments/${encodeURIComponent(cId)}.json`, {
+                method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cmt)
+            }).catch(() => {});
+        }
+    };
+
+    window.HUB_DELETE_FEED_POST = function(postId) {
+        const myKey = CUR_LOGIN_KEY(), isAdm = (typeof window.IS_ADMIN === 'function') && window.IS_ADMIN();
+        const post = window._hubFeedPosts.find(p => p.id === postId);
+        if (!post || (!isAdm && SAFE_KEY(post.login) !== myKey)) return;
+        if (!confirm('Удалить эту запись из Ленты?')) return;
         window._hubFeedPosts = window._hubFeedPosts.filter(p => p.id !== postId);
         RENDER_FEED_ITEMS_ONLY();
         if (window.firebase && firebase.apps && firebase.apps.length) {
@@ -879,14 +1114,11 @@
     function RENDER_FEED_ITEMS_ONLY() {
         const box = document.getElementById('hub-feed-stream');
         if (!box) return;
-        const filter = window._hubFeedFilter || 'all';
-        const myKey = CUR_LOGIN_KEY();
+        const filter = window._hubFeedFilter || 'all', myKey = CUR_LOGIN_KEY();
         const isAdm = (typeof window.IS_ADMIN === 'function') && window.IS_ADMIN();
 
         const items = [];
-        if (filter === 'all' || filter === 'posts') {
-            (window._hubFeedPosts || []).forEach(p => items.push({ kind: 'post', ts: p.ts || 0, data: p }));
-        }
+        if (filter === 'all' || filter === 'posts') (window._hubFeedPosts || []).forEach(p => items.push({ kind: 'post', ts: p.ts || 0, data: p }));
         if (filter === 'all' || filter === 'templates') {
             const tpls = (typeof GET_SHARED_TEMPLATES === 'function') ? GET_SHARED_TEMPLATES() : [];
             tpls.slice(-6).forEach((t, idx) => items.push({ kind: 'template', ts: Number(t.createdAtTs || t.ts || (idx + 1)), data: t }));
@@ -895,29 +1127,54 @@
             const upds = (typeof window.GET_SITE_UPDATES === 'function') ? window.GET_SITE_UPDATES().slice(0, 3) : [];
             upds.forEach(u => items.push({ kind: 'update', ts: Number(u.id || 0), data: u }));
         }
-
         items.sort((a, b) => (b.ts || 0) - (a.ts || 0));
 
         if (!items.length) {
-            box.innerHTML = `<div style="padding:36px 14px; text-align:center; color:var(--ui-muted,#888); background:var(--ui-panel2,#161412); border:1px dashed var(--ui-border,#3e372f); border-radius:10px;">
-                📰 В ленте пока пусто.<br><small>Напишите первую заметку или объявление о наборе в кампанию сверху!</small>
-            </div>`;
+            box.innerHTML = `<div style="padding:36px 14px; text-align:center; color:var(--ui-muted,#888); background:var(--ui-panel2,#161412); border:1px dashed var(--ui-border,#3e372f); border-radius:10px;">📰 В ленте пока пусто.<br><small>Опубликуйте первый пост, арт или объявление о наборе в партию!</small></div>`;
             return;
         }
 
         box.innerHTML = items.map(it => {
             if (it.kind === 'post') {
-                const p = it.data;
-                const lk = SAFE_KEY(p.login);
-                const prof = GET_PROFILE(lk);
+                const p = it.data, lk = SAFE_KEY(p.login), prof = GET_PROFILE(lk);
                 const tagObj = FEED_TAGS.find(t => t.id === p.tag) || FEED_TAGS[0];
                 const likesObj = (p.likes && typeof p.likes === 'object') ? p.likes : {};
-                const likeCnt = Object.keys(likesObj).length;
-                const liked = !!(myKey && likesObj[myKey]);
+                const likeCnt = Object.keys(likesObj).length, liked = !!(myKey && likesObj[myKey]);
                 const canDel = isAdm || lk === myKey;
+                const imgs = Array.isArray(p.images) ? p.images.filter(Boolean) : [];
+                const cmts = Object.values((p.comments && typeof p.comments === 'object') ? p.comments : {})
+                    .filter(c => c && c.text).sort((a, b) => (a.ts || 0) - (b.ts || 0));
+                const cmtOpen = !!window._hubFeedOpenComments[p.id];
+
                 const av = prof.avatar
                     ? `<img src="${prof.avatar}" class="hub-avatar-sm" onclick="OPEN_PUBLIC_USER_PROFILE('${ESC_JS(lk)}')">`
                     : `<div class="hub-avatar-sm" onclick="OPEN_PUBLIC_USER_PROFILE('${ESC_JS(lk)}')">👤</div>`;
+
+                const imgsHTML = imgs.length ? `
+                    <div class="hub-post-imgs-grid">
+                        ${imgs.map(src => `<img src="${src}" class="hub-post-img-item" onclick="HUB_OPEN_IMG_LIGHTBOX('${ESC_JS(src)}')" alt="Вложение">`).join('')}
+                    </div>` : '';
+
+                const cmtsHTML = cmtOpen ? `
+                    <div style="margin-top:9px; padding-top:8px; border-top:1px dashed var(--ui-border,#3e372f);">
+                        ${cmts.map(c => {
+                            const cp = GET_PROFILE(c.login);
+                            return `<div style="background:var(--ui-panel,#221f1c); border:1px solid var(--ui-border,#3e372f); border-radius:7px; padding:6px 9px; margin-bottom:5px; font-size:0.84rem;">
+                                <div style="display:flex; justify-content:space-between; gap:6px; margin-bottom:2px;">
+                                    <b style="color:var(--ui-accent,#d2b278); font-size:0.8rem; cursor:pointer;" onclick="OPEN_PUBLIC_USER_PROFILE('${ESC_JS(c.login)}')">${ESC(cp.displayName)} <small style="color:var(--ui-muted,#888); font-weight:normal;">@${ESC(c.login)}</small></b>
+                                    <small style="color:var(--ui-muted,#888); font-size:0.7rem !important;">${ESC(c.date || '')}</small>
+                                </div>
+                                <div style="white-space:pre-wrap; word-break:break-word;">${ESC(c.text)}</div>
+                            </div>`;
+                        }).join('') || '<div style="font-size:0.8rem; color:var(--ui-muted,#888); margin-bottom:6px;">Комментариев пока нет</div>'}
+                        <div style="display:flex; gap:6px; margin-top:6px;">
+                            <input type="text" id="hub-fp-cmt-${ESC(p.id)}" placeholder="Написать комментарий..."
+                                onkeypress="if(event.key==='Enter'){ event.preventDefault(); HUB_ADD_FEED_COMMENT('${ESC_JS(p.id)}'); }"
+                                style="flex:1; padding:6px 10px; font-size:0.84rem; text-align:left;">
+                            <button class="btn-small btn-save" onclick="HUB_ADD_FEED_COMMENT('${ESC_JS(p.id)}')">➡️</button>
+                        </div>
+                    </div>` : '';
+
                 return `
                     <div class="hub-feed-card">
                         <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px;">
@@ -931,27 +1188,32 @@
                             </div>
                             ${canDel ? `<button data-custom-bg="1" class="btn-small" onclick="HUB_DELETE_FEED_POST('${ESC_JS(p.id)}')" style="background:transparent; border:none; color:var(--ui-muted,#888); box-shadow:none; padding:2px 6px;">✕</button>` : ''}
                         </div>
-                        <div style="font-size:0.92rem; line-height:1.48; white-space:pre-wrap; word-break:break-word; margin-bottom:9px;">${ESC(p.text)}</div>
-                        <div style="display:flex; gap:6px; align-items:center;">
+                        ${p.title ? `<div style="font-weight:700; font-size:1.02rem; color:var(--ui-text,#ebe8e2); margin-bottom:5px;">${ESC(p.title)}</div>` : ''}
+                        ${p.text ? `<div style="font-size:0.92rem; line-height:1.48; word-break:break-word; margin-bottom:8px;">${FORMAT_POST_TEXT(p.text)}</div>` : ''}
+                        ${imgsHTML}
+                        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
                             <button data-custom-bg="1" class="btn-small" onclick="HUB_TOGGLE_FEED_LIKE('${ESC_JS(p.id)}')"
                                 style="padding:3px 9px; font-size:0.8rem; border-radius:14px; box-shadow:none; background:${liked ? 'var(--ui-btn-bg,#c8a66a)' : 'var(--ui-panel,#221f1c)'}; color:${liked ? 'var(--ui-btn-text,#1a150f)' : 'var(--ui-text,#e5e0d7)'}; border:1px solid ${liked ? 'var(--ui-accent,#d2b278)' : 'var(--ui-border,#3e372f)'};">
                                 ❤️ ${likeCnt > 0 ? likeCnt : 'Нравится'}
                             </button>
-                            ${lk !== myKey ? `<button data-custom-bg="1" class="btn-small" onclick="OPEN_USER_DM_MODAL('${ESC_JS(lk)}')" style="padding:3px 9px; font-size:0.78rem; border-radius:14px; box-shadow:none; background:var(--ui-panel,#221f1c); color:var(--ui-muted,#aaa); border:1px solid var(--ui-border,#3e372f);">✉️ Написать автору</button>` : ''}
+                            <button data-custom-bg="1" class="btn-small" onclick="HUB_TOGGLE_FEED_COMMENTS('${ESC_JS(p.id)}')"
+                                style="padding:3px 9px; font-size:0.8rem; border-radius:14px; box-shadow:none; background:var(--ui-panel,#221f1c); color:var(--ui-text,#e5e0d7); border:1px solid var(--ui-border,#3e372f);">
+                                💬 ${cmts.length > 0 ? cmts.length : 'Коммент.'}
+                            </button>
+                            ${lk !== myKey ? `<button data-custom-bg="1" class="btn-small" onclick="OPEN_USER_DM_MODAL('${ESC_JS(lk)}')" style="padding:3px 9px; font-size:0.78rem; border-radius:14px; box-shadow:none; background:var(--ui-panel,#221f1c); color:var(--ui-muted,#aaa); border:1px solid var(--ui-border,#3e372f);">✉️ Написать</button>` : ''}
                         </div>
+                        ${cmtsHTML}
                     </div>`;
             }
 
             if (it.kind === 'template') {
-                const t = it.data;
-                const ch = t.charSnapshot || {};
-                const authorTxt = t.hideAuthor ? 'Анонимный игрок' : `@${t.authorLogin || 'игрок'}`;
+                const t = it.data, ch = t.charSnapshot || {};
                 return `
                     <div class="hub-feed-card">
                         <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
                             <div>
-                                <div style="font-size:0.76rem; color:var(--ui-accent,#d2b278); font-weight:700; margin-bottom:3px;">🌟 Новый шаблон персонажа • ${ESC(authorTxt)}</div>
-                                <div style="font-weight:700; font-size:0.96rem;">${ESC(ch.name || 'Герой')} <small style="color:var(--ui-muted,#aaa); font-weight:normal;">(${ESC(ch.race || 'Раса')} • ${ESC(ch.className || 'Класс')})</small></div>
+                                <div style="font-size:0.76rem; color:var(--ui-accent,#d2b278); font-weight:700; margin-bottom:3px;">🌟 Новый шаблон • ${ESC(t.hideAuthor ? 'Аноним' : '@' + (t.authorLogin || 'игрок'))}</div>
+                                <div style="font-weight:700; font-size:0.95rem;">${ESC(ch.name || 'Герой')} <small style="color:var(--ui-muted,#aaa); font-weight:normal;">(${ESC(ch.race || 'Раса')} • ${ESC(ch.className || 'Класс')})</small></div>
                             </div>
                             <button class="btn-small btn-save" onclick="SET_HUB_MAIN_TAB('play', 'player_chars', 'user_templates')">Посмотреть</button>
                         </div>
@@ -973,18 +1235,14 @@
 
     // --- 5. ОБЩИЙ ЧАТ ТАВЕРНЫ (ПРАВАЯ КОЛОНКА) ---
     window.HUB_SEND_CHAT_MSG = function() {
-        const u = CUR_USER();
-        if (!u || !u.login) return;
+        const u = CUR_USER(); if (!u || !u.login) return;
         const inp = document.getElementById('hub-global-chat-inp');
         const text = (inp ? inp.value : '').trim();
         if (!text) return;
 
-        const prof = GET_PROFILE(u.login);
-        const now = Date.now();
-        const id = 'm_' + now + '_' + Math.random().toString(36).slice(2, 6);
+        const prof = GET_PROFILE(u.login), now = Date.now(), id = 'm_' + now + '_' + Math.random().toString(36).slice(2, 6);
         const d = new Date(now);
-        const dateStr = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }) + ' ' +
-                        d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+        const dateStr = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
         const msg = { id, login: SAFE_KEY(u.login), displayName: prof.displayName, text: text.slice(0, 600), ts: now, date: dateStr };
 
         if (inp) inp.value = '';
@@ -1000,12 +1258,10 @@
     };
 
     window.HUB_DELETE_CHAT_MSG = function(msgId) {
-        const myKey = CUR_LOGIN_KEY();
-        const isAdm = (typeof window.IS_ADMIN === 'function') && window.IS_ADMIN();
+        const myKey = CUR_LOGIN_KEY(), isAdm = (typeof window.IS_ADMIN === 'function') && window.IS_ADMIN();
         const msg = window._hubGlobalChat.find(m => m.id === msgId);
         if (!msg || (!isAdm && SAFE_KEY(msg.login) !== myKey)) return;
         if (!confirm('Удалить это сообщение?')) return;
-
         window._hubGlobalChat = window._hubGlobalChat.filter(m => m.id !== msgId);
         RENDER_GLOBAL_CHAT_ONLY();
         if (window.firebase && firebase.apps && firebase.apps.length) {
@@ -1016,30 +1272,23 @@
     };
 
     window.HUB_MENTION_USER = function(login) {
-        const inp = document.getElementById('hub-global-chat-inp');
-        if (!inp) return;
+        const inp = document.getElementById('hub-global-chat-inp'); if (!inp) return;
         const tag = `@${login}, `;
         if (!inp.value.startsWith(tag)) inp.value = tag + inp.value;
         inp.focus();
     };
 
     function RENDER_GLOBAL_CHAT_ONLY(forceBottom = false) {
-        const box = document.getElementById('hub-chat-messages');
-        if (!box) return;
+        const box = document.getElementById('hub-chat-messages'); if (!box) return;
         const nearBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 80;
-        const myKey = CUR_LOGIN_KEY();
-        const isAdm = (typeof window.IS_ADMIN === 'function') && window.IS_ADMIN();
+        const myKey = CUR_LOGIN_KEY(), isAdm = (typeof window.IS_ADMIN === 'function') && window.IS_ADMIN();
 
         if (!window._hubGlobalChat.length) {
             box.innerHTML = `<div style="margin:auto; text-align:center; color:var(--ui-muted,#888); padding:22px; font-size:0.88rem;">🍺 В общей Таверне пока тихо.<br>Напишите первое сообщение!</div>`;
             return;
         }
-
         box.innerHTML = window._hubGlobalChat.map(m => {
-            const lk = SAFE_KEY(m.login);
-            const prof = GET_PROFILE(lk);
-            const mine = lk === myKey;
-            const canDel = isAdm || mine;
+            const lk = SAFE_KEY(m.login), prof = GET_PROFILE(lk), mine = lk === myKey, canDel = isAdm || mine;
             const av = prof.avatar
                 ? `<img src="${prof.avatar}" class="hub-avatar-sm" title="Профиль @${ESC(lk)}" onclick="OPEN_PUBLIC_USER_PROFILE('${ESC_JS(lk)}')">`
                 : `<div class="hub-avatar-sm" title="Профиль @${ESC(lk)}" onclick="OPEN_PUBLIC_USER_PROFILE('${ESC_JS(lk)}')">👤</div>`;
@@ -1061,25 +1310,20 @@
                     </div>
                 </div>`;
         }).join('');
-
         if (forceBottom || nearBottom) box.scrollTop = box.scrollHeight;
     }
 
     function RENDER_ONLINE_STRIP_ONLY() {
-        const box = document.getElementById('hub-online-users-strip');
-        if (!box) return;
-        const byLogin = {};
-        const myKey = CUR_LOGIN_KEY();
+        const box = document.getElementById('hub-online-users-strip'); if (!box) return;
+        const byLogin = {}, myKey = CUR_LOGIN_KEY();
         if (myKey) byLogin[myKey] = { login: myKey, displayName: GET_PROFILE(myKey).displayName, where: 'На Главной' };
         Object.values(window._hubOnlineUsers || {}).forEach(u => { if (u && u.login) byLogin[SAFE_KEY(u.login)] = u; });
-
         const list = Object.values(byLogin);
         const cntEl = document.getElementById('hub-online-count');
         if (cntEl) cntEl.textContent = String(list.length);
 
         box.innerHTML = list.map(u => {
-            const lk = SAFE_KEY(u.login);
-            const p = GET_PROFILE(lk);
+            const lk = SAFE_KEY(u.login), p = GET_PROFILE(lk);
             return `<button data-custom-bg="1" class="btn-small" onclick="OPEN_PUBLIC_USER_PROFILE('${ESC_JS(lk)}')"
                 title="${ESC(u.where || 'Онлайн')} — открыть профиль"
                 style="padding:3px 8px; border-radius:14px; font-size:0.76rem; background:var(--ui-panel,#221f1c); color:var(--ui-text,#e5e0d7); border:1px solid var(--ui-border,#3e372f); box-shadow:none; display:inline-flex; align-items:center; gap:4px;">
@@ -1088,7 +1332,7 @@
         }).join('');
     }
 
-    // --- 6. ПРОФИЛЬ И ПУБЛИЧНАЯ КАРТОЧКА (С КНОПКОЙ «✉️ НАПИСАТЬ В ЛИЧКУ») ---
+    // --- 6. ПРОФИЛЬ И ПУБЛИЧНАЯ КАРТОЧКА (Z-INDEX ПОВЕРХ ВСЕХ ОКОН) ---
     window.HUB_UPLOAD_PROFILE_AVATAR = function() {
         const inp = document.createElement('input');
         inp.type = 'file'; inp.accept = 'image/*';
@@ -1125,8 +1369,7 @@
     };
 
     window.OPEN_PUBLIC_USER_PROFILE = function(loginKey) {
-        const key = SAFE_KEY(loginKey);
-        if (!key) return;
+        const key = SAFE_KEY(loginKey); if (!key) return;
         const prof = GET_PROFILE(key);
         const roleObj = ROLE_PREFS.find(r => r.id === prof.favRole) || ROLE_PREFS[0];
         const allTpls = (typeof GET_SHARED_TEMPLATES === 'function') ? GET_SHARED_TEMPLATES() : [];
@@ -1137,11 +1380,12 @@
         let m = document.getElementById('hub-public-profile-modal');
         if (!m) {
             m = document.createElement('div');
-            m.className = 'modal'; m.id = 'hub-public-profile-modal'; m.style.zIndex = '95400';
+            m.className = 'modal'; m.id = 'hub-public-profile-modal';
             m.innerHTML = `<div class="modal-content" id="hub-public-profile-content" style="max-width:560px; width:95%;"></div>`;
             m.addEventListener('click', e => { if (e.target === m) m.classList.remove('active'); });
             document.body.appendChild(m);
         }
+        m.style.zIndex = '96500';
 
         const cont = document.getElementById('hub-public-profile-content');
         const av = prof.avatar
@@ -1173,7 +1417,7 @@
             <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:14px; flex-wrap:wrap;">
                 <div style="display:flex; gap:6px; flex-wrap:wrap;">
                     ${isNotMe ? `<button class="btn-save btn-small" onclick="document.getElementById('hub-public-profile-modal').classList.remove('active'); OPEN_USER_DM_MODAL('${ESC_JS(key)}');">✉️ Написать в личку</button>` : ''}
-                    ${isNotMe && window._hubMainTab === 'home' ? `<button class="btn-small" onclick="document.getElementById('hub-public-profile-modal').classList.remove('active'); HUB_MENTION_USER('${ESC_JS(key)}');">💬 Упомянуть в Таверне</button>` : ''}
+                    ${isNotMe && window._hubMainTab === 'home' ? `<button class="btn-small" onclick="document.getElementById('hub-public-profile-modal').classList.remove('active'); HUB_MENTION_USER('${ESC_JS(key)}');">💬 Упомянуть</button>` : ''}
                 </div>
                 <button onclick="document.getElementById('hub-public-profile-modal').classList.remove('active')">Закрыть</button>
             </div>
@@ -1181,7 +1425,7 @@
         m.classList.add('active');
     };
 
-    // --- 7. НАВИГАЦИЯ И ОТРИСОВКА ВКЛАДОК (ДОМ / ПРОФИЛЬ / ИГРАТЬ) ---
+    // --- 7. НАВИГАЦИЯ И ВКЛАДКИ ---
     window.SET_HUB_MAIN_TAB = function(tab, subStep, subCharTab) {
         window._hubMainTab = tab;
         window._hubEditingProfile = false;
@@ -1195,10 +1439,7 @@
     window.HUB_QUICK_PLAY_HERO = hid => { window._hubMainTab = 'play'; if (typeof PLAYER_SELECT_EXISTING_HERO === 'function') PLAYER_SELECT_EXISTING_HERO(hid); };
 
     function BUILD_HUB_NAV_BAR() {
-        const u = CUR_USER();
-        const prof = GET_PROFILE(u ? u.login : '');
-        const tab = window._hubMainTab || 'home';
-
+        const u = CUR_USER(), prof = GET_PROFILE(u ? u.login : ''), tab = window._hubMainTab || 'home';
         const updatesList = (typeof window.GET_SITE_UPDATES === 'function') ? window.GET_SITE_UPDATES() : [];
         const seenId = parseInt(localStorage.getItem('dnd_last_seen_update_id') || '0', 10);
         const unreadUpd = updatesList.filter(x => x && x.id && Number(x.id) > seenId).length;
@@ -1235,7 +1476,7 @@
                     </div>
                 </div>
                 <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-                    <button class="btn-small" onclick="OPEN_USER_DM_MODAL()" title="Личные сообщения между пользователями">
+                    <button class="btn-small" onclick="OPEN_USER_DM_MODAL()" title="Личные сообщения пользователей">
                         ✉️ Личка <span id="hub-dm-unread-badge" style="display:${dmUnread > 0 ? 'inline-block' : 'none'}; background:#a84848; color:#fff; border-radius:10px; padding:1px 6px; font-size:0.7rem; margin-left:3px; font-weight:bold;">${dmUnread}</span>
                     </button>
                     <button class="btn-small" data-admin-ui="updates" onclick="OPEN_SITE_UPDATES_MODAL()">📢 Обновления${updBadge}</button>
@@ -1247,8 +1488,7 @@
     }
 
     function RENDER_HOME_TAB_HTML() {
-        const u = CUR_USER();
-        const prof = GET_PROFILE(u.login);
+        const u = CUR_USER(), prof = GET_PROFILE(u.login);
         const rooms = (typeof GET_ROOMS === 'function') ? GET_ROOMS() : [];
         const cs = (typeof GC === 'function') ? GC() : [];
         const myHeroes = cs.filter(c => typeof IS_MY_HERO === 'function' && IS_MY_HERO(c, u));
@@ -1285,7 +1525,7 @@
 
         return `
             <div class="hub-home-grid">
-                <!-- 1. ЛЕВАЯ КОЛОНКА: БЫСТРЫЙ СТАРТ, КАМПАНИИ, РАСТЯНУТЫЕ ОБНОВЛЕНИЯ -->
+                <!-- 1. ЛЕВАЯ КОЛОНКА -->
                 <div class="hub-left-col">
                     <div class="panel" style="text-align:left;">
                         <h2 style="margin-top:0; font-size:1.08rem;">🎮 Быстрый старт</h2>
@@ -1314,13 +1554,11 @@
                             <h2 style="margin:0; border:none; padding:0; font-size:1.04rem;">📢 Последние обновления</h2>
                             <button class="btn-small" style="padding:3px 8px; font-size:0.74rem;" onclick="OPEN_SITE_UPDATES_MODAL()">Все →</button>
                         </div>
-                        <div class="hub-updates-scroll">
-                            ${updatesHTML}
-                        </div>
+                        <div class="hub-updates-scroll">${updatesHTML}</div>
                     </div>
                 </div>
 
-                <!-- 2. ЦЕНТРАЛЬНАЯ КОЛОНКА: ЛЕНТА ТАВЕРНЫ -->
+                <!-- 2. ЦЕНТРАЛЬНАЯ КОЛОНКА: ПОЛНОЦЕННАЯ ЛЕНТА -->
                 <div class="panel hub-feed-panel">
                     <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
                         <h2 style="margin:0; border:none; padding:0; font-size:1.15rem;">📰 Лента</h2>
@@ -1332,38 +1570,47 @@
                         </div>
                     </div>
 
-                    <div style="background:var(--ui-panel2,#161412); border:1px solid var(--ui-border,#3e372f); border-radius:10px; padding:10px;">
-                        <textarea id="hub-feed-post-inp" style="min-height:62px; margin-bottom:8px; font-size:0.88rem;" placeholder="Поделиться новостью, позвать в партию или написать заметку в Ленту..."></textarea>
-                        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
-                            <select id="hub-feed-post-tag" style="width:auto; padding:5px 9px; font-size:0.82rem; text-align:left;">
-                                ${FEED_TAGS.map(t => `<option value="${t.id}">${t.label}</option>`).join('')}
-                            </select>
-                            <button class="btn-small btn-save" style="padding:6px 14px;" onclick="HUB_PUBLISH_FEED_POST()">📝 Опубликовать</button>
+                    <div class="hub-composer">
+                        <input type="text" id="hub-feed-post-title" class="hub-composer-title" placeholder="Заголовок поста (необязательно)...">
+                        <textarea id="hub-feed-post-inp" class="hub-composer-textarea" placeholder="Напишите пост, историю из сессии, объявление о наборе в партию или прикрепите арт..."></textarea>
+
+                        <div id="hub-feed-draft-imgs" style="display:none; gap:8px; flex-wrap:wrap; padding-top:4px;"></div>
+
+                        <div class="hub-composer-toolbar">
+                            <div style="display:flex; gap:5px; flex-wrap:wrap; align-items:center;">
+                                <select id="hub-feed-post-tag" style="width:auto; padding:5px 9px; font-size:0.82rem; text-align:left;">
+                                    ${FEED_TAGS.map(t => `<option value="${t.id}">${t.label}</option>`).join('')}
+                                </select>
+                                <button data-custom-bg="1" class="hub-fmt-btn" title="Прикрепить картинку с компьютера (до 4 шт.)" onclick="HUB_FEED_UPLOAD_IMG()">🖼️ Фото</button>
+                                <button data-custom-bg="1" class="hub-fmt-btn" title="Прикрепить картинку по ссылке URL" onclick="HUB_FEED_ADD_IMG_URL()">🔗 URL</button>
+                                <button data-custom-bg="1" class="hub-fmt-btn" title="Жирный текст (**...**)" onclick="HUB_FEED_FORMAT('bold')"><b>B</b></button>
+                                <button data-custom-bg="1" class="hub-fmt-btn" title="Курсив (*...*)" onclick="HUB_FEED_FORMAT('italic')"><i>I</i></button>
+                                <button data-custom-bg="1" class="hub-fmt-btn" title="Цитата (> ...)" onclick="HUB_FEED_FORMAT('quote')">❝</button>
+                                <button data-custom-bg="1" class="hub-fmt-btn" title="Список (- ...)" onclick="HUB_FEED_FORMAT('list')">•</button>
+                            </div>
+                            <button class="btn-small btn-save" style="padding:7px 16px; font-size:0.86rem;" onclick="HUB_PUBLISH_FEED_POST()">📝 Опубликовать</button>
                         </div>
                     </div>
 
                     <div id="hub-feed-stream" style="display:flex; flex-direction:column; gap:10px;"></div>
                 </div>
 
-                <!-- 3. ПРАВАЯ КОЛОНКА: ОБЩИЙ ЧАТ ТАВЕРНЫ -->
+                <!-- 3. ПРАВАЯ КОЛОНКА: ОБЩИЙ ЧАТ -->
                 <div class="panel hub-chat-box">
                     <div style="display:flex; justify-content:space-between; align-items:center; gap:6px; margin-bottom:8px; flex-wrap:wrap;">
                         <h2 style="margin:0; border:none; padding:0; font-size:1.1rem;">🍺 Общий чат</h2>
                         <small style="color:var(--ui-muted,#9a9286);">Чат пользователей</small>
                     </div>
-
                     <div style="background:var(--ui-panel2,#161412); border:1px solid var(--ui-border,#3e372f); border-radius:8px; padding:6px 9px; margin-bottom:9px; text-align:left;">
                         <div style="font-size:0.74rem; color:var(--ui-muted,#aaa); margin-bottom:4px;">🟢 На сайте (<b id="hub-online-count">1</b>):</div>
                         <div id="hub-online-users-strip" style="display:flex; gap:5px; flex-wrap:wrap;"></div>
                     </div>
-
                     <div id="hub-chat-messages" class="hub-chat-messages"></div>
-
                     <div style="display:flex; gap:6px;">
                         <input type="text" id="hub-global-chat-inp"
                             placeholder="Написать в Таверну..."
                             onkeypress="if(event.key==='Enter'){ event.preventDefault(); HUB_SEND_CHAT_MSG(); }"
-                            style="flex:1; padding:8px 10px; text-align:left; border-radius:8px; font-size:0.88rem;">
+                            style="flex:1; padding:8px 10px; text-align:left; font-size:0.88rem;">
                         <button class="btn-save" style="padding:8px 12px;" onclick="HUB_SEND_CHAT_MSG()">➡️</button>
                     </div>
                 </div>
@@ -1372,9 +1619,7 @@
     }
 
     function RENDER_PROFILE_TAB_HTML() {
-        const u = CUR_USER();
-        const key = SAFE_KEY(u.login);
-        const prof = GET_PROFILE(key);
+        const u = CUR_USER(), key = SAFE_KEY(u.login), prof = GET_PROFILE(key);
         const cs = (typeof GC === 'function') ? GC() : [];
         const myHeroes = cs.filter(c => typeof IS_MY_HERO === 'function' && IS_MY_HERO(c, u));
         const rooms = (typeof GET_ROOMS === 'function') ? GET_ROOMS() : [];
@@ -1385,8 +1630,7 @@
         const allTpls = (typeof GET_SHARED_TEMPLATES === 'function') ? GET_SHARED_TEMPLATES() : [];
         const myTpls = allTpls.filter(t => SAFE_KEY(t.authorLogin) === key);
 
-        const joinedRoomsSet = new Set();
-        let maxLv = 1;
+        const joinedRoomsSet = new Set(); let maxLv = 1;
         myHeroes.forEach(h => {
             if ((h.level || 1) > maxLv) maxLv = h.level || 1;
             if (h.roomProgress) Object.entries(h.roomProgress).forEach(([rk, rp]) => { joinedRoomsSet.add(rk); if (rp && (rp.level || 1) > maxLv) maxLv = rp.level || 1; });
@@ -1402,16 +1646,16 @@
             <div class="hub-profile-banner" style="flex-direction:column; align-items:stretch;">
                 <h2 style="margin-top:0;">✏️ Редактирование профиля</h2>
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-                    <div><label style="font-size:0.82rem; color:var(--ui-muted,#aaa);">Отображаемое имя:</label><input type="text" id="hub-prof-name" value="${ESC(prof.displayName)}" style="margin-top:4px; text-align:left;"></div>
-                    <div><label style="font-size:0.82rem; color:var(--ui-muted,#aaa);">Предпочитаемая роль:</label><select id="hub-prof-role" style="margin-top:4px; text-align:left;">${ROLE_PREFS.map(r => `<option value="${r.id}" ${prof.favRole === r.id ? 'selected' : ''}>${r.label}</option>`).join('')}</select></div>
+                    <div><label style="font-size:0.82rem; color:var(--ui-muted,#aaa);">Отображаемое имя:</label><input type="text" id="hub-prof-name" value="${ESC(prof.displayName)}" style="width:100%; padding:8px; margin-top:4px; text-align:left;"></div>
+                    <div><label style="font-size:0.82rem; color:var(--ui-muted,#aaa);">Предпочитаемая роль:</label><select id="hub-prof-role" style="width:100%; padding:8px; margin-top:4px; text-align:left;">${ROLE_PREFS.map(r => `<option value="${r.id}" ${prof.favRole === r.id ? 'selected' : ''}>${r.label}</option>`).join('')}</select></div>
                     <div>
                         <label style="font-size:0.82rem; color:var(--ui-muted,#aaa);">Статус:</label>
-                        <input type="text" id="hub-prof-status" value="${ESC(prof.status)}" style="margin-top:4px; text-align:left;">
+                        <input type="text" id="hub-prof-status" value="${ESC(prof.status)}" style="width:100%; padding:8px; margin-top:4px; text-align:left;">
                         <div style="display:flex; gap:4px; flex-wrap:wrap; margin-top:5px;">${STATUS_PRESETS.map(p => `<button class="btn-small" style="padding:2px 6px; font-size:0.72rem;" onclick="document.getElementById('hub-prof-status').value='${ESC_JS(p)}'">${ESC(p)}</button>`).join('')}</div>
                     </div>
-                    <div><label style="font-size:0.82rem; color:var(--ui-muted,#aaa);">Любимый класс / раса:</label><input type="text" id="hub-prof-favclass" value="${ESC(prof.favClass)}" placeholder="Напр.: Тифлинг-Колдун" style="margin-top:4px; text-align:left;"></div>
+                    <div><label style="font-size:0.82rem; color:var(--ui-muted,#aaa);">Любимый класс / раса:</label><input type="text" id="hub-prof-favclass" value="${ESC(prof.favClass)}" placeholder="Напр.: Тифлинг-Колдун" style="width:100%; padding:8px; margin-top:4px; text-align:left;"></div>
                 </div>
-                <div><label style="font-size:0.82rem; color:var(--ui-muted,#aaa);">О себе:</label><textarea id="hub-prof-bio" style="min-height:80px; margin-top:4px;">${ESC(prof.bio)}</textarea></div>
+                <div><label style="font-size:0.82rem; color:var(--ui-muted,#aaa);">О себе:</label><textarea id="hub-prof-bio" style="width:100%; min-height:85px; padding:8px; margin-top:4px; text-align:left;">${ESC(prof.bio)}</textarea></div>
                 <div style="display:flex; gap:8px; justify-content:flex-end;">
                     <button class="btn-save" onclick="HUB_SAVE_PROFILE_FORM()">💾 Сохранить профиль</button>
                     <button onclick="window._hubEditingProfile=false; RENDER_LOBBY_HTML();">Отмена</button>
@@ -1540,6 +1784,7 @@
             `;
 
             if (tab === 'home') {
+                RENDER_DRAFT_IMGS_PREVIEW();
                 RENDER_ONLINE_STRIP_ONLY();
                 RENDER_GLOBAL_CHAT_ONLY(true);
                 RENDER_FEED_ITEMS_ONLY();
@@ -1557,6 +1802,7 @@
             dmThreadIdActive = '';
             window._hubDmInbox = {};
             window._hubDmActivePeer = null;
+            window._hubDmShowProfile = false;
             return _ORIG_LOGOUT_HUB();
         };
     }
